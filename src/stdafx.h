@@ -1,58 +1,88 @@
-// stdafx.h — Precompiled Header (FIXED for SDK 10.0.28000.0 / VS 2026)
-// Key fixes:
-//   1. Define __WRL_NO_DEFAULT_LIB__ before ANY wrl include
-//   2. Include <unknwn.h> before wrl to satisfy IUnknown dependency
-//   3. ComPtr alias AFTER <wrl/client.h>
-//   4. Remove <msxml6.h> (WinRT conflict in new SDK)
-//   5. Remove <expected> (C++23 only; not needed here)
-//   6. Guard all WinRT-pulling headers with WINRT exclusions
+// stdafx.h — Precompiled Header
+// Fixed: C4005 macro redefinitions + removed non-existent gdi32.h
 #pragma once
 
-// ── Must define these BEFORE any Windows / WRL headers ───
-#define STRICT
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#define VC_EXTRA_LEAN
+// ═════════════════════════════════════════════════════════
+// STEP 1 — WRL / WinRT conflict guards
+// Use #ifndef so these are safe whether set by .vcxproj
+// preprocessor definitions OR defined here directly.
+// Both places are acceptable — guards prevent C4005.
+// ═════════════════════════════════════════════════════════
+#ifndef __WRL_NO_DEFAULT_LIB__
+#  define __WRL_NO_DEFAULT_LIB__
+#endif
 
-// ── Suppress WRL pulling in WinRT libs (fixes HSTRING errors) ──
-#define __WRL_NO_DEFAULT_LIB__
-#define __WRL_CLASSIC_COM__
+#ifndef __WRL_CLASSIC_COM__
+#  define __WRL_CLASSIC_COM__
+#endif
 
-// ── Target Windows 10+ ───────────────────────────────────
-#define _WIN32_WINNT   0x0A00
-#define WINVER         0x0A00
-#define _WIN32_IE      0x0900
-#define NTDDI_VERSION  NTDDI_WIN10_RS5
+#ifndef RO_NO_TEMPLATE_NAME
+#  define RO_NO_TEMPLATE_NAME
+#endif
 
-// ── Prevent WinRT type system from loading (we are classic COM) ──
-// These stop activation.h / hstring.h from being auto-included
-// by shobjidl.h in the new SDK 10.0.28000.0
-#define RO_NO_TEMPLATE_NAME
-#ifndef __cplusplus_winrt
+#ifndef _HIDE_GLOBAL_ASYNC_STATUS
 #  define _HIDE_GLOBAL_ASYNC_STATUS
 #endif
 
 // ═════════════════════════════════════════════════════════
-// STEP 1 — Core Windows headers (ORDER MATTERS)
-// IUnknown must exist before WRL is included
+// STEP 2 — Windows targeting macros
+// All guarded with #ifndef — safe if already set by .vcxproj
 // ═════════════════════════════════════════════════════════
-#include <unknwn.h>          // IUnknown — MUST be first COM header
-#include <windows.h>
+#ifndef STRICT
+#  define STRICT
+#endif
+
+#ifndef WIN32_LEAN_AND_MEAN
+#  define WIN32_LEAN_AND_MEAN
+#endif
+
+#ifndef NOMINMAX
+#  define NOMINMAX
+#endif
+
+#ifndef VC_EXTRA_LEAN
+#  define VC_EXTRA_LEAN
+#endif
+
+#ifndef _WIN32_WINNT
+#  define _WIN32_WINNT   0x0A00
+#endif
+
+#ifndef WINVER
+#  define WINVER         0x0A00
+#endif
+
+#ifndef _WIN32_IE
+#  define _WIN32_IE      0x0900
+#endif
+
+#ifndef NTDDI_VERSION
+#  define NTDDI_VERSION  0x0A000006
+#endif
+
+// ═════════════════════════════════════════════════════════
+// STEP 3 — Core Windows headers (ORDER MATTERS)
+// unknwn.h must come before any WRL / COM header
+// windows.h must come before shell / GDI headers
+// gdi32.h does NOT exist — GDI is in windows.h already
+// ═════════════════════════════════════════════════════════
+#include <unknwn.h>          // IUnknown — must be first COM header
+#include <windows.h>         // also brings in GDI (gdi32)
 #include <windowsx.h>
-#include <objbase.h>         // CoInitialize, CLSID helpers
+#include <objbase.h>
 #include <objidl.h>          // IStream, IStorage, IDataObject
 
 // ═════════════════════════════════════════════════════════
-// STEP 2 — WRL (after unknwn.h, before WinRT headers)
+// STEP 4 — WRL (after unknwn.h, before WinRT-pulling headers)
 // ═════════════════════════════════════════════════════════
 #include <wrl/client.h>      // Microsoft::WRL::ComPtr
 
-// ── ComPtr alias (MUST come AFTER <wrl/client.h>) ────────
+// ComPtr alias — MUST come AFTER <wrl/client.h>
 template<typename T>
 using ComPtr = Microsoft::WRL::ComPtr<T>;
 
 // ═════════════════════════════════════════════════════════
-// STEP 3 — Shell / COM headers
+// STEP 5 — Shell / COM headers
 // ═════════════════════════════════════════════════════════
 #include <shlobj.h>
 #include <shlobj_core.h>
@@ -64,26 +94,27 @@ using ComPtr = Microsoft::WRL::ComPtr<T>;
 #include <propsys.h>
 #include <propkey.h>
 #include <propvarutil.h>
-#include <thumbcache.h>      // IThumbnailProvider
+#include <thumbcache.h>
 #include <docobj.h>
 
 // ═════════════════════════════════════════════════════════
-// STEP 4 — UI / GDI headers
+// STEP 6 — UI / GDI headers
+// NOTE: Do NOT include gdi32.h — it does not exist.
+//       All GDI declarations come from <windows.h> above.
 // ═════════════════════════════════════════════════════════
 #include <commctrl.h>
 #include <commdlg.h>
 #include <uxtheme.h>
 #include <vssym32.h>
 #include <dwmapi.h>
-#include <gdi32.h>           // basic GDI
 
-// GDI+ (must be after windows.h, before using Gdiplus::)
+// GDI+ — must come after windows.h
 #include <gdiplus.h>
 #pragma comment(lib, "gdiplus.lib")
 
 // ═════════════════════════════════════════════════════════
-// STEP 5 — Standard C++20 Library
-// (removed <expected> — requires C++23, not needed here)
+// STEP 7 — Standard C++20 Library
+// <expected> removed — it requires C++23, not C++20
 // ═════════════════════════════════════════════════════════
 #include <string>
 #include <string_view>
@@ -109,7 +140,7 @@ using ComPtr = Microsoft::WRL::ComPtr<T>;
 #include <filesystem>
 #include <fstream>
 #include <sstream>
-#include <format>            // C++20 — OK
+#include <format>
 #include <chrono>
 #include <cassert>
 #include <cstdint>
@@ -117,7 +148,10 @@ using ComPtr = Microsoft::WRL::ComPtr<T>;
 #include <cwchar>
 
 // ═════════════════════════════════════════════════════════
-// STEP 6 — Pragma lib links
+// STEP 8 — Pragma lib links
+// gdi32.lib is kept here (needed by linker even though
+// gdi32.h does not exist as standalone — declarations
+// come from windows.h)
 // ═════════════════════════════════════════════════════════
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shell32.lib")
@@ -126,36 +160,37 @@ using ComPtr = Microsoft::WRL::ComPtr<T>;
 #pragma comment(lib, "uuid.lib")
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "user32.lib")
-#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "gdi32.lib")       // lib exists, header does not
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "uxtheme.lib")
 #pragma comment(lib, "dwmapi.lib")
-#pragma comment(linker, \
-    "\"/manifestdependency:type='win32' "                   \
-    "name='Microsoft.Windows.Common-Controls' "             \
-    "version='6.0.0.0' processorArchitecture='*' "          \
+#pragma comment(lib, "comdlg32.lib")
+#pragma comment(linker,                                          \
+    "\"/manifestdependency:type='win32' "                        \
+    "name='Microsoft.Windows.Common-Controls' "                  \
+    "version='6.0.0.0' processorArchitecture='*' "               \
     "publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 // ═════════════════════════════════════════════════════════
-// STEP 7 — Namespace aliases
+// STEP 9 — Namespace aliases
 // ═════════════════════════════════════════════════════════
 namespace fs  = std::filesystem;
 namespace chr = std::chrono;
 
 // ═════════════════════════════════════════════════════════
-// STEP 8 — HRESULT helpers
+// STEP 10 — HRESULT helpers
 // ═════════════════════════════════════════════════════════
 #define RETURN_IF_FAILED(hr)  \
-    do { HRESULT _hr=(hr); if(FAILED(_hr)) return _hr; } while(0)
+    do { HRESULT _hr = (hr); if (FAILED(_hr)) return _hr; } while(0)
 
-#define LOG_IF_FAILED(hr, msg)  \
-    do { HRESULT _hr=(hr); if(FAILED(_hr))  \
-        OutputDebugStringW(                 \
-            std::format(L"FAILED(0x{:08X}): {}\n", \
+#define LOG_IF_FAILED(hr, msg)                                   \
+    do { HRESULT _hr = (hr); if (FAILED(_hr))                    \
+        OutputDebugStringW(                                       \
+            std::format(L"FAILED(0x{:08X}): {}\n",               \
                 (unsigned)_hr, msg).c_str()); } while(0)
 
 // ═════════════════════════════════════════════════════════
-// STEP 9 — Module state (defined in dllmain.cpp)
+// STEP 11 — Module state (defined in dllmain.cpp)
 // ═════════════════════════════════════════════════════════
 extern HINSTANCE g_hDllInstance;
 extern long      g_cDllRefCount;

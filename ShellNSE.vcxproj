@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project DefaultTargets="Build" ToolsVersion="18.0"
-         xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-
+<Project DefaultTargets="Build" ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <!-- ═══════════════════════════════════════════════════
        Configuration / Platform Matrix
   ════════════════════════════════════════════════════ -->
@@ -23,7 +21,6 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
-
   <!-- ═══════════════════════════════════════════════════
        Global Properties
   ════════════════════════════════════════════════════ -->
@@ -31,59 +28,47 @@
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
     <RootNamespace>ShellNSE</RootNamespace>
     <Keyword>Win32Proj</Keyword>
-    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>10.0.28000.0</WindowsTargetPlatformVersion>
     <ProjectName>ShellNSE</ProjectName>
     <VCProjectVersion>18.0</VCProjectVersion>
     <!-- Force UTF-8 for all source files project-wide -->
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
-
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
-
   <!-- ═══════════════════════════════════════════════════
        Per-Configuration Property Groups
   ════════════════════════════════════════════════════ -->
-
   <!-- DEBUG | Win32 -->
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'"
-                 Label="Configuration">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>v180</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
-
   <!-- RELEASE | Win32 -->
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'"
-                 Label="Configuration">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>v180</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
-
   <!-- DEBUG | x64 -->
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'"
-                 Label="Configuration">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v180</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
-
   <!-- RELEASE | x64 -->
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'"
-                 Label="Configuration">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>v180</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
-
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
-
   <!-- ═══════════════════════════════════════════════════
        Output / Intermediate Directories
   ════════════════════════════════════════════════════ -->
@@ -93,28 +78,24 @@
     <TargetName>ShellNSE</TargetName>
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
-
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <OutDir>$(SolutionDir)bin\$(Configuration)\x86\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x86\</IntDir>
     <TargetName>ShellNSE</TargetName>
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
-
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(SolutionDir)bin\$(Configuration)\x64\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x64\</IntDir>
     <TargetName>ShellNSE</TargetName>
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
-
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(SolutionDir)bin\$(Configuration)\x64\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x64\</IntDir>
     <TargetName>ShellNSE</TargetName>
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
-
   <!-- ═══════════════════════════════════════════════════
        Shared Preprocessor Definitions (property sheet style)
        These are the CRITICAL WRL/WinRT conflict fixes:
@@ -160,12 +141,10 @@
       /Zc:__cplusplus
     </CommonExtraOptions>
   </PropertyGroup>
-
   <!-- ═══════════════════════════════════════════════════
        Item Definition Groups — Compiler + Linker
        One per configuration (4 total)
   ════════════════════════════════════════════════════ -->
-
   <!-- ──────────────────────────────────────────────────
        DEBUG | Win32
   ────────────────────────────────────────────────── -->
@@ -178,15 +157,12 @@
       <SDLCheck>true</SDLCheck>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
-
       <!-- C++20 — do NOT use stdcpp23, it pulls <expected> & WinRT -->
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
-
       <AdditionalIncludeDirectories>
         src;res;%(AdditionalIncludeDirectories)
       </AdditionalIncludeDirectories>
-
       <PreprocessorDefinitions>
         WIN32;
         _DEBUG;
@@ -194,19 +170,15 @@
         $(WrlFixDefines)
         %(PreprocessorDefinitions)
       </PreprocessorDefinitions>
-
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
-
       <!-- UTF-8 + SDK warning suppression -->
       <AdditionalOptions>
         $(CommonExtraOptions) %(AdditionalOptions)
       </AdditionalOptions>
-
       <DisableSpecificWarnings>
         4091;4229;4471;4819;4251;%(DisableSpecificWarnings)
       </DisableSpecificWarnings>
     </ClCompile>
-
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -228,14 +200,12 @@
       </AdditionalDependencies>
       <!-- Do NOT link runtimeobject.lib (WinRT) -->
     </Link>
-
     <PostBuildEvent>
       <Command>regsvr32 /s "$(TargetPath)"
 echo [ShellNSE] Registered Debug x86: $(TargetFileName)</Command>
       <Message>Registering Shell Extension (Debug x86)...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
-
   <!-- ──────────────────────────────────────────────────
        RELEASE | Win32
   ────────────────────────────────────────────────── -->
@@ -250,14 +220,11 @@ echo [ShellNSE] Registered Debug x86: $(TargetFileName)</Command>
       <SDLCheck>true</SDLCheck>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <WholeProgramOptimization>true</WholeProgramOptimization>
-
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
-
       <AdditionalIncludeDirectories>
         src;res;%(AdditionalIncludeDirectories)
       </AdditionalIncludeDirectories>
-
       <PreprocessorDefinitions>
         WIN32;
         NDEBUG;
@@ -265,18 +232,14 @@ echo [ShellNSE] Registered Debug x86: $(TargetFileName)</Command>
         $(WrlFixDefines)
         %(PreprocessorDefinitions)
       </PreprocessorDefinitions>
-
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-
       <AdditionalOptions>
         $(CommonExtraOptions) %(AdditionalOptions)
       </AdditionalOptions>
-
       <DisableSpecificWarnings>
         4091;4229;4471;4819;4251;%(DisableSpecificWarnings)
       </DisableSpecificWarnings>
     </ClCompile>
-
     <Link>
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
@@ -299,14 +262,12 @@ echo [ShellNSE] Registered Debug x86: $(TargetFileName)</Command>
         %(AdditionalDependencies)
       </AdditionalDependencies>
     </Link>
-
     <PostBuildEvent>
       <Command>regsvr32 /s "$(TargetPath)"
 echo [ShellNSE] Registered Release x86: $(TargetFileName)</Command>
       <Message>Registering Shell Extension (Release x86)...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
-
   <!-- ──────────────────────────────────────────────────
        DEBUG | x64
   ────────────────────────────────────────────────── -->
@@ -319,14 +280,11 @@ echo [ShellNSE] Registered Release x86: $(TargetFileName)</Command>
       <SDLCheck>true</SDLCheck>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
-
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
-
       <AdditionalIncludeDirectories>
         src;res;%(AdditionalIncludeDirectories)
       </AdditionalIncludeDirectories>
-
       <PreprocessorDefinitions>
         _WIN64;
         _DEBUG;
@@ -334,18 +292,14 @@ echo [ShellNSE] Registered Release x86: $(TargetFileName)</Command>
         $(WrlFixDefines)
         %(PreprocessorDefinitions)
       </PreprocessorDefinitions>
-
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
-
       <AdditionalOptions>
         $(CommonExtraOptions) %(AdditionalOptions)
       </AdditionalOptions>
-
       <DisableSpecificWarnings>
         4091;4229;4471;4819;4251;%(DisableSpecificWarnings)
       </DisableSpecificWarnings>
     </ClCompile>
-
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -366,14 +320,12 @@ echo [ShellNSE] Registered Release x86: $(TargetFileName)</Command>
         %(AdditionalDependencies)
       </AdditionalDependencies>
     </Link>
-
     <PostBuildEvent>
       <Command>regsvr32 /s "$(TargetPath)"
 echo [ShellNSE] Registered Debug x64: $(TargetFileName)</Command>
       <Message>Registering Shell Extension (Debug x64)...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
-
   <!-- ──────────────────────────────────────────────────
        RELEASE | x64
   ────────────────────────────────────────────────── -->
@@ -388,14 +340,11 @@ echo [ShellNSE] Registered Debug x64: $(TargetFileName)</Command>
       <SDLCheck>true</SDLCheck>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <WholeProgramOptimization>true</WholeProgramOptimization>
-
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
-
       <AdditionalIncludeDirectories>
         src;res;%(AdditionalIncludeDirectories)
       </AdditionalIncludeDirectories>
-
       <PreprocessorDefinitions>
         _WIN64;
         NDEBUG;
@@ -403,18 +352,14 @@ echo [ShellNSE] Registered Debug x64: $(TargetFileName)</Command>
         $(WrlFixDefines)
         %(PreprocessorDefinitions)
       </PreprocessorDefinitions>
-
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-
       <AdditionalOptions>
         $(CommonExtraOptions) %(AdditionalOptions)
       </AdditionalOptions>
-
       <DisableSpecificWarnings>
         4091;4229;4471;4819;4251;%(DisableSpecificWarnings)
       </DisableSpecificWarnings>
     </ClCompile>
-
     <Link>
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
@@ -437,14 +382,12 @@ echo [ShellNSE] Registered Debug x64: $(TargetFileName)</Command>
         %(AdditionalDependencies)
       </AdditionalDependencies>
     </Link>
-
     <PostBuildEvent>
       <Command>regsvr32 /s "$(TargetPath)"
 echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
       <Message>Registering Shell Extension (Release x64)...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
-
   <!-- ═══════════════════════════════════════════════════
        Source Files
   ════════════════════════════════════════════════════ -->
@@ -456,16 +399,13 @@ echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
-
     <!-- Core DLL -->
     <ClCompile Include="src\dllmain.cpp" />
     <ClCompile Include="src\ClassFactory.cpp" />
     <ClCompile Include="src\Registry.cpp" />
-
     <!-- Shell Namespace Extension -->
     <ClCompile Include="src\ShellFolder.cpp" />
     <ClCompile Include="src\ShellView.cpp" />
-
     <!-- Shell Extension Handlers -->
     <ClCompile Include="src\ContextMenu.cpp" />
     <ClCompile Include="src\IconOverlay.cpp" />
@@ -473,15 +413,12 @@ echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
     <ClCompile Include="src\ThumbnailProvider.cpp" />
     <ClCompile Include="src\PreviewHandler.cpp" />
     <ClCompile Include="src\PropertySheet.cpp" />
-
     <!-- Archive Engine -->
     <ClCompile Include="src\ArchiveEngine.cpp" />
-
     <!-- Settings & GUI -->
     <ClCompile Include="src\Settings.cpp" />
     <ClCompile Include="src\SettingsDialog.cpp" />
   </ItemGroup>
-
   <!-- ═══════════════════════════════════════════════════
        Header Files
   ════════════════════════════════════════════════════ -->
@@ -503,7 +440,6 @@ echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
     <ClInclude Include="src\SettingsDialog.h" />
     <ClInclude Include="res\resource.h" />
   </ItemGroup>
-
   <!-- ═══════════════════════════════════════════════════
        Resource Files
   ════════════════════════════════════════════════════ -->
@@ -513,7 +449,6 @@ echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
       <AdditionalOptions>/n %(AdditionalOptions)</AdditionalOptions>
     </ResourceCompile>
   </ItemGroup>
-
   <!-- ═══════════════════════════════════════════════════
        Miscellaneous / None files
   ════════════════════════════════════════════════════ -->
@@ -521,7 +456,5 @@ echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
     <None Include="src\ShellExt.def" />
     <None Include="res\manifest.xml" />
   </ItemGroup>
-
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-
 </Project>

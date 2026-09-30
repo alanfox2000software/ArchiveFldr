@@ -6,7 +6,7 @@
 #include "Settings.h"
 #include "SettingsDialog.h"
 #include "GUIDs.h"
-#include "res/resource.h"
+#include "../res/resource.h"
 
 CContextMenu::CContextMenu() { InterlockedIncrement(&g_cDllRefCount); }
 CContextMenu::~CContextMenu()

@@ -3,7 +3,7 @@
 #include "PropertySheet.h"
 #include "ArchiveEngine.h"
 #include "GUIDs.h"
-#include "res/resource.h"
+#include "../res/resource.h"
 
 CPropertySheet::CPropertySheet()  { InterlockedIncrement(&g_cDllRefCount); }
 CPropertySheet::~CPropertySheet() { InterlockedDecrement(&g_cDllRefCount); }

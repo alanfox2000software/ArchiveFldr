@@ -1,6 +1,7 @@
 // ArchiveEngine.cpp
 #include "stdafx.h"
 #include "ArchiveEngine.h"
+#include "GUIDs.h"
 
 // ─────────────────────────────────────────────────────────
 // CStubArchiveEngine
@@ -271,6 +272,39 @@ uint64_t CStubArchiveEngine::GetPackedSize() const {
     for (auto& e:m_allEntries) s+=e.compressedSize;
     return s;
 }
+
+// ArchiveEngine.cpp — add this above CreateArchiveEngine()
+// as a local fallback if GUIDs.h include doesn't resolve it:
+
+#ifndef IsArchiveExtension
+static inline bool IsArchiveExtension(const wchar_t* ext)
+{
+    if (!ext || !*ext) return false;
+
+    static const wchar_t* const kExts[] = {
+        L".zip",  L".zipx", L".jar",  L".war",  L".apk",
+        L".docx", L".xlsx", L".pptx", L".odt",  L".ods",
+        L".7z",   L".7zip",
+        L".rar",  L".r00",  L".r01",
+        L".tar",  L".tgz",  L".tbz2", L".txz",
+        L".gz",   L".gzip",
+        L".bz2",  L".bzip2",
+        L".xz",   L".lzma",
+        L".zst",  L".zstd",
+        L".lzh",  L".lha",
+        L".arj",
+        L".cab",
+        L".iso",  L".img",
+        L".wim",  L".swm",  L".esd",
+        L".msi",  L".msm",
+        L".deb",  L".rpm",
+        nullptr
+    };
+    for (int i = 0; kExts[i]; ++i)
+        if (_wcsicmp(ext, kExts[i]) == 0) return true;
+    return false;
+}
+#endif
 
 // ─────────────────────────────────────────────────────────
 // Factory

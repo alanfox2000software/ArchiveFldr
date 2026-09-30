@@ -207,6 +207,83 @@ void Settings::Save() const
 
 void Settings::Reset()
 {
-    *this = Settings();
+    // ── General ──────────────────────────────────────────
+    showPreviewPane      = true;
+    showThumbnails       = true;
+    showIconOverlay      = true;
+    showContextMenu      = true;
+    openArchiveOnDblClk  = true;
+    promptForPath        = true;
+    rememberLastPath     = true;
+    defaultExtractPath.clear();
+    defaultFormat        = L"zip";
+    defaultCompLevel     = CompLevel::Normal;
+    createSolidArchive   = false;
+    encryptFileNames     = false;
+    autoCloseAfterOp     = false;
+
+    // ── Formats ───────────────────────────────────────────
+    handleZip    = true;
+    handle7z     = true;
+    handleRar    = true;
+    handleTar    = true;
+    handleGz     = true;
+    handleBz2    = true;
+    handleXz     = true;
+    handleLzma   = true;
+    handleZst    = true;
+    handleIso    = true;
+    handleCab    = true;
+    handleLzh    = true;
+    handleArj    = true;
+    handleWim    = true;
+    handleMsi    = false;
+    handleOffice = true;
+
+    // ── Context menu ──────────────────────────────────────
+    ctxExtract       = true;
+    ctxExtractHere   = true;
+    ctxAddToArchive  = true;
+    ctxCompressEmail = true;
+    ctxOpenInShell   = true;
+    ctxTestArchive   = true;
+    ctxArchiveInfo   = true;
+    ctxSettings      = true;
+    ctxUseSubMenu    = true;
+    ctxSubMenuTitle  = L"ShellNSE";
+
+    // ── Appearance ────────────────────────────────────────
+    darkMode          = false;
+    useCustomIcons    = true;
+    showSizeColumn    = true;
+    showDateColumn    = true;
+    showRatioColumn   = true;
+    showMethodColumn  = true;
+    showCrcColumn     = false;
+    alternateRowColors= true;
+    dateFormat        = DateFmt::ISO8601;
+    fontFace          = L"Segoe UI";
+    fontSize          = 9;
+
+    // ── Advanced ──────────────────────────────────────────
+    multiThreaded    = true;
+    threadCount      = 0;
+    useTempDir       = false;
+    logErrors        = true;
+    checkForUpdates  = true;
+    sendUsageData    = false;
+    maxMemoryMB      = 256;
+    cacheThumbnails  = true;
+    cacheSizeMB      = 128;
+
+    // Restore runtime-computed paths
+    wchar_t buf[MAX_PATH] = {};
+    if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA,
+                                   nullptr, 0, buf)))
+    {
+        tempDirPath = std::wstring(buf) + L"\\ShellNSE\\Temp";
+        logFilePath = std::wstring(buf) + L"\\ShellNSE\\ShellNSE.log";
+    }
+
     Save();
 }

@@ -3,7 +3,7 @@
 #include "SettingsDialog.h"
 #include "Registry.h"
 #include "GUIDs.h"
-#include "res/resource.h"
+#include "../res/resource.h"
 
 // ═════════════════════════════════════════════════════════
 // Helper: create a child dialog from a template ID

@@ -127,11 +127,24 @@ STDMETHODIMP CShellView::GetItemObject(UINT uItem, REFIID riid, void** ppv)
 // ── IShellView2 ──────────────────────────────────────────
 STDMETHODIMP CShellView::GetView(SHELLVIEWID* pvid, ULONG uView)
     { (void)pvid; (void)uView; return E_NOTIMPL; }
+
 STDMETHODIMP CShellView::CreateViewWindow2(LPSV2CVW2_PARAMS pParams)
 {
     if (!pParams) return E_POINTER;
-    return CreateViewWindow(nullptr, &pParams->ViewMode,
-        pParams->psbOwner, &pParams->rcView, &pParams->hwndView);
+
+    // Correct SV2CVW2_PARAMS member names:
+    //   pParams->pfs       = LPCFOLDERSETTINGS
+    //   pParams->psbOwner  = IShellBrowser*
+    //   pParams->prcView   = RECT*  (note: prcView not rcView)
+    //   pParams->hwndView  = HWND*  (output)
+
+    return CreateViewWindow(
+        pParams->psvPrev,           // previous IShellView (can be null)
+        pParams->pfs,               // folder settings
+        pParams->psbOwner,          // shell browser
+        pParams->prcView,           // rect  (pointer, not value)
+        &pParams->hwndView          // output HWND
+    );
 }
 STDMETHODIMP CShellView::HandleRename(LPCITEMIDLIST)   { return S_OK; }
 STDMETHODIMP CShellView::SelectAndPositionItem(LPCITEMIDLIST,UINT,POINT*) { return S_OK; }

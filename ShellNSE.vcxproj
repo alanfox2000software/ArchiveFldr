@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project DefaultTargets="Build" ToolsVersion="18.0"
-         xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-
+<Project DefaultTargets="Build" ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <!-- ═══════════════════════════════════════════════════
        Configuration / Platform Matrix
   ════════════════════════════════════════════════════ -->
@@ -23,7 +21,6 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
-
   <!-- ═══════════════════════════════════════════════════
        Global Properties
   ════════════════════════════════════════════════════ -->
@@ -31,13 +28,11 @@
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
     <RootNamespace>ShellNSE</RootNamespace>
     <Keyword>Win32Proj</Keyword>
-    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>10.0.28000.0</WindowsTargetPlatformVersion>
     <ProjectName>ShellNSE</ProjectName>
     <VCProjectVersion>18.0</VCProjectVersion>
   </PropertyGroup>
-
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
-
   <!-- ═══════════════════════════════════════════════════
        Per-Configuration Property Groups
   ════════════════════════════════════════════════════ -->
@@ -47,7 +42,6 @@
     <PlatformToolset>v180</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
-
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
@@ -55,14 +49,12 @@
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
-
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v180</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
-
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
@@ -70,9 +62,7 @@
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
-
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
-
   <!-- ═══════════════════════════════════════════════════
        Output Directories
   ════════════════════════════════════════════════════ -->
@@ -100,11 +90,9 @@
     <TargetName>ShellNSE</TargetName>
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
-
   <!-- ═══════════════════════════════════════════════════
        Item Definition Groups (Compiler / Linker)
   ════════════════════════════════════════════════════ -->
-
   <!-- DEBUG x86 -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -144,7 +132,6 @@
       <Message>Registering Shell Extension (Debug x86)...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
-
   <!-- RELEASE x86 -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
@@ -188,7 +175,6 @@
       <Message>Registering Shell Extension (Release x86)...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
-
   <!-- DEBUG x64 -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
@@ -228,7 +214,6 @@
       <Message>Registering Shell Extension (Debug x64)...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
-
   <!-- RELEASE x64 -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -272,7 +257,6 @@
       <Message>Registering Shell Extension (Release x64)...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
-
   <!-- ═══════════════════════════════════════════════════
        Source Files
   ════════════════════════════════════════════════════ -->
@@ -304,7 +288,6 @@
     <ClCompile Include="src\Settings.cpp" />
     <ClCompile Include="src\SettingsDialog.cpp" />
   </ItemGroup>
-
   <ItemGroup>
     <ClInclude Include="src\stdafx.h" />
     <ClInclude Include="src\GUIDs.h" />
@@ -323,15 +306,12 @@
     <ClInclude Include="src\SettingsDialog.h" />
     <ClInclude Include="res\resource.h" />
   </ItemGroup>
-
   <ItemGroup>
     <ResourceCompile Include="res\resource.rc" />
   </ItemGroup>
-
   <ItemGroup>
     <None Include="src\ShellExt.def" />
     <None Include="res\manifest.xml" />
   </ItemGroup>
-
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

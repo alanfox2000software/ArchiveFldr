@@ -30,7 +30,7 @@
     <PreDebugEvent>
       <Command>regsvr32 /s "$(TargetPath)"</Command>
     </PreDebugEvent>
-    <LocalDebuggerCommandArgumentsHistory>D:\Downloads\ShellNSE\TestArchives\|</LocalDebuggerCommandArgumentsHistory>
+    <LocalDebuggerCommandArgumentsHistory>D:\Downloads\ShellNSE\TestArchives\|D:\GitHub\ShellNSE\TestArchives\|</LocalDebuggerCommandArgumentsHistory>
   </PropertyGroup>
   <!-- ═══ Release | Win32 ════════════════════════════════ -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">

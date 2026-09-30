@@ -509,12 +509,6 @@ STDMETHODIMP CShellFolder::MapColumnToSCID(UINT col, SHCOLUMNID* pscid)
     *pscid = keys[col]; return S_OK;
 }
 
-// IShellDetails::GetDetailsOf — forwards to IShellFolder2 version
-STDMETHODIMP CShellFolder::GetDetailsOf(
-    LPCITEMIDLIST pidl, UINT col, SHELLDETAILS* psd)
-{
-    return GetDetailsOf(pidl, col, psd); // IShellFolder2 version
-}
 STDMETHODIMP CShellFolder::ColumnClick(UINT /*col*/) { return S_FALSE; }
 
 // ─────────────────────────────────────────────────────────

@@ -127,10 +127,16 @@ void CPreviewHandler::LoadEntries()
         r.name     = e.fullPath;
         r.isDir    = e.isDirectory;
         r.method   = e.compressionMethod;
-        r.packed   = e.isDirectory ? L"" : [&]{
-            wchar_t b[32]; StrFormatByteSizeW(e.compressedSize,b,32); return std::wstring(b);}();
-        r.size     = e.isDirectory ? L"<DIR>" : [&]{
-            wchar_t b[32]; StrFormatByteSizeW(e.uncompressedSize,b,32); return std::wstring(b);}();
+        if (e.isDirectory) {
+            r.size   = L"<DIR>";
+            r.packed = L"";
+        } else {
+            wchar_t bSz[32] = {}, bPk[32] = {};
+            StrFormatByteSizeW(e.uncompressedSize, bSz, 32);
+            StrFormatByteSizeW(e.compressedSize,   bPk, 32);
+            r.size   = bSz;
+            r.packed = bPk;
+        }
         SYSTEMTIME st; FILETIME lft;
         FileTimeToLocalFileTime(&e.modifiedTime,&lft);
         FileTimeToSystemTime(&lft,&st);

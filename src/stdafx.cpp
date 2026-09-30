@@ -1,2 +1,2 @@
-// stdafx.cpp — Precompiled Header compilation unit
+﻿// stdafx.cpp — Precompiled Header compilation unit
 #include "stdafx.h"

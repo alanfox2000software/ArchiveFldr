@@ -505,7 +505,12 @@ INT_PTR CALLBACK CPageAdvanced::DlgProc(
             GetModuleFileNameW(g_hDllInstance,tmp,MAX_PATH);
             PathRemoveFileSpecW(tmp);
             wcscat_s(tmp,L"\\ThumbCache");
-            SHDeleteEmptyDirTree(nullptr,tmp,0);
+            SHFILEOPSTRUCTW fo = {};
+            fo.hwnd   = hDlg;
+            fo.wFunc  = FO_DELETE;
+            fo.pFrom  = tmp;    // must be double-null terminated
+            fo.fFlags = FOF_NO_UI | FOF_NOCONFIRMATION | FOF_SILENT;
+            SHFileOperationW(&fo);
             MessageBoxW(hDlg,L"Thumbnail cache cleared.",
                 L"Cache",MB_ICONINFORMATION);
         }

@@ -1,6 +1,13 @@
-// GUIDs.h — All CLSIDs and IIDs for ShellNSE
-// Generate fresh GUIDs: Tools → Create GUID in VS
+// GUIDs.h
 #pragma once
+// Ensure WinRT is not pulled in before classic COM
+#ifndef __WRL_NO_DEFAULT_LIB__
+#  define __WRL_NO_DEFAULT_LIB__
+#endif
+#ifndef __WRL_CLASSIC_COM__
+#  define __WRL_CLASSIC_COM__
+#endif
+#include "stdafx.h"
 
 // ── Shell Namespace Extension ────────────────────────────
 // CLSID_ShellFolder  {B1A2C3D4-E5F6-7890-ABCD-111111111111}

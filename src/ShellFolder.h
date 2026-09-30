@@ -99,7 +99,6 @@ public:
     STDMETHODIMP MapColumnToSCID     (UINT, SHCOLUMNID*) override;
 
     // ── IShellDetails ────────────────────────────────────
-    STDMETHODIMP GetDetailsOf(LPCITEMIDLIST, UINT col, SHELLDETAILS*) override;
     STDMETHODIMP ColumnClick (UINT col) override;
 
     // ── IDropTarget ──────────────────────────────────────

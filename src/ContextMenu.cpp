@@ -103,7 +103,7 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
     }());
     if (s.ctxAddToArchive)  addItem(true, CMD_ADD,           L"Add to Archive...");
     if (s.ctxCompressEmail) addItem(true, CMD_COMPRESS_EMAIL,L"Compress and E-mail...");
-    InsertMenuW(hTarget, pos++, TRUE, MF_SEPARATOR, 0, nullptr);
+    InsertMenuW(hTarget, pos++, MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
     if (s.ctxOpenInShell)   addItem(true, CMD_OPEN_SHELL,    L"Open with ShellNSE");
     if (s.ctxTestArchive)   addItem(true, CMD_TEST,          L"Test Archive");
     if (s.ctxArchiveInfo)   addItem(true, CMD_INFO,          L"Archive Info...");

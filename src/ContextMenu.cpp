@@ -95,7 +95,12 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
 
     if (s.ctxExtract)       addItem(true, CMD_EXTRACT,       L"Extract...");
     if (s.ctxExtractHere)   addItem(true, CMD_EXTRACTHERE,   L"Extract Here");
-    InsertMenuW(hTarget, pos++, TRUE, MF_SEPARATOR, 0, nullptr);
+    InsertMenuItemW(hTarget, pos++, TRUE, []{
+        static MENUITEMINFOW sep{sizeof(MENUITEMINFOW)};
+        sep.fMask = MIIM_TYPE;
+        sep.fType = MFT_SEPARATOR;
+        return &sep;
+    }());
     if (s.ctxAddToArchive)  addItem(true, CMD_ADD,           L"Add to Archive...");
     if (s.ctxCompressEmail) addItem(true, CMD_COMPRESS_EMAIL,L"Compress and E-mail...");
     InsertMenuW(hTarget, pos++, TRUE, MF_SEPARATOR, 0, nullptr);
@@ -149,32 +154,70 @@ STDMETHODIMP CContextMenu::InvokeCommand(LPCMINVOKECOMMANDINFO pici)
 }
 
 // ── IContextMenu::GetCommandString ────────────────────────
+
 STDMETHODIMP CContextMenu::GetCommandString(
-    UINT_PTR idCmd, UINT uType, UINT*, CHAR* pszName, UINT cchMax)
+    UINT_PTR idCmd, UINT uType,
+    UINT* /*pReserved*/, CHAR* pszName, UINT cchMax)
 {
-    static const wchar_t* helps[] = {
-        L"Extract archive contents",
-        L"Extract here in place",
+    if (idCmd >= CMD_COUNT) return E_INVALIDARG;
+
+    // Help text (Unicode)
+    static const wchar_t* const helps[] = {
+        L"Extract archive contents to a folder",
+        L"Extract archive contents here",
         L"Add files to archive",
         L"Compress and send by e-mail",
-        L"Open in ShellNSE browser",
+        L"Open archive with ShellNSE",
         L"Test archive integrity",
         L"View archive information",
         L"Open ShellNSE settings",
     };
-    static const char* verbs[] = {
-        "extract","extracthere","add","email",
-        "open","test","info","settings"
+
+    // Verb strings (ANSI)
+    static const char* const verbsA[] = {
+        "extract", "extracthere", "add", "email",
+        "open",    "test",        "info","settings"
     };
-    if (idCmd >= CMD_COUNT) return E_INVALIDARG;
-    if (uType == GCS_HELPW)
-        return StringCchCopyW((LPWSTR)pszName,cchMax,helps[idCmd]);
-    if (uType == GCS_VERBA)
-        return StringCchCopyA(pszName,cchMax,verbs[idCmd]);
-    if (uType == GCS_VERBW)
-        return StringCchCopyW((LPWSTR)pszName,cchMax,
-            (LPCWSTR)_bstr_t(verbs[idCmd]));
-    return S_OK;
+
+    // Verb strings (Unicode)
+    static const wchar_t* const verbsW[] = {
+        L"extract", L"extracthere", L"add",   L"email",
+        L"open",    L"test",        L"info",  L"settings"
+    };
+
+    switch (uType)
+    {
+    case GCS_HELPTEXTW:   // Unicode help text
+        wcsncpy_s(reinterpret_cast<wchar_t*>(pszName),
+                  cchMax, helps[idCmd], _TRUNCATE);
+        return S_OK;
+
+    case GCS_HELPTEXTA:   // ANSI help text (convert)
+    {
+        char ansiHelp[256] = {};
+        WideCharToMultiByte(CP_ACP, 0,
+            helps[idCmd], -1,
+            ansiHelp, sizeof(ansiHelp), nullptr, nullptr);
+        strncpy_s(pszName, cchMax, ansiHelp, _TRUNCATE);
+        return S_OK;
+    }
+
+    case GCS_VERBA:       // ANSI verb
+        strncpy_s(pszName, cchMax, verbsA[idCmd], _TRUNCATE);
+        return S_OK;
+
+    case GCS_VERBW:       // Unicode verb
+        wcsncpy_s(reinterpret_cast<wchar_t*>(pszName),
+                  cchMax, verbsW[idCmd], _TRUNCATE);
+        return S_OK;
+
+    case GCS_VALIDATEA:
+    case GCS_VALIDATEW:
+        return S_OK;      // idCmd is valid
+
+    default:
+        return E_INVALIDARG;
+    }
 }
 
 STDMETHODIMP CContextMenu::HandleMenuMsg(UINT,WPARAM,LPARAM) { return S_OK; }

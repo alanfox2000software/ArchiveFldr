@@ -242,8 +242,7 @@ void CShellView::OnDblClick(int idx)
     LPITEMIDLIST pidl = (LPITEMIDLIST)item.lParam;
     if (!pidl) return;
     if (CPidlMgr::IsDir(pidl) && m_pBrowser) {
-        LPITEMIDLIST pidlFull = CPidlMgr::Concat(
-            m_pFolder ? nullptr : nullptr, pidl); // simplified
+    if (m_pBrowser)
         m_pBrowser->BrowseObject(pidl, SBSP_RELATIVE);
     }
 }

@@ -553,19 +553,29 @@ STDMETHODIMP CShellFolder::MapColumnToSCID(UINT col, SHCOLUMNID* pscid)
 
 STDMETHODIMP CShellFolder::ColumnClick(UINT /*col*/) { return S_FALSE; }
 
+DWORD m_lastEffect = DROPEFFECT_NONE;
+
 // ─────────────────────────────────────────────────────────
 // IDropTarget (folder-level — accept drops FROM Explorer)
 // ─────────────────────────────────────────────────────────
-STDMETHODIMP CShellFolder::DragEnter(IDataObject* pObj,DWORD grfKey,POINTL,DWORD* pdwEffect)
+STDMETHODIMP CShellFolder::DragEnter(
+    IDataObject* pObj, DWORD grfKey, POINTL pt, DWORD* pdwEffect)
 {
+    (void)pt;
     *pdwEffect = (grfKey & MK_CONTROL) ? DROPEFFECT_COPY : DROPEFFECT_MOVE;
-    // Check if we can handle the format
     FORMATETC fe{CF_HDROP,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL};
-    *pdwEffect = SUCCEEDED(pObj->QueryGetData(&fe)) ? *pdwEffect : DROPEFFECT_NONE;
+    *pdwEffect = SUCCEEDED(pObj->QueryGetData(&fe))
+        ? *pdwEffect : DROPEFFECT_NONE;
+    m_lastEffect = *pdwEffect;   // ← save it
     return S_OK;
 }
-STDMETHODIMP CShellFolder::DragOver(DWORD,POINTL,DWORD* pdwEffect)
-    { return S_OK; }
+STDMETHODIMP CShellFolder::DragOver(DWORD grfKeyState, POINTL pt, DWORD* pdwEffect)
+{
+    (void)grfKeyState;
+    (void)pt;
+    if (pdwEffect) *pdwEffect = m_lastEffect;
+    return S_OK;
+}
 STDMETHODIMP CShellFolder::DragLeave() { return S_OK; }
 STDMETHODIMP CShellFolder::Drop(IDataObject* pObj,DWORD,POINTL,DWORD* pdwEffect)
 {

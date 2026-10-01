@@ -23,6 +23,8 @@ DEFINE_GUID(CLSID_ShellNSEContextMenu,
 
 // ── Icon Overlay Handler ─────────────────────────────────
 // CLSID_IconOverlay  {B1A2C3D4-E5F6-7890-ABCD-333333333333}
+// The overlay handler was removed; this id is kept only so registration
+// can delete what older builds left in the registry.
 DEFINE_GUID(CLSID_ShellNSEIconOverlay,
     0xB1A2C3D4, 0xE5F6, 0x7890,
     0xAB, 0xCD, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33);

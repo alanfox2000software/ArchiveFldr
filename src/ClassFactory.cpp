@@ -3,7 +3,6 @@
 #include "ClassFactory.h"
 #include "ShellFolder.h"
 #include "ContextMenu.h"
-#include "IconOverlay.h"
 #include "DropTarget.h"
 #include "ThumbnailProvider.h"
 #include "PreviewHandler.h"
@@ -57,13 +56,6 @@ HRESULT CClassFactory::CreateShellFolder(REFIID riid, LPVOID* ppv)
 HRESULT CClassFactory::CreateContextMenu(REFIID riid, LPVOID* ppv)
 {
     auto* p = new(std::nothrow) CContextMenu();
-    if (!p) return E_OUTOFMEMORY;
-    HRESULT hr = p->QueryInterface(riid, ppv);
-    p->Release(); return hr;
-}
-HRESULT CClassFactory::CreateIconOverlay(REFIID riid, LPVOID* ppv)
-{
-    auto* p = new(std::nothrow) CIconOverlay();
     if (!p) return E_OUTOFMEMORY;
     HRESULT hr = p->QueryInterface(riid, ppv);
     p->Release(); return hr;

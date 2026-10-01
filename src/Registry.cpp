@@ -53,6 +53,21 @@ HRESULT CRegistry::SetRegStr(HKEY root, const wchar_t* path,
     return HRESULT_FROM_WIN32(rc);
 }
 
+// ShellNSE ships no icon resources, so every DefaultIcon points at a stock
+// Windows icon rather than an index into this DLL. An index with nothing
+// behind it does not fall back to anything — the shell paints its empty
+// placeholder, which is how a blank page ended up badged onto archives.
+static std::wstring SystemIcon(const wchar_t* dllName, int index)
+{
+    wchar_t sys[MAX_PATH] = {};
+    if (!GetSystemDirectoryW(sys, ARRAYSIZE(sys))) return L"";
+    std::wstring path = sys;
+    if (!path.empty() && path.back() != L'\\') path += L'\\';
+    path += dllName;
+    if (!PathFileExistsW(path.c_str())) return L"";
+    return path + L"," + std::to_wstring(index);
+}
+
 // Read a DWORD, honouring both registry views so a 32-bit regsvr32 and a
 // 64-bit one see the same opt-in flag.
 static DWORD ReadRegDword(HKEY root, const wchar_t* path,
@@ -190,12 +205,18 @@ HRESULT CRegistry::RegisterNamespaceFolder(const wchar_t* dllPath)
     const std::wstring sid  = ClsidToStr(CLSID_ShellNSEFolder);
     const std::wstring base = std::wstring(L"Software\\Classes\\CLSID\\") + sid;
 
-    // Index 2 = IDI_FOLDER_ARCHIVE. These indices only became real when
-    // res/resource.rc gained its ICON statements; before that every one of
-    // them resolved to nothing and the shell drew a blank page.
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
-        (base + L"\\DefaultIcon").c_str(), nullptr,
-        (std::wstring(dllPath) + L",2").c_str()));
+    // zipfldr.dll,0 is the compressed-folder icon every Windows install
+    // has. If it is somehow missing, write nothing: no value at all makes
+    // the shell fall back to the generic folder icon, which is still a
+    // real icon.
+    {
+        const std::wstring icon = SystemIcon(L"zipfldr.dll", 0);
+        if (!icon.empty())
+            RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
+                (base + L"\\DefaultIcon").c_str(), nullptr, icon.c_str()));
+        else
+            DelRegKey(HKEY_LOCAL_MACHINE, (base + L"\\DefaultIcon").c_str());
+    }
 
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
         (base + L"\\Implemented Categories\\" + kCatidBrowsableShellExt).c_str(),
@@ -302,9 +323,15 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, progBase.c_str(),
         nullptr, L"Archive File"));
 
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
-        (progBase + L"\\DefaultIcon").c_str(), nullptr,
-        (std::wstring(dllPath) + L",1").c_str()));   // index 1 = IDI_ARCHIVE
+    {
+        const std::wstring icon = SystemIcon(L"zipfldr.dll", 0);
+        if (!icon.empty())
+            RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
+                (progBase + L"\\DefaultIcon").c_str(), nullptr, icon.c_str()));
+        else
+            DelRegKey(HKEY_LOCAL_MACHINE,
+                      (progBase + L"\\DefaultIcon").c_str());
+    }
 
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
         (progBase + L"\\FriendlyTypeName").c_str(),
@@ -407,15 +434,6 @@ HRESULT CRegistry::UnregisterApproved(const CLSID& clsid)
 }
 
 // ── Icon Overlay ──────────────────────────────────────────
-HRESULT CRegistry::RegisterOverlay(const CLSID& clsid, const wchar_t* name)
-{
-    // Pass a plain name. Prefixing spaces to sort ahead of other handlers
-    // only works by pushing someone else out of the 15 available slots.
-    std::wstring path = std::wstring(kRegKeyOverlays) + L"\\" + name;
-    return SetRegStr(HKEY_LOCAL_MACHINE, path.c_str(),
-        nullptr, ClsidToStr(clsid).c_str());
-}
-
 HRESULT CRegistry::UnregisterOverlay(const CLSID& /*clsid*/, const wchar_t* name)
 {
     std::wstring path = std::wstring(kRegKeyOverlays) + L"\\" + name;
@@ -432,8 +450,6 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
         L"ShellNSE Shell Namespace Extension", dllPath));
     RETURN_IF_FAILED(RegisterCOMServer(CLSID_ShellNSEContextMenu,
         L"ShellNSE Context Menu Handler", dllPath));
-    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ShellNSEIconOverlay,
-        L"ShellNSE Icon Overlay Handler", dllPath));
     RETURN_IF_FAILED(RegisterCOMServer(CLSID_ShellNSEDropTarget,
         L"ShellNSE Drop Target Handler", dllPath));
     RETURN_IF_FAILED(RegisterCOMServer(CLSID_ShellNSEThumbnail,
@@ -453,8 +469,6 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
         L"ShellNSE Shell Namespace Extension"));
     RETURN_IF_FAILED(RegisterApproved(CLSID_ShellNSEContextMenu,
         L"ShellNSE Context Menu Handler"));
-    RETURN_IF_FAILED(RegisterApproved(CLSID_ShellNSEIconOverlay,
-        L"ShellNSE Icon Overlay Handler"));
     RETURN_IF_FAILED(RegisterApproved(CLSID_ShellNSEDropTarget,
         L"ShellNSE Drop Target Handler"));
     RETURN_IF_FAILED(RegisterApproved(CLSID_ShellNSEThumbnail,
@@ -469,33 +483,17 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
         ClsidToStr(CLSID_ShellNSEPreview).c_str(),
         L"ShellNSE Archive Preview Handler"));
 
-    // 4. Icon overlay — opt-in only.
+    // 4. Icon overlay — removed.
     //
-    // Windows honours just 15 overlay handlers machine-wide, sorted by key
-    // name, and the ones that lose are silently dropped. A badge saying
-    // "this archive is an archive" is not worth evicting someone's cloud
-    // sync overlay, so the key is written only when an administrator has
-    // asked for it:
-    //
-    //     HKLM\Software\ShellNSE\IconOverlay = 1   (DWORD)
-    //
-    // HKLM, not HKCU, because registration runs elevated and HKCU would be
-    // the administrator's hive rather than the user's. The per-user
-    // ShowOverlay setting still switches it off without unregistering.
-    if (ReadRegDword(HKEY_LOCAL_MACHINE, L"Software\\ShellNSE",
-                     L"IconOverlay", 0) != 0)
-    {
-        RETURN_IF_FAILED(RegisterOverlay(CLSID_ShellNSEIconOverlay,
-            L"ShellNSE_Archive"));
-    }
-    else
-    {
-        // Clear anything an earlier build left behind, including the
-        // leading-space name it used to queue-jump with.
-        UnregisterOverlay(CLSID_ShellNSEIconOverlay, L" ShellNSE_Archive");
+    // There is no overlay handler any more, so nothing is registered here.
+    // Earlier builds did register one, under ' ShellNSE_Archive' with a
+    // leading space to sort ahead of other handlers in the 15 slots Windows
+    // allows. Clean up both spellings, plus its COM registration, so
+    // re-registering an existing install drops the badge.
+    UnregisterOverlay(CLSID_ShellNSEIconOverlay, L" ShellNSE_Archive");
     UnregisterOverlay(CLSID_ShellNSEIconOverlay, L"ShellNSE_Archive");
-        UnregisterOverlay(CLSID_ShellNSEIconOverlay, L"ShellNSE_Archive");
-    }
+    UnregisterApproved(CLSID_ShellNSEIconOverlay);
+    UnregisterCOMServer(CLSID_ShellNSEIconOverlay);
 
     // 5. Extensions
     // NOTE: .docx / .xlsx / .pptx intentionally OMITTED so Office is not hijacked.

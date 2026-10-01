@@ -46,7 +46,6 @@ void CPageGeneral::Load()
     auto& s = Settings::Get();
     SetChk(m_hwnd, IDC_CHK_SHOW_PREVIEW,       s.showPreviewPane);
     SetChk(m_hwnd, IDC_CHK_SHOW_THUMBNAILS,     s.showThumbnails);
-    SetChk(m_hwnd, IDC_CHK_SHOW_OVERLAY,        s.showIconOverlay);
     SetChk(m_hwnd, IDC_CHK_CONTEXT_MENU,        s.showContextMenu);
     SetChk(m_hwnd, IDC_CHK_OPEN_ON_DBLCLICK,    s.openArchiveOnDblClk);
     SetChk(m_hwnd, IDC_CHK_PROMPT_PATH,         s.promptForPath);
@@ -82,7 +81,6 @@ void CPageGeneral::Save()
     auto& s = Settings::Get();
     s.showPreviewPane    = GetChk(m_hwnd, IDC_CHK_SHOW_PREVIEW);
     s.showThumbnails     = GetChk(m_hwnd, IDC_CHK_SHOW_THUMBNAILS);
-    s.showIconOverlay    = GetChk(m_hwnd, IDC_CHK_SHOW_OVERLAY);
     s.showContextMenu    = GetChk(m_hwnd, IDC_CHK_CONTEXT_MENU);
     s.openArchiveOnDblClk= GetChk(m_hwnd, IDC_CHK_OPEN_ON_DBLCLICK);
     s.promptForPath      = GetChk(m_hwnd, IDC_CHK_PROMPT_PATH);

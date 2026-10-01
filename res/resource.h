@@ -20,13 +20,6 @@
 #define IDD_PASSWORD                108
 
 // Icons
-#define IDI_SHELLNSE                200
-#define IDI_ARCHIVE                 201
-#define IDI_FOLDER_ARCHIVE          202
-#define IDI_OVERLAY_ARCHIVE         203
-#define IDI_OVERLAY_ENCRYPTED       204
-#define IDI_OVERLAY_SOLID           205
-#define IDI_OVERLAY_MULTIPART       206
 
 // Bitmaps
 #define IDB_TOOLBAR                 300
@@ -57,7 +50,6 @@
 // General Page Controls
 #define IDC_CHK_SHOW_PREVIEW        1001
 #define IDC_CHK_SHOW_THUMBNAILS     1002
-#define IDC_CHK_SHOW_OVERLAY        1003
 #define IDC_CHK_CONTEXT_MENU        1004
 #define IDC_CHK_OPEN_ON_DBLCLICK    1005
 #define IDC_CHK_EXTRACT_ON_DBLCLICK 1006

@@ -18,7 +18,6 @@ private:
     static HRESULT UnregisterExtension (const wchar_t* ext);
     static HRESULT RegisterApproved    (const CLSID&, const wchar_t* name);
     static HRESULT UnregisterApproved  (const CLSID&);
-    static HRESULT RegisterOverlay     (const CLSID&, const wchar_t* name);
     static HRESULT UnregisterOverlay   (const CLSID&, const wchar_t* name);
 
     // NEW

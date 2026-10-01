@@ -52,7 +52,6 @@ void Settings::Load()
     // General
     showPreviewPane     = ReadBool(hk, L"ShowPreview",      showPreviewPane);
     showThumbnails      = ReadBool(hk, L"ShowThumbnails",   showThumbnails);
-    showIconOverlay     = ReadBool(hk, L"ShowOverlay",      showIconOverlay);
     showContextMenu     = ReadBool(hk, L"ShowContextMenu",  showContextMenu);
     openArchiveOnDblClk = ReadBool(hk, L"OpenOnDblClk",    openArchiveOnDblClk);
     promptForPath       = ReadBool(hk, L"PromptPath",       promptForPath);
@@ -134,7 +133,6 @@ void Settings::Save() const
     // General
     WriteBool (hk, L"ShowPreview",     showPreviewPane);
     WriteBool (hk, L"ShowThumbnails",  showThumbnails);
-    WriteBool (hk, L"ShowOverlay",     showIconOverlay);
     WriteBool (hk, L"ShowContextMenu", showContextMenu);
     WriteBool (hk, L"OpenOnDblClk",   openArchiveOnDblClk);
     WriteBool (hk, L"PromptPath",      promptForPath);
@@ -210,7 +208,6 @@ void Settings::Reset()
     // ── General ──────────────────────────────────────────
     showPreviewPane      = true;
     showThumbnails       = true;
-    showIconOverlay      = true;
     showContextMenu      = true;
     openArchiveOnDblClk  = true;
     promptForPath        = true;

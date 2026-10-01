@@ -418,7 +418,6 @@ echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
     <ClCompile Include="src\ShellView.cpp" />
     <!-- Shell Extension Handlers -->
     <ClCompile Include="src\ContextMenu.cpp" />
-    <ClCompile Include="src\IconOverlay.cpp" />
     <ClCompile Include="src\DropTarget.cpp" />
     <ClCompile Include="src\ThumbnailProvider.cpp" />
     <ClCompile Include="src\PreviewHandler.cpp" />
@@ -443,7 +442,6 @@ echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
     <ClInclude Include="src\ShellFolder.h" />
     <ClInclude Include="src\ShellView.h" />
     <ClInclude Include="src\ContextMenu.h" />
-    <ClInclude Include="src\IconOverlay.h" />
     <ClInclude Include="src\DropTarget.h" />
     <ClInclude Include="src\ThumbnailProvider.h" />
     <ClInclude Include="src\PreviewHandler.h" />

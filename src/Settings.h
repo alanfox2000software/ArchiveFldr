@@ -56,7 +56,6 @@ public:
     // ── General ───────────────────────────────────────────
     bool          showPreviewPane      = true;
     bool          showThumbnails       = true;
-    bool          showIconOverlay      = true;
     bool          showContextMenu      = true;
     bool          openArchiveOnDblClk  = true;   // true=open, false=extract
     bool          promptForPath        = true;

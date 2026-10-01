@@ -33,7 +33,6 @@ public:
     // ── Static creator helpers ────────────────────────────
     static HRESULT CreateShellFolder      (REFIID, LPVOID*);
     static HRESULT CreateContextMenu      (REFIID, LPVOID*);
-    static HRESULT CreateIconOverlay      (REFIID, LPVOID*);
     static HRESULT CreateDropTarget       (REFIID, LPVOID*);
     static HRESULT CreateThumbnailProvider(REFIID, LPVOID*);
     static HRESULT CreatePreviewHandler   (REFIID, LPVOID*);

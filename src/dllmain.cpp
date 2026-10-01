@@ -97,7 +97,6 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
     static const Entry kEntries[] = {
         { &CLSID_ShellNSEFolder,      CClassFactory::CreateShellFolder      },
         { &CLSID_ShellNSEContextMenu, CClassFactory::CreateContextMenu      },
-        { &CLSID_ShellNSEIconOverlay, CClassFactory::CreateIconOverlay      },
         { &CLSID_ShellNSEDropTarget,  CClassFactory::CreateDropTarget       },
         { &CLSID_ShellNSEThumbnail,   CClassFactory::CreateThumbnailProvider},
         { &CLSID_ShellNSEPreview,     CClassFactory::CreatePreviewHandler   },

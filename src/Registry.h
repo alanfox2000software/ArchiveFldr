@@ -16,6 +16,13 @@ private:
     static HRESULT RegisterExtension   (const wchar_t* ext, const wchar_t* progId,
                                         const wchar_t* dllPath);
     static HRESULT UnregisterExtension (const wchar_t* ext);
+    // Windows "Default apps" integration. Publishing a Capabilities key
+    // under HKLM\SOFTWARE\RegisteredApplications is what puts ArchiveFldr
+    // in the Default apps list, so the user can hand it a file type that
+    // Windows' own archive handler currently owns.
+    static HRESULT RegisterCapabilities  (const wchar_t* dllPath);
+    static HRESULT UnregisterCapabilities();
+
     static HRESULT RegisterApproved    (const CLSID&, const wchar_t* name);
     static HRESULT UnregisterApproved  (const CLSID&);
     static HRESULT UnregisterOverlay   (const CLSID&, const wchar_t* name);

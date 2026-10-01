@@ -466,6 +466,54 @@ static bool BrowseWithWindow(HWND hwnd, LPCITEMIDLIST pidlRel,
     return false;
 }
 
+// Which shell folder would the shell bind this file to? A "file as folder"
+// junction is resolved through whichever ProgID the file type points at, so
+// the answer is ours only when ArchiveFldr owns the association. Asking the
+// shell directly beats re-implementing its lookup order.
+static bool JunctionIsOurs(LPCITEMIDLIST pidlAbs)
+{
+    if (!pidlAbs) return false;
+
+    IShellFolder* desktop = nullptr;
+    if (FAILED(SHGetDesktopFolder(&desktop)) || !desktop) return false;
+
+    bool ours = false;
+    IShellFolder* target = nullptr;
+    if (SUCCEEDED(desktop->BindToObject(pidlAbs, nullptr, IID_IShellFolder,
+                                        (void**)&target)) && target)
+    {
+        IPersist* persist = nullptr;
+        if (SUCCEEDED(target->QueryInterface(IID_IPersist, (void**)&persist))
+            && persist)
+        {
+            CLSID clsid{};
+            if (SUCCEEDED(persist->GetClassID(&clsid)))
+                ours = IsEqualCLSID(clsid, CLSID_ArchiveFldrFolder) != FALSE;
+            persist->Release();
+        }
+        target->Release();
+    }
+    desktop->Release();
+    return ours;
+}
+
+// Navigate the window the user is looking at to an absolute PIDL, in place.
+static bool BrowseAbsoluteInPlace(IUnknown* site, HWND hwnd,
+                                  LPCITEMIDLIST pidlAbs)
+{
+    if (BrowseWithSite(site, pidlAbs, pidlAbs)) return true;
+    if (hwnd && BrowseWithWindow(hwnd, pidlAbs, pidlAbs)) return true;
+
+    IUnknown* punkThread = nullptr;
+    if (SUCCEEDED(SHGetThreadRef(&punkThread)) && punkThread)
+    {
+        const bool ok = BrowseWithSite(punkThread, pidlAbs, pidlAbs);
+        punkThread->Release();
+        if (ok) return true;
+    }
+    return false;
+}
+
 // Navigate the window the user is looking at into `pidlRel`, a child of this
 // folder. SHOpenFolderAndSelectItems is the last resort on purpose: it has to
 // re-resolve our PIDL from the desktop down, which only works when the
@@ -753,43 +801,69 @@ void CContextMenu::DoOpenShell()
         }
     }
 
-    // explorer.exe /e,::{CLSID},<archive path>
-    wchar_t clsid[64] = {};
-    StringFromGUID2(CLSID_ArchiveFldrFolder, clsid, ARRAYSIZE(clsid));
-
-    wchar_t explorerExe[MAX_PATH] = {};
-    if (GetWindowsDirectoryW(explorerExe, MAX_PATH))
-        PathAppendW(explorerExe, L"explorer.exe");
-    else
-        wcscpy_s(explorerExe, L"explorer.exe");
-
-    std::wstring params = L"/e,::";
-    params += clsid;
-    params += L',';
-    params += m_archivePath;
-
-    SHELLEXECUTEINFOW sei{ sizeof(sei) };
-    sei.fMask        = SEE_MASK_FLAG_NO_UI;
-    sei.hwnd         = m_hwnd;
-    sei.lpVerb       = L"open";
-    sei.lpFile       = explorerExe;
-    sei.lpParameters = params.c_str();
-    sei.nShow        = SW_SHOWNORMAL;
-    if (ShellExecuteExW(&sei))
-        return;
-
-    // Fallback: browse the archive as a file-system junction. This is what
-    // double-clicking does once DllRegisterServer has run, so it works even
-    // if launching explorer.exe with a rooted CLSID was blocked.
-    if (PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(m_archivePath.c_str()))
+    // Browse the archive in the window the user is already looking at.
+    //
+    // This used to launch "explorer.exe /e,::{CLSID},<archive>". Explorer's
+    // command line has no ::{CLSID},<object> form — the documented shape is
+    // /e[,/root,<object>][[,/select],<sub object>] — so the trailing path was
+    // simply navigated to as an ordinary object. That always opened a second
+    // window, and it resolved the archive through the file association, which
+    // is why the built-in zip folder answered whenever it owned the type.
+    PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(m_archivePath.c_str());
+    if (!pidl)
     {
-        HRESULT hr = SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
-        ILFree(pidl);
-        if (SUCCEEDED(hr)) return;
+        MessageBoxW(m_hwnd,
+            (L"Windows could not resolve this path:\n\n" + m_archivePath).c_str(),
+            L"ArchiveFldr", MB_ICONERROR | MB_OK);
+        return;
     }
 
+    // A file-as-folder junction belongs to whichever ProgID the file type
+    // points at, and that beats everything we register elsewhere. If the
+    // type is not ours, browsing the PIDL would land in the other handler's
+    // view — so say so plainly rather than appearing to do nothing.
+    if (!JunctionIsOurs(pidl))
+    {
+        ILFree(pidl);
+
+        LPCWSTR dot = PathFindExtensionW(m_archivePath.c_str());
+        std::wstring msg =
+            L"Another program currently owns the ";
+        msg += (dot && *dot) ? dot : L"archive";
+        msg += L" file type, so Windows opens it with that program instead "
+               L"of ArchiveFldr.\n\n"
+               L"To change it, open Settings > Apps > Default apps, search "
+               L"for ArchiveFldr, and point the file type at it.\n\n"
+               L"Open Default apps now?";
+
+        if (MessageBoxW(m_hwnd, msg.c_str(), L"ArchiveFldr",
+                        MB_ICONINFORMATION | MB_YESNO) == IDYES)
+        {
+            // Windows 10/11. Older releases get the Control Panel page.
+            HINSTANCE rc = ShellExecuteW(m_hwnd, L"open",
+                L"ms-settings:defaultapps", nullptr, nullptr, SW_SHOWNORMAL);
+            if ((INT_PTR)rc <= 32)
+                ShellExecuteW(m_hwnd, L"open", L"control.exe",
+                    L"/name Microsoft.DefaultPrograms /page pageFileAssoc",
+                    nullptr, SW_SHOWNORMAL);
+        }
+        return;
+    }
+
+    // Same window first; a new one only if there is no browser to reuse
+    // (invoked from the desktop, or from a host that exposes no site).
+    if (BrowseAbsoluteInPlace(m_pSite, m_hwnd, pidl))
+    {
+        ILFree(pidl);
+        return;
+    }
+
+    const HRESULT hr = SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
+    ILFree(pidl);
+    if (SUCCEEDED(hr)) return;
+
     MessageBoxW(m_hwnd,
-        L"ArchiveFldr could not open an Explorer window for this archive.\n\n"
+        L"ArchiveFldr could not open a view of this archive.\n\n"
         L"Make sure the extension is registered (run, as administrator):\n"
         L"    regsvr32 ArchiveFldr.64.dll",
         L"ArchiveFldr", MB_ICONERROR | MB_OK);

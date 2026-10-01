@@ -705,16 +705,65 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
     if (!archive)
     {
         if (!PathFileExistsW(path.c_str()))
+        {
             m_lastError = L"The archive file no longer exists.";
-        else if (Handlers().empty() && !HandlersForExt(ext).size())
-            m_lastError = L"This 7z.dll could not open the file. It may be "
-                          L"damaged, or its headers may be encrypted — "
-                          L"password-protected headers are not yet supported.";
-        else
-            m_lastError = L"No 7-Zip handler could read this file. It may be "
-                          L"damaged or incomplete, or its headers may be "
-                          L"encrypted — password-protected headers are not "
-                          L"yet supported.";
+            return false;
+        }
+
+        // Say what was actually tried. "No handler could read this" on its
+        // own gives nobody anything to act on; the engine path, the handler
+        // count and the leading bytes together usually identify the problem
+        // on sight (wrong-bitness DLL, cut-down build, truncated file).
+        m_lastError = L"No 7-Zip handler could read this file.\n\n";
+
+        const std::wstring enginePath = Get7zEnginePath();
+        m_lastError += L"Engine: " +
+            (enginePath.empty() ? std::wstring(L"<none>") : enginePath) + L"\n";
+
+        wchar_t buf[128] = {};
+        const auto claimed = HandlersForExt(ext);
+        swprintf_s(buf, 128, L"Handlers published: %u, claiming %s: %u\n",
+                   (unsigned)Handlers().size(),
+                   (ext && *ext) ? ext : L"this extension",
+                   (unsigned)claimed.size());
+        m_lastError += buf;
+
+        if (!claimed.empty())
+        {
+            m_lastError += L"Tried first: ";
+            for (size_t i = 0; i < claimed.size(); ++i)
+            {
+                if (i) m_lastError += L", ";
+                m_lastError += claimed[i]->name;
+            }
+            m_lastError += L"\n";
+        }
+
+        // The first bytes identify the real format regardless of the name.
+        if (HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                                   nullptr, OPEN_EXISTING,
+                                   FILE_ATTRIBUTE_NORMAL, nullptr);
+            h != INVALID_HANDLE_VALUE)
+        {
+            uint8_t sig[8] = {};
+            DWORD got = 0;
+            ReadFile(h, sig, sizeof(sig), &got, nullptr);
+            CloseHandle(h);
+            if (got)
+            {
+                m_lastError += L"First bytes:";
+                for (DWORD i = 0; i < got; ++i)
+                {
+                    swprintf_s(buf, 128, L" %02X", sig[i]);
+                    m_lastError += buf;
+                }
+                m_lastError += L"\n";
+            }
+        }
+
+        m_lastError += L"\nThe file may be damaged or incomplete, or its "
+                       L"headers may be encrypted — password-protected "
+                       L"headers are not yet supported.";
         return false;
     }
 

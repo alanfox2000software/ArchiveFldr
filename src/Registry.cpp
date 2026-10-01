@@ -70,6 +70,23 @@ static std::wstring SystemIcon(const wchar_t* dllName, int index)
     return path + L"," + std::to_wstring(index);
 }
 
+// Read a string value; empty when absent.
+static std::wstring ReadRegStr(HKEY root, const wchar_t* path,
+                               const wchar_t* name)
+{
+    HKEY hk = nullptr;
+    if (RegOpenKeyExW(root, path, 0, KEY_QUERY_VALUE, &hk) != ERROR_SUCCESS)
+        return L"";
+    wchar_t buf[512] = {};
+    DWORD cb = sizeof(buf), type = 0;
+    LONG rc = RegQueryValueExW(hk, name, nullptr, &type,
+                               reinterpret_cast<BYTE*>(buf), &cb);
+    RegCloseKey(hk);
+    if (rc != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ))
+        return L"";
+    return buf;
+}
+
 // Read a DWORD, honouring both registry views so a 32-bit regsvr32 and a
 // 64-bit one see the same opt-in flag.
 static DWORD ReadRegDword(HKEY root, const wchar_t* path,
@@ -378,8 +395,24 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
     // ── 2) Extension (.zip) ───────────────────────────────
     std::wstring extBase = std::wstring(L"Software\\Classes\\") + ext;
 
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, extBase.c_str(),
-        nullptr, progId));
+    // Claim the type only when it is unclaimed, or when the claim is
+    // already ours. Overwriting a live association — CompressedFolder on
+    // .zip, Windows 11's archive handler on .bz2 and .7z — would be taking
+    // the file type without being asked, and it does not even work: the
+    // user's own choice under HKCU wins regardless. Settings > Default
+    // apps is where that swap belongs, which is what RegisterCapabilities
+    // sets up.
+    {
+        const std::wstring owner =
+            ReadRegStr(HKEY_LOCAL_MACHINE, extBase.c_str(), nullptr);
+        const bool unowned = owner.empty();
+        const bool alreadyOurs =
+            owner.rfind(L"ArchiveFldr.", 0) == 0 ||
+            owner.rfind(L"ShellNSE.",   0) == 0;   // upgrading in place
+        if (unowned || alreadyOurs)
+            RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, extBase.c_str(),
+                nullptr, progId));
+    }
 
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, extBase.c_str(),
         L"PerceivedType", L"compressed"));
@@ -450,6 +483,63 @@ HRESULT CRegistry::UnregisterOverlay(const CLSID& /*clsid*/, const wchar_t* name
     return DelRegKey(HKEY_LOCAL_MACHINE, path.c_str());
 }
 
+// ── Default apps / Registered Applications ────────────────
+//
+// Windows resolves a "file as folder" junction through the ProgID the file
+// type currently points at, and that beats SystemFileAssociations. So when
+// Windows' own archive handler owns .zip or .bz2, registering our junction
+// cannot win and should not try to — forcing it would be taking the file
+// type behind the user's back.
+//
+// The supported way to offer the swap is to publish a Capabilities key and
+// list it in RegisteredApplications. ArchiveFldr then appears in
+// Settings > Default apps, where the user can point individual extensions
+// at it. Once they do, the ProgID is ours and everything else follows:
+// double-click browses the archive, and so does our own context menu.
+static constexpr wchar_t kCapabilitiesKey[] = L"Software\\ArchiveFldr\\Capabilities";
+static constexpr wchar_t kRegisteredApps[]  = L"Software\\RegisteredApplications";
+static constexpr wchar_t kAppName[]         = L"ArchiveFldr";
+
+HRESULT CRegistry::RegisterCapabilities(const wchar_t* /*dllPath*/)
+{
+    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, kCapabilitiesKey,
+        L"ApplicationName", L"ArchiveFldr"));
+    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, kCapabilitiesKey,
+        L"ApplicationDescription",
+        L"Browse archives as folders in File Explorer."));
+
+    {
+        // No icon of our own ships with this project, so borrow the stock
+        // compressed-folder icon rather than pointing at an empty slot.
+        const std::wstring icon = SystemIcon(L"zipfldr.dll", 0);
+        if (!icon.empty())
+            SetRegStr(HKEY_LOCAL_MACHINE, kCapabilitiesKey,
+                      L"ApplicationIcon", icon.c_str());
+    }
+
+    const std::wstring assoc = std::wstring(kCapabilitiesKey) + L"\\FileAssociations";
+    for (const auto* f : Formats::Registrable())
+        RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, assoc.c_str(),
+                                   f->ext, f->progId));
+
+    // The pointer that makes Windows actually look at the key above.
+    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, kRegisteredApps,
+        kAppName, kCapabilitiesKey));
+    return S_OK;
+}
+
+HRESULT CRegistry::UnregisterCapabilities()
+{
+    HKEY hk = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, kRegisteredApps, 0, KEY_SET_VALUE,
+                      &hk) == ERROR_SUCCESS)
+    {
+        RegDeleteValueW(hk, kAppName);
+        RegCloseKey(hk);
+    }
+    return DelRegKey(HKEY_LOCAL_MACHINE, L"Software\\ArchiveFldr");
+}
+
 // ─────────────────────────────────────────────────────────
 // RegisterAll
 // ─────────────────────────────────────────────────────────
@@ -518,6 +608,13 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
     for (const auto* f : Formats::Registrable())
         RETURN_IF_FAILED(RegisterExtension(f->ext, f->progId, dllPath));
 
+    // 6. Offer ourselves in Settings > Default apps. This is the only way
+    //    to take a file type that Windows' built-in archive handler owns
+    //    (.zip through CompressedFolder, and on Windows 11 .bz2, .gz, .tar
+    //    and .7z through its newer one), and it leaves the choice to the
+    //    user instead of grabbing the type during registration.
+    RETURN_IF_FAILED(RegisterCapabilities(dllPath));
+
     return S_OK;
 }
 
@@ -526,6 +623,10 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
 // ─────────────────────────────────────────────────────────
 HRESULT CRegistry::UnregisterAll()
 {
+    // Stop advertising in Settings > Default apps first, so the entry does
+    // not linger pointing at file types we are about to release.
+    UnregisterCapabilities();
+
     // Everything we ever registered, plus a few progIds from older builds
     // that are no longer in the table, so an upgrade cleans up after
     // itself rather than leaving orphans behind.

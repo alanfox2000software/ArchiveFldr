@@ -8,7 +8,6 @@
 #include "SevenZipEngine.h"   // Is7zEngineAvailable() / Get7zEnginePath()
 #include "ThirdParty.h"
 #include "Settings.h"
-#include "SettingsDialog.h"
 #include "GUIDs.h"
 #include "../res/resource.h"
 
@@ -1059,6 +1058,43 @@ void CContextMenu::DoProperties()
 
 void CContextMenu::DoSettings()
 {
-    CSettingsDialog dlg;
-    dlg.Show(m_hwnd);
+    // The settings UI is its own program now — a shell extension has no
+    // business carrying a six-page dialog into every process that touches
+    // a context menu. It sits next to this DLL.
+    const std::wstring dir = ThirdParty::ModuleDir();
+    if (dir.empty())
+    {
+        MessageBoxW(m_hwnd, L"ArchiveFldr could not locate its own folder.",
+                    L"ArchiveFldr", MB_ICONERROR | MB_OK);
+        return;
+    }
+    // Both builds land in the same folder, so the executable carries the
+    // same bitness tag the DLL does. Prefer the matching one; accept an
+    // untagged build too, for anyone who renames it.
+    std::wstring exeStr = dir + L"\\ArchiveFldrSetting." +
+                          ThirdParty::BitnessTag() + L".exe";
+    if (!PathFileExistsW(exeStr.c_str()))
+        exeStr = dir + L"\\ArchiveFldrSetting.exe";
+    const wchar_t* exe = exeStr.c_str();
+
+    if (!PathFileExistsW(exe))
+    {
+        MessageBoxW(m_hwnd,
+            (std::wstring(
+                L"The settings program is missing. It is built alongside "
+                L"ArchiveFldr and belongs in the same folder:\n\n") +
+             exeStr).c_str(),
+            L"ArchiveFldr", MB_ICONWARNING | MB_OK);
+        return;
+    }
+
+    SHELLEXECUTEINFOW sei{ sizeof(sei) };
+    sei.fMask  = SEE_MASK_FLAG_NO_UI;
+    sei.hwnd   = m_hwnd;
+    sei.lpVerb = L"open";
+    sei.lpFile = exe;
+    sei.nShow  = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&sei))
+        MessageBoxW(m_hwnd, L"The settings program could not be started.",
+                    L"ArchiveFldr", MB_ICONERROR | MB_OK);
 }

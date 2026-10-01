@@ -6,12 +6,53 @@
 #include "../res/resource.h"
 
 // ═════════════════════════════════════════════════════════
+// Where things live
+//
+// This file used to be compiled into the shell extension, where the
+// module holding the dialog resources and the module Windows has to
+// register were the same file. In ArchiveFldrSetting.exe they are two
+// different files in the same folder, so the two uses have to be told
+// apart: resources come from this executable, registration acts on the
+// DLL next to it.
+// ═════════════════════════════════════════════════════════
+namespace {
+
+HINSTANCE UiModule()
+{
+    return GetModuleHandleW(nullptr);
+}
+
+std::wstring OwnFolder()
+{
+    wchar_t path[MAX_PATH] = {};
+    if (!GetModuleFileNameW(UiModule(), path, ARRAYSIZE(path))) return L"";
+    PathRemoveFileSpecW(path);
+    return path;
+}
+
+// The shell extension this settings program belongs to. Both bitnesses
+// build into one folder, so the DLL carries the same tag the exe does;
+// a 64-bit settings program registers the 64-bit DLL.
+std::wstring ShellExtensionPath()
+{
+    const std::wstring dir = OwnFolder();
+    if (dir.empty()) return L"";
+    const wchar_t* tag = (sizeof(void*) == 8) ? L"64" : L"32";
+    std::wstring dll = dir + L"\\ArchiveFldr." + tag + L".dll";
+    if (!PathFileExistsW(dll.c_str()))
+        dll = dir + L"\\ArchiveFldr.dll";
+    return dll;
+}
+
+} // namespace
+
+// ═════════════════════════════════════════════════════════
 // Helper: create a child dialog from a template ID
 // ═════════════════════════════════════════════════════════
 static HWND CreatePageDialog(UINT idd, DLGPROC proc,
                               LPARAM lParam, HWND hParent)
 {
-    return CreateDialogParamW(g_hDllInstance,
+    return CreateDialogParamW(UiModule(),
         MAKEINTRESOURCEW(idd), hParent, proc, lParam);
 }
 
@@ -260,9 +301,8 @@ void CPageIntegration::Load() {
     SetDlgItemTextW(m_hwnd, IDC_EDIT_SUBMENU_TITLE, s.ctxSubMenuTitle.c_str());
 
     // Registration status
-    wchar_t dllPath[MAX_PATH]={};
-    GetModuleFileNameW(g_hDllInstance, dllPath, MAX_PATH);
-    bool registered = PathFileExistsW(dllPath) &&
+    const std::wstring dllPath = ShellExtensionPath();
+    bool registered = !dllPath.empty() && PathFileExistsW(dllPath.c_str()) &&
         []{
             HKEY hk=nullptr;
             bool ok = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
@@ -306,9 +346,10 @@ INT_PTR CALLBACK CPageIntegration::DlgProc(
     if (msg==WM_COMMAND) {
         WORD ctrl=LOWORD(wp);
         if (ctrl==IDC_BTN_REGISTER) {
-            wchar_t path[MAX_PATH]={};
-            GetModuleFileNameW(g_hDllInstance,path,MAX_PATH);
-            HRESULT hr = CRegistry::RegisterAll(path);
+            const std::wstring path = ShellExtensionPath();
+            HRESULT hr = path.empty() || !PathFileExistsW(path.c_str())
+                       ? HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
+                       : CRegistry::RegisterAll(path.c_str());
             SetDlgItemTextW(hDlg, IDC_LBL_STATUS_REG,
                 SUCCEEDED(hr) ? L"✓ Registered successfully"
                               : L"✗ Registration failed (run as admin)");
@@ -500,8 +541,7 @@ INT_PTR CALLBACK CPageAdvanced::DlgProc(
         if (ctrl==IDC_BTN_BROWSE_LOG)  browsePath(IDC_EDIT_LOG_PATH);
         if (ctrl==IDC_BTN_CLEAR_CACHE) {
             wchar_t tmp[MAX_PATH]={};
-            GetModuleFileNameW(g_hDllInstance,tmp,MAX_PATH);
-            PathRemoveFileSpecW(tmp);
+            wcscpy_s(tmp, OwnFolder().c_str());
             wcscat_s(tmp,L"\\ThumbCache");
             SHFILEOPSTRUCTW fo = {};
             fo.hwnd   = hDlg;
@@ -583,7 +623,7 @@ CSettingsDialog::~CSettingsDialog() = default;
 bool CSettingsDialog::Show(HWND hwndParent)
 {
     EnsureCommonControls();
-    INT_PTR r = DialogBoxParamW(g_hDllInstance,
+    INT_PTR r = DialogBoxParamW(UiModule(),
         MAKEINTRESOURCEW(IDD_SETTINGS_MAIN),
         hwndParent, DlgProc, (LPARAM)this);
     return (r == IDOK);

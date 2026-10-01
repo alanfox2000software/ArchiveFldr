@@ -81,6 +81,26 @@ imports.
 Both appear under *Individual components*. The solution still opens and
 builds normally in VS2026 — the switch only takes effect when you pass it.
 
+## What gets built
+
+The solution produces two binaries per configuration, both into
+`bin\<Configuration>\`, and they belong in the same folder:
+
+| File | What it is |
+|---|---|
+| `ArchiveFldr.64.dll` / `ArchiveFldr.32.dll` | the shell extension — this is the file `regsvr32` registers |
+| `ArchiveFldrSetting.64.exe` / `ArchiveFldrSetting.32.exe` | the settings window, started by "ArchiveFldr settings..." |
+
+Only the DLL is registered. The settings program is an ordinary
+executable that the DLL starts on demand, which keeps a six-page dialog
+out of every process that loads a context menu. It looks for the
+bitness-matched DLL next to itself when you use its Register button, so
+keep the pair together.
+
+Registration writes to HKLM. The settings program runs `asInvoker`, so
+its Register / Unregister buttons only work when it was started as
+administrator; the Integration page says so when they fail.
+
 ## What runs where
 
 | Feature | XP | Vista | 7 | 8.1 | 10 / 11 |
@@ -88,8 +108,15 @@ builds normally in VS2026 — the switch only takes effect when you pass it.
 | Browse archives as folders | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Context menus, drag and drop | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Extract / test | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Settings program | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Thumbnail provider | — | ✓ | ✓ | ✓ | ✓ |
 | Preview pane | — | ✓ | ✓ | ✓ | ✓ |
+| Listed in Default apps | — | ✓ | ✓ | ✓ | ✓ |
+
+`RegisteredApplications` and `Capabilities\FileAssociations` are a
+Vista-and-later mechanism. The keys are written on XP too; nothing there
+reads them, so on XP the extension is reachable only through the file
+types it was able to claim without displacing an existing owner.
 
 wimlib is the one engine with a hard version floor of its own: 1.13.0 or
 newer (the `libwim-15` builds), checked at load time.

@@ -25,8 +25,8 @@
        Global Properties
   ════════════════════════════════════════════════════ -->
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
-    <RootNamespace>ArchiveFldr</RootNamespace>
+    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567891}</ProjectGuid>
+    <RootNamespace>ArchiveFldrSetting</RootNamespace>
     <Keyword>Win32Proj</Keyword>
     <!-- The XP toolset brings its own (Windows 7.1A) SDK, so only pin the
          modern SDK version when we are not building for XP. -->
@@ -47,7 +47,7 @@
          of which exists before Vista. -->
     <ArchiveFldrTargetDefines Condition="$(ArchiveFldrToolset.EndsWith('_xp'))">ARCHIVEFLDR_XP;_WIN32_WINNT=0x0501;WINVER=0x0501;NTDDI_VERSION=0x05010300;</ArchiveFldrTargetDefines>
     <ArchiveFldrTargetDefines Condition="!$(ArchiveFldrToolset.EndsWith('_xp'))">_WIN32_WINNT=0x0A00;WINVER=0x0A00;NTDDI_VERSION=0x0A000006;</ArchiveFldrTargetDefines>
-    <ProjectName>ArchiveFldr</ProjectName>
+    <ProjectName>ArchiveFldrSetting</ProjectName>
     <VCProjectVersion>18.0</VCProjectVersion>
     <!-- Force UTF-8 for all source files project-wide -->
     <CharacterSet>Unicode</CharacterSet>
@@ -58,14 +58,14 @@
   ════════════════════════════════════════════════════ -->
   <!-- DEBUG | Win32 -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
-    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>$(ArchiveFldrToolset)</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <!-- RELEASE | Win32 -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
-    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>$(ArchiveFldrToolset)</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
@@ -73,14 +73,14 @@
   </PropertyGroup>
   <!-- DEBUG | x64 -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
-    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>$(ArchiveFldrToolset)</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <!-- RELEASE | x64 -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
-    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>$(ArchiveFldrToolset)</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
@@ -99,26 +99,26 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x86\</IntDir>
-    <TargetName>ArchiveFldr.32</TargetName>
-    <TargetExt>.dll</TargetExt>
+    <TargetName>ArchiveFldrSetting.32</TargetName>
+    <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x86\</IntDir>
-    <TargetName>ArchiveFldr.32</TargetName>
-    <TargetExt>.dll</TargetExt>
+    <TargetName>ArchiveFldrSetting.32</TargetName>
+    <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x64\</IntDir>
-    <TargetName>ArchiveFldr.64</TargetName>
-    <TargetExt>.dll</TargetExt>
+    <TargetName>ArchiveFldrSetting.64</TargetName>
+    <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x64\</IntDir>
-    <TargetName>ArchiveFldr.64</TargetName>
-    <TargetExt>.dll</TargetExt>
+    <TargetName>ArchiveFldrSetting.64</TargetName>
+    <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <!-- ═══════════════════════════════════════════════════
        Shared Preprocessor Definitions (property sheet style)
@@ -139,8 +139,6 @@
       UNICODE;
       _UNICODE;
       _WINDOWS;
-      _USRDLL;
-      ARCHIVEFLDR_EXPORTS;
       $(ArchiveFldrTargetDefines)
       WIN32_LEAN_AND_MEAN;
       NOMINMAX;
@@ -210,7 +208,6 @@
       <MinimumRequiredVersion Condition="'$(Platform)'=='Win32'">5.01</MinimumRequiredVersion>
       <MinimumRequiredVersion Condition="'$(Platform)'=='x64'">5.02</MinimumRequiredVersion>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <ModuleDefinitionFile>src\ArchiveFldr.def</ModuleDefinitionFile>
       <AdditionalDependencies>
         shlwapi.lib;
         shell32.lib;
@@ -227,11 +224,12 @@
       </AdditionalDependencies>
       <!-- Do NOT link runtimeobject.lib (WinRT) -->
     </Link>
+    <Manifest>
+      <AdditionalManifestFiles>res\setting.manifest.xml</AdditionalManifestFiles>
+    </Manifest>
     <PostBuildEvent>
-      <Command>if exist "$(ProjectDir)thirdparty\" xcopy /y /i /e /s "$(ProjectDir)thirdparty\*.dll" "$(OutDir)thirdparty\" &gt;nul 2&gt;nul
-regsvr32 /s "$(TargetPath)"
-echo [ArchiveFldr] Registered Debug x86: $(TargetFileName)</Command>
-      <Message>Registering Shell Extension (Debug x86)...</Message>
+      <Command>echo [ArchiveFldrSetting] Built Debug x86: $(TargetFileName)</Command>
+      <Message>Building settings program (Debug x86)...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <!-- ──────────────────────────────────────────────────
@@ -279,7 +277,6 @@ echo [ArchiveFldr] Registered Debug x86: $(TargetFileName)</Command>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
-      <ModuleDefinitionFile>src\ArchiveFldr.def</ModuleDefinitionFile>
       <AdditionalDependencies>
         shlwapi.lib;
         shell32.lib;
@@ -295,11 +292,12 @@ echo [ArchiveFldr] Registered Debug x86: $(TargetFileName)</Command>
         %(AdditionalDependencies)
       </AdditionalDependencies>
     </Link>
+    <Manifest>
+      <AdditionalManifestFiles>res\setting.manifest.xml</AdditionalManifestFiles>
+    </Manifest>
     <PostBuildEvent>
-      <Command>if exist "$(ProjectDir)thirdparty\" xcopy /y /i /e /s "$(ProjectDir)thirdparty\*.dll" "$(OutDir)thirdparty\" &gt;nul 2&gt;nul
-regsvr32 /s "$(TargetPath)"
-echo [ArchiveFldr] Registered Release x86: $(TargetFileName)</Command>
-      <Message>Registering Shell Extension (Release x86)...</Message>
+      <Command>echo [ArchiveFldrSetting] Built Release x86: $(TargetFileName)</Command>
+      <Message>Building settings program (Release x86)...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <!-- ──────────────────────────────────────────────────
@@ -343,7 +341,6 @@ echo [ArchiveFldr] Registered Release x86: $(TargetFileName)</Command>
       <MinimumRequiredVersion Condition="'$(Platform)'=='Win32'">5.01</MinimumRequiredVersion>
       <MinimumRequiredVersion Condition="'$(Platform)'=='x64'">5.02</MinimumRequiredVersion>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <ModuleDefinitionFile>src\ArchiveFldr.def</ModuleDefinitionFile>
       <AdditionalDependencies>
         shlwapi.lib;
         shell32.lib;
@@ -359,11 +356,12 @@ echo [ArchiveFldr] Registered Release x86: $(TargetFileName)</Command>
         %(AdditionalDependencies)
       </AdditionalDependencies>
     </Link>
+    <Manifest>
+      <AdditionalManifestFiles>res\setting.manifest.xml</AdditionalManifestFiles>
+    </Manifest>
     <PostBuildEvent>
-      <Command>if exist "$(ProjectDir)thirdparty\" xcopy /y /i /e /s "$(ProjectDir)thirdparty\*.dll" "$(OutDir)thirdparty\" &gt;nul 2&gt;nul
-regsvr32 /s "$(TargetPath)"
-echo [ArchiveFldr] Registered Debug x64: $(TargetFileName)</Command>
-      <Message>Registering Shell Extension (Debug x64)...</Message>
+      <Command>echo [ArchiveFldrSetting] Built Debug x64: $(TargetFileName)</Command>
+      <Message>Building settings program (Debug x64)...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <!-- ──────────────────────────────────────────────────
@@ -411,7 +409,6 @@ echo [ArchiveFldr] Registered Debug x64: $(TargetFileName)</Command>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
-      <ModuleDefinitionFile>src\ArchiveFldr.def</ModuleDefinitionFile>
       <AdditionalDependencies>
         shlwapi.lib;
         shell32.lib;
@@ -427,76 +424,42 @@ echo [ArchiveFldr] Registered Debug x64: $(TargetFileName)</Command>
         %(AdditionalDependencies)
       </AdditionalDependencies>
     </Link>
+    <Manifest>
+      <AdditionalManifestFiles>res\setting.manifest.xml</AdditionalManifestFiles>
+    </Manifest>
     <PostBuildEvent>
-      <Command>if exist "$(ProjectDir)thirdparty\" xcopy /y /i /e /s "$(ProjectDir)thirdparty\*.dll" "$(OutDir)thirdparty\" &gt;nul 2&gt;nul
-regsvr32 /s "$(TargetPath)"
-echo [ArchiveFldr] Registered Release x64: $(TargetFileName)</Command>
-      <Message>Registering Shell Extension (Release x64)...</Message>
+      <Command>echo [ArchiveFldrSetting] Built Release x64: $(TargetFileName)</Command>
+      <Message>Building settings program (Release x64)...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <!-- ═══════════════════════════════════════════════════
        Source Files
   ════════════════════════════════════════════════════ -->
   <ItemGroup>
-    <!-- Precompiled Header — must be set to Create -->
     <ClCompile Include="src\stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
-    <!-- Core DLL -->
-    <ClCompile Include="src\dllmain.cpp" />
-    <ClCompile Include="src\ClassFactory.cpp" />
-    <ClCompile Include="src\Registry.cpp" />
-    <!-- Shell Namespace Extension -->
-    <ClCompile Include="src\ShellFolder.cpp" />
-    <ClCompile Include="src\ShellView.cpp" />
-    <!-- Shell Extension Handlers -->
-    <ClCompile Include="src\ContextMenu.cpp" />
-    <ClCompile Include="src\DropTarget.cpp" />
-    <ClCompile Include="src\ThumbnailProvider.cpp" />
-    <ClCompile Include="src\PreviewHandler.cpp" />
-    <!-- Archive Engine -->
-    <ClCompile Include="src\ArchiveEngine.cpp" />
-    <ClCompile Include="src\ArchiveOps.cpp" />
-    <ClCompile Include="src\DataObject.cpp" />
-    <ClCompile Include="src\ThirdParty.cpp" />
-    <ClCompile Include="src\SevenZipEngine.cpp" />
-    <!-- Settings & GUI -->
-    <ClCompile Include="src\CodecEngine.cpp" />
-    <ClCompile Include="src\WimEngine.cpp" />
-    <ClCompile Include="src\UnrarEngine.cpp" />
-    <ClCompile Include="src\SysInfo.cpp" />
-    <ClCompile Include="src\Formats.cpp" />
+    <ClCompile Include="src\SettingMain.cpp" />
+    <ClCompile Include="src\SettingsDialog.cpp" />
     <ClCompile Include="src\Settings.cpp" />
+    <ClCompile Include="src\Registry.cpp" />
+    <ClCompile Include="src\Formats.cpp" />
+    <ClCompile Include="src\SysInfo.cpp" />
   </ItemGroup>
   <!-- ═══════════════════════════════════════════════════
        Header Files
   ════════════════════════════════════════════════════ -->
   <ItemGroup>
     <ClInclude Include="src\stdafx.h" />
-    <ClInclude Include="src\GUIDs.h" />
-    <ClInclude Include="src\ClassFactory.h" />
-    <ClInclude Include="src\ShellFolder.h" />
-    <ClInclude Include="src\ShellView.h" />
-    <ClInclude Include="src\ContextMenu.h" />
-    <ClInclude Include="src\DropTarget.h" />
-    <ClInclude Include="src\ThumbnailProvider.h" />
-    <ClInclude Include="src\PreviewHandler.h" />
-    <ClInclude Include="src\ArchiveEngine.h" />
-    <ClInclude Include="src\ArchiveOps.h" />
-    <ClInclude Include="src\DataObject.h" />
-    <ClInclude Include="src\ThirdParty.h" />
-    <ClInclude Include="src\SevenZipEngine.h" />
-    <ClInclude Include="src\Sdk7z.h" />
-    <ClInclude Include="src\Registry.h" />
-    <ClInclude Include="src\CodecEngine.h" />
-    <ClInclude Include="src\WimEngine.h" />
-    <ClInclude Include="src\UnrarEngine.h" />
-    <ClInclude Include="src\SysInfo.h" />
-    <ClInclude Include="src\Formats.h" />
     <ClInclude Include="src\Settings.h" />
+    <ClInclude Include="src\SettingsDialog.h" />
+    <ClInclude Include="src\Registry.h" />
+    <ClInclude Include="src\Formats.h" />
+    <ClInclude Include="src\SysInfo.h" />
+    <ClInclude Include="src\GUIDs.h" />
     <ClInclude Include="res\resource.h" />
   </ItemGroup>
   <!-- ═══════════════════════════════════════════════════
@@ -506,14 +469,16 @@ echo [ArchiveFldr] Registered Release x64: $(TargetFileName)</Command>
     <ResourceCompile Include="res\resource.rc">
       <!-- RC compiler also needs UTF-8 + Unicode flag -->
       <AdditionalOptions>/n %(AdditionalOptions)</AdditionalOptions>
+      <!-- Selects the VFT_APP / ArchiveFldrSetting.exe version strings
+           out of the shared script. -->
+      <PreprocessorDefinitions>ARCHIVEFLDR_SETTING_APP;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ResourceCompile>
   </ItemGroup>
   <!-- ═══════════════════════════════════════════════════
        Miscellaneous / None files
   ════════════════════════════════════════════════════ -->
   <ItemGroup>
-    <None Include="src\ArchiveFldr.def" />
-    <None Include="res\manifest.xml" />
+    <None Include="res\setting.manifest.xml" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

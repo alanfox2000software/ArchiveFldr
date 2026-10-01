@@ -224,3 +224,7 @@ extern long      g_cLockCount;
 // draws or creates a window.
 bool EnsureGdiPlus();          // true when GDI+ is usable
 void EnsureCommonControls();
+
+// Widen a compile-time narrow literal (used for __DATE__ / __TIME__).
+#define NSE_WIDE2(x) L##x
+#define NSE_WIDE(x)  NSE_WIDE2(x)

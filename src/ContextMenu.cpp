@@ -820,11 +820,18 @@ void CContextMenu::DoInfo()
 
     if (caps.canExtract)
     {
-        wchar_t buf[256];
-        swprintf_s(buf, 256, L"\nFiles: %llu\nSize: %s\nPacked: %s",
+        // A total of zero against a non-empty archive means the format
+        // never recorded one, not that the contents are empty.
+        const uint64_t total  = engine->GetTotalSize();
+        const uint64_t packed = engine->GetPackedSize();
+        const std::wstring totalText =
+            (total == 0 && packed > 0) ? std::wstring(L"not recorded by this format")
+                                       : engine->GetFormattedSize(total);
+        wchar_t buf[320];
+        swprintf_s(buf, 320, L"\nFiles: %llu\nSize: %s\nPacked: %s",
             (unsigned long long)engine->GetFileCount(),
-            engine->GetFormattedSize(engine->GetTotalSize()).c_str(),
-            engine->GetFormattedSize(engine->GetPackedSize()).c_str());
+            totalText.c_str(),
+            engine->GetFormattedSize(packed).c_str());
         msg += buf;
     }
 
@@ -834,6 +841,12 @@ void CContextMenu::DoInfo()
     msg += L"\nCan add files: "; msg += caps.canAdd    ? L"yes" : L"no";
     if (!caps.unavailableReason.empty())
         msg += L"\n\n" + caps.unavailableReason;
+
+    // Which binary is actually loaded. Explorer caches shell extensions
+    // aggressively, so after a rebuild this is the quickest way to tell
+    // whether the DLL under test is the one that just got built.
+    msg += L"\n\nShellNSE build: " NSE_WIDE(__DATE__) L" " NSE_WIDE(__TIME__);
+    msg += (sizeof(void*) == 8) ? L" (64-bit)" : L" (32-bit)";
 
     MessageBoxW(m_hwnd, msg.c_str(), L"Archive Info", MB_ICONINFORMATION | MB_OK);
 }

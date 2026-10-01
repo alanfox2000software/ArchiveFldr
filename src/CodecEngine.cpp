@@ -71,6 +71,8 @@ struct BrotliApi
     int   (__cdecl* isFinished)(void*);
 };
 
+std::wstring Widen(const char* s);   // defined below, used by the binders
+
 // ── Generic loader ──────────────────────────────────────────────────────
 // Tries each candidate export name in turn. Projects occasionally ship a
 // decorated or versioned alias, and a missing symbol must read as "this
@@ -108,7 +110,6 @@ std::map<std::wstring, Codec> g_codecs;
 
 void BindZstd(Codec& c)
 {
-    c.kind = Codec::Kind::Zstd;
     bool ok =
         Set(c.zstd.createDStream,       c.module, { "ZSTD_createDStream" }) &
         Set(c.zstd.initDStream,         c.module, { "ZSTD_initDStream" }) &
@@ -119,46 +120,70 @@ void BindZstd(Codec& c)
     Set(c.zstd.getErrorName,        c.module, { "ZSTD_getErrorName" });
     Set(c.zstd.getFrameContentSize, c.module, { "ZSTD_getFrameContentSize",
                                                 "ZSTD_getDecompressedSize" });
-    if (!ok) c.error = L"libzstd was loaded but does not export the "
-                       L"streaming decompression API (ZSTD_decompressStream).";
+    if (!ok)
+    {
+        c.error = L"libzstd was loaded but does not export the "
+                  L"streaming decompression API (ZSTD_decompressStream).";
+        return;                     // leave kind None: nothing is callable
+    }
+    c.kind = Codec::Kind::Zstd;     // only now is the binding safe to call
 }
 
-void BindLz4Family(Codec& c, const char* prefix)
+// LZ5 and Lizard are the same project: the lz5 repository was renamed to
+// lizard at v2.0, and the export prefix went LZ5F_ -> LizardF_ with it.
+// A DLL shipped as liblz5.dll may therefore carry either, depending on
+// which release it was built from, so try each prefix rather than assume.
+// The frame layout is identical across all three (only the magic number
+// differs: LZ4 0x184D2204, LZ5 ...2205, Lizard ...2206), so one binding
+// drives them all.
+void BindLz4Family(Codec& c, std::initializer_list<const char*> prefixes)
 {
-    c.kind = Codec::Kind::Lz4Family;
+    std::wstring tried;
+    for (const char* prefix : prefixes)
+    {
+        if (!tried.empty()) tried += L", ";
+        tried += Widen(prefix);
 
-    auto name = [prefix](const char* tail) {
-        static thread_local std::string buf;
-        buf = std::string(prefix) + tail;
-        return buf.c_str();
-    };
+        const std::string p(prefix);
+        Lz4FamilyApi api{};
+        bool ok = true;
+        ok &= Set(api.createDecompressionContext, c.module,
+                  { (p + "createDecompressionContext").c_str() });
+        ok &= Set(api.freeDecompressionContext,   c.module,
+                  { (p + "freeDecompressionContext").c_str() });
+        ok &= Set(api.decompress,                 c.module,
+                  { (p + "decompress").c_str() });
+        ok &= Set(api.isError,                    c.module,
+                  { (p + "isError").c_str() });
+        if (!ok) continue;               // not this naming; try the next
 
-    // Built one at a time: `name` reuses its buffer, so the candidate
-    // strings must not be alive at the same time.
-    bool ok = true;
-    ok &= Set(c.lz4.createDecompressionContext, c.module, { name("createDecompressionContext") });
-    ok &= Set(c.lz4.freeDecompressionContext,   c.module, { name("freeDecompressionContext") });
-    ok &= Set(c.lz4.decompress,                 c.module, { name("decompress") });
-    ok &= Set(c.lz4.isError,                    c.module, { name("isError") });
-    Set(c.lz4.getErrorName,                     c.module, { name("getErrorName") });
+        Set(api.getErrorName, c.module, { (p + "getErrorName").c_str() });
+        c.lz4  = api;
+        c.kind = Codec::Kind::Lz4Family; // every pointer below is now real
+        return;
+    }
 
-    if (!ok)
-        c.error = L"The DLL was loaded but does not export the frame API "
-                  L"(createDecompressionContext / decompress). A raw-block "
-                  L"build of this codec cannot read framed files.";
+    c.error = L"The DLL was loaded but exports none of the frame APIs this "
+              L"codec is known by (tried the prefixes " + tried +
+              L"). A raw-block build, or one built without the frame "
+              L"layer, cannot read framed files.";
 }
 
 void BindBrotli(Codec& c)
 {
-    c.kind = Codec::Kind::Brotli;
     bool ok =
         Set(c.brotli.createInstance,   c.module, { "BrotliDecoderCreateInstance" }) &
         Set(c.brotli.destroyInstance,  c.module, { "BrotliDecoderDestroyInstance" }) &
         Set(c.brotli.decompressStream, c.module, { "BrotliDecoderDecompressStream" });
     Set(c.brotli.isFinished, c.module, { "BrotliDecoderIsFinished" });
 
-    if (!ok) c.error = L"libbrotlidec was loaded but does not export "
-                       L"BrotliDecoderDecompressStream.";
+    if (!ok)
+    {
+        c.error = L"libbrotlidec was loaded but does not export "
+                  L"BrotliDecoderDecompressStream.";
+        return;
+    }
+    c.kind = Codec::Kind::Brotli;
 }
 
 // Resolve + bind once per codec id, then cache (including the failure).
@@ -180,9 +205,9 @@ Codec& GetCodec(const std::wstring& id)
     }
 
     if      (id == L"zstd")   BindZstd(c);
-    else if (id == L"lz4")    BindLz4Family(c, "LZ4F_");
-    else if (id == L"lz5")    BindLz4Family(c, "LZ5F_");
-    else if (id == L"lizard") BindLz4Family(c, "LizardF_");
+    else if (id == L"lz4")    BindLz4Family(c, { "LZ4F_" });
+    else if (id == L"lz5")    BindLz4Family(c, { "LZ5F_", "LizardF_" });
+    else if (id == L"lizard") BindLz4Family(c, { "LizardF_", "LZ5F_" });
     else if (id == L"brotli") BindBrotli(c);
     else                      c.error = L"Unknown codec id.";
 
@@ -272,7 +297,14 @@ bool Lz4FamilyFrameSize(const uint8_t* b, DWORD n, uint64_t* out)
     if (((flg >> 6) & 3) != 1) return false;              // version must be 01
     if (((flg >> 3) & 1) == 0) return false;              // no content size
 
-    *out = LoadLE(b + 6, 8);                              // after FLG and BD
+    // Offset 6 = after the 4-byte magic, the FLG byte and the BD byte.
+    // Verified against both lz5frame.c and lizard_frame.c, which build the
+    // header identically. The field documents 0 as meaning "unknown", and
+    // the encoders only set the flag when the size is non-zero, so a zero
+    // here is a header we should not trust rather than an empty file.
+    const uint64_t v = LoadLE(b + 6, 8);
+    if (v == 0) return false;
+    *out = v;
     return true;
 }
 
@@ -426,9 +458,12 @@ void CCodecEngine::MeasureSize()
     if (!IsCodecAvailable(m_codecId.c_str())) return;   // no DLL, no answer
 
     const std::wstring savedError = m_lastError;
-    if (Decode(L"", nullptr, kMaxOutput))
+    // Decode() stores the byte count it produced on success. Treat a run
+    // that produced nothing from a non-empty archive as a failed probe:
+    // whatever happened, zero is not the answer, and reporting it as one
+    // is the exact bug this whole change set exists to stamp out.
+    if (Decode(L"", nullptr, kMaxOutput) && m_entry.uncompressedSize > 0)
     {
-        // Decode() has already stored the byte count it produced.
         m_entry.sizeKnown = true;
     }
     else

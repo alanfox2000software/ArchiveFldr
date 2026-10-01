@@ -28,6 +28,30 @@ using ProgressFn = std::function<void(int /*pct*/,
                                       const std::wstring& /*currentFile*/)>;
 
 // ─────────────────────────────────────────────────────────
+// EngineCaps — what the backend behind this archive can really do.
+//
+// Shell UI (context menus, drag & drop, the data object) asks for this
+// instead of assuming: a format with no third-party DLL behind it must
+// grey its commands out and say so, never silently do nothing.
+// ─────────────────────────────────────────────────────────
+struct EngineCaps
+{
+    bool canExtract = false;   // can produce real file data
+    bool canAdd     = false;   // can add / update entries
+    bool canDelete  = false;
+    bool canRename  = false;
+    bool canTest    = false;
+
+    // True when the entries are placeholder/demo data rather than the real
+    // contents of the file on disk (no engine is wired up for this format).
+    bool isStub     = true;
+
+    std::wstring engineName;         // "7-Zip"
+    std::wstring backendPath;        // third-party DLL actually loaded
+    std::wstring unavailableReason;  // why isStub / !canExtract, for the user
+};
+
+// ─────────────────────────────────────────────────────────
 // IArchiveEngine — abstract interface
 // ─────────────────────────────────────────────────────────
 class IArchiveEngine
@@ -60,6 +84,16 @@ public:
 
     // ── Integrity ────────────────────────────────────────
     virtual bool Test(ProgressFn cb) = 0;
+
+    // ── Capabilities ─────────────────────────────────────
+    // Conservative default: an engine that does not override this is
+    // treated as a placeholder with nothing real behind it.
+    virtual EngineCaps GetCaps() const
+    {
+        EngineCaps c;
+        c.engineName = GetFormatName();
+        return c;
+    }
 
     // ── Metadata ─────────────────────────────────────────
     virtual std::wstring GetFormatName()  const = 0;
@@ -103,6 +137,7 @@ public:
     bool DeleteFile(const ArchiveEntry& e) override;
     bool Rename    (const ArchiveEntry& e, const std::wstring& newName) override;
     bool Test      (ProgressFn cb)         override;
+    EngineCaps GetCaps() const             override;
 
     std::wstring GetFormatName()  const override;
     std::wstring GetFilePath()    const override { return m_filePath; }

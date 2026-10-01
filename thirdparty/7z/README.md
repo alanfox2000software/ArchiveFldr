@@ -24,19 +24,12 @@ if you don't want to rename the file.
 
 ### Full runtime search order
 
-ShellNSE looks for the engine in this order and uses the first hit
-(`<dll dir>` is the folder holding `ShellNSE.64.dll` / `ShellNSE.32.dll`):
-
-| # | Location |
-|---|----------|
-| 1 | `<dll dir>\thirdparty\7z\7z.64.dll` (or `7z.32.dll` for the 32-bit build) |
-| 2 | `<dll dir>\thirdparty\7z\7z.dll` |
-| 3 | `<dll dir>\7z\7z.64.dll` / `7z.32.dll` |
-| 4 | `<dll dir>\7z\7z.dll` |
-| 5 | `<dll dir>\7z.64.dll` / `7z.32.dll` (right next to ShellNSE) |
-| 6 | `<dll dir>\7z.dll` |
-| 7 | `HKLM\SOFTWARE\7-Zip` → `Path` (64-bit view, then 32-bit view) |
-| 8 | `HKCU\SOFTWARE\7-Zip` → `Path` (64-bit view, then 32-bit view) |
+`7z` is one component of the shared third-party layout documented in
+[`..\README.md`](../README.md): ShellNSE looks in
+`thirdparty\7z\`, then a flat `thirdparty\`, then `<ShellNSE dir>\7z\`,
+then next to `ShellNSE.<bits>.dll` itself — trying `7z.64.dll`, `7z64.dll`
+and plain `7z.dll` in each — and finally an installed 7-Zip registered under
+`HKLM`/`HKCU\SOFTWARE\7-Zip` → `Path` (both registry views).
 
 The bitness must match the ShellNSE build that loads it: a 64-bit
 `ShellNSE.64.dll` inside 64-bit Explorer can only load a 64-bit `7z.dll`.
@@ -73,7 +66,17 @@ open in ShellNSE — there is no fake/placeholder data shown.
 
 - **Extraction only** — creating or modifying `.7z` archives isn't
   supported (7-Zip's own LZMA encoder has a separate, more complex SDK
-  surface not yet wired up here).
+  surface not yet wired up here). ShellNSE reports this through
+  `IArchiveEngine::GetCaps()`, so the shell hides or explains the commands
+  that would need to write: dropping files onto an open `.7z` says why it
+  cannot be done instead of silently doing nothing, and Delete/Rename are
+  never offered for items inside it.
 - **No password-prompt UI** — unencrypted archives are unaffected, but an
   archive with encrypted headers will fail to open, and individual
   encrypted items inside an otherwise-open archive will fail to extract.
+
+What *does* work with this engine: browsing, the Details columns (size,
+packed, ratio, method, date, CRC), opening an item (extracted to a private
+read-only temp copy), Extract/Extract-here for the whole archive or a
+selection, Test, and copying or dragging items **out** of the archive into
+Explorer.

@@ -15,6 +15,7 @@
 #include "stdafx.h"
 #include "SevenZipEngine.h"
 #include "Sdk7z.h"
+#include "ThirdParty.h"
 
 // ═════════════════════════════════════════════════════════
 // Engine DLL discovery / loading
@@ -26,94 +27,13 @@ Func7z_CreateObject g_pCreateObject = nullptr;
 std::wstring        g_enginePath;
 std::once_flag      g_initOnce;
 
-std::wstring GetModuleDir()
-{
-    wchar_t buf[MAX_PATH];
-    DWORD n = GetModuleFileNameW(g_hDllInstance, buf, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return L"";
-    std::wstring path(buf, n);
-    size_t slash = path.find_last_of(L"\\/");
-    return (slash == std::wstring::npos) ? L"" : path.substr(0, slash);
-}
-
-const wchar_t* PickBitnessDllName()
-{
-#if defined(_WIN64)
-    return L"7z.64.dll";
-#else
-    return L"7z.32.dll";
-#endif
-}
-
-bool FileExistsW(const std::wstring& p)
-{
-    DWORD attr = GetFileAttributesW(p.c_str());
-    return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
-}
-
-// A 7-Zip install registers its folder under SOFTWARE\7-Zip. Check both
-// registry views and both hives: a 32-bit ShellNSE must not be redirected to
-// the WOW6432Node copy when only a 64-bit 7-Zip is present, and per-user
-// installs land in HKCU.
-std::wstring Try7zInstallPath(HKEY root, DWORD viewFlag)
-{
-    HKEY hKey = nullptr;
-    if (RegOpenKeyExW(root, L"SOFTWARE\\7-Zip", 0,
-                      KEY_READ | viewFlag, &hKey) != ERROR_SUCCESS)
-        return L"";
-
-    wchar_t val[MAX_PATH] = {};
-    DWORD sz = sizeof(val);
-    DWORD type = 0;
-    LSTATUS st = RegQueryValueExW(hKey, L"Path", nullptr, &type, (LPBYTE)val, &sz);
-    RegCloseKey(hKey);
-
-    if (st != ERROR_SUCCESS || type != REG_SZ || !val[0]) return L"";
-
-    std::wstring p = val;
-    if (p.back() != L'\\') p += L'\\';
-    p += L"7z.dll";
-    return FileExistsW(p) ? p : std::wstring();
-}
-
+// Engine discovery is delegated to the universal third-party DLL layout
+// (see ThirdParty.h): thirdparty\7z\7z.64.dll, thirdparty\7z\7z.dll,
+// <ShellNSE dir>\7z.64.dll, an installed 7-Zip, ... — one shared search
+// order that every future engine DLL inherits for free.
 std::wstring Resolve7zDllPath()
 {
-    std::wstring dir = GetModuleDir();
-    if (!dir.empty())
-    {
-        // Look in every place a user plausibly drops the engine DLL, not
-        // just thirdparty\7z\ — "I put 7z.64.dll next to the DLL and nothing
-        // happened" was by far the most common way this silently failed.
-        const wchar_t* const kSubDirs[] = {
-            L"\\thirdparty\\7z\\",
-            L"\\7z\\",
-            L"\\",
-        };
-        // Bitness-suffixed name first, then a plain 7z.dll (what you get by
-        // copying it straight out of an existing 7-Zip installation).
-        const wchar_t* const kNames[] = { PickBitnessDllName(), L"7z.dll" };
-
-        for (const wchar_t* sub : kSubDirs)
-            for (const wchar_t* name : kNames)
-            {
-                std::wstring candidate = dir + sub + name;
-                if (FileExistsW(candidate)) return candidate;
-            }
-    }
-
-    // Last resort: a system-wide (or per-user) 7-Zip installation.
-    const struct { HKEY root; DWORD view; } kHives[] = {
-        { HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY },
-        { HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY },
-        { HKEY_CURRENT_USER,  KEY_WOW64_64KEY },
-        { HKEY_CURRENT_USER,  KEY_WOW64_32KEY },
-    };
-    for (const auto& h : kHives)
-    {
-        std::wstring p = Try7zInstallPath(h.root, h.view);
-        if (!p.empty()) return p;
-    }
-    return L"";
+    return ThirdParty::Resolve(L"7z");
 }
 
 void InitEngineOnce()
@@ -121,10 +41,9 @@ void InitEngineOnce()
     g_enginePath = Resolve7zDllPath();
     if (g_enginePath.empty()) return;
 
-    // LOAD_WITH_ALTERED_SEARCH_PATH so the engine resolves its own
-    // dependencies from the folder it lives in, not from ours.
-    g_hLib = LoadLibraryExW(g_enginePath.c_str(), nullptr,
-                            LOAD_WITH_ALTERED_SEARCH_PATH);
+    // Loaded with LOAD_WITH_ALTERED_SEARCH_PATH so the engine resolves its
+    // own dependencies from the folder it lives in, not from ours.
+    g_hLib = ThirdParty::Load(g_enginePath);
     if (!g_hLib) { g_enginePath.clear(); return; }
 
     g_pCreateObject = reinterpret_cast<Func7z_CreateObject>(
@@ -680,7 +599,12 @@ void C7zArchiveEngine::BuildEntryList()
             e.crc32              = (uint32_t)PropGetUInt64(m_archive.Get(), i, k7zPidCRC, 0);
             e.modifiedTime       = PropGetFileTime(m_archive.Get(), i, k7zPidMTime);
             e.isEncrypted        = PropGetBool(m_archive.Get(), i, k7zPidEncrypted, false);
-            e.compressionMethod  = L"7z";
+            // kpidMethod is the per-item coder chain ("LZMA2:24", "Copy", …).
+            // Older engines leave it empty for some archives, hence the
+            // fallback — the details view shows this verbatim.
+            e.compressionMethod  = PropGetString(m_archive.Get(), i, k7zPidMethod);
+            if (e.compressionMethod.empty())
+                e.compressionMethod = e.isEncrypted ? L"7z (encrypted)" : L"7z";
             m_allEntries.push_back(std::move(e));
         }
     }
@@ -796,6 +720,21 @@ bool C7zArchiveEngine::ExtractFile(const ArchiveEntry& e, const std::wstring& de
     }
     std::sort(indices.begin(), indices.end());
     return ExtractIndices(indices, destDir, cb);
+}
+
+EngineCaps C7zArchiveEngine::GetCaps() const
+{
+    EngineCaps c;
+    c.engineName  = L"7-Zip";
+    c.backendPath = Get7zEnginePath();
+    c.canExtract  = Is7zEngineAvailable();
+    c.canTest     = c.canExtract;
+    c.isStub      = !c.canExtract;
+    if (!c.canExtract)
+        c.unavailableReason =
+            L"No usable 7-Zip engine DLL was found, so .7z archives cannot "
+            L"be read.\n\n" + ThirdParty::DescribeSearch(L"7z");
+    return c;
 }
 
 bool C7zArchiveEngine::Test(ProgressFn cb)

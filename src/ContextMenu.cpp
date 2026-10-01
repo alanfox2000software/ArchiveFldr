@@ -2,12 +2,52 @@
 #include "stdafx.h"
 #include "ContextMenu.h"
 #include "ShellFolder.h"
+#include "DataObject.h"
 #include "ArchiveEngine.h"
+#include "ArchiveOps.h"
 #include "SevenZipEngine.h"   // Is7zEngineAvailable() / Get7zEnginePath()
+#include "ThirdParty.h"
 #include "Settings.h"
 #include "SettingsDialog.h"
 #include "GUIDs.h"
 #include "../res/resource.h"
+
+// ─────────────────────────────────────────────────────────
+// Verb table — ONE source of truth for command id ↔ verb ↔ help text.
+// Order must match the Cmd enum in ContextMenu.h.
+// ─────────────────────────────────────────────────────────
+namespace {
+
+struct VerbDef {
+    const wchar_t* verbW;
+    const char*    verbA;
+    const wchar_t* help;
+};
+
+const VerbDef kVerbs[] = {
+    { L"open",        "open",        L"Open this item"                        },
+    { L"extract",     "extract",     L"Extract to a folder"                   },
+    { L"extracthere", "extracthere", L"Extract here"                          },
+    { L"add",         "add",         L"Add files to archive"                  },
+    { L"email",       "email",       L"Compress and send by e-mail"           },
+    { L"openshell",   "openshell",   L"Browse this archive in Explorer"       },
+    { L"test",        "test",        L"Test archive integrity"                },
+    { L"info",        "info",        L"View archive information"              },
+    { L"copy",        "copy",        L"Copy to the clipboard"                 },
+    { L"paste",       "paste",       L"Add the clipboard's files here"        },
+    { L"refresh",     "refresh",     L"Refresh this view"                     },
+    { L"properties",  "properties",  L"Show properties"                       },
+    { L"settings",    "settings",    L"Open ShellNSE settings"                },
+};
+
+// Scoped hourglass for the operations that can take a moment.
+struct WaitCursor {
+    HCURSOR prev;
+    WaitCursor()  : prev(SetCursor(LoadCursorW(nullptr, IDC_WAIT))) {}
+    ~WaitCursor() { SetCursor(prev); }
+};
+
+} // namespace
 
 CContextMenu::CContextMenu() { InterlockedIncrement(&g_cDllRefCount); }
 CContextMenu::~CContextMenu()
@@ -22,9 +62,18 @@ void CContextMenu::SetFolder(CShellFolder* pFolder, HWND hwnd,
 {
     m_pFolder = pFolder; if (m_pFolder) m_pFolder->AddRef();
     m_hwnd    = hwnd;
+    m_mode    = ModeItem;
     if (pFolder) m_archivePath = pFolder->GetArchivePath();
     for (UINT i = 0; i < cidl; i++)
         m_pidls.push_back(CPidlMgr::Clone(apidl[i]));
+}
+
+void CContextMenu::SetBackground(CShellFolder* pFolder, HWND hwnd)
+{
+    m_pFolder = pFolder; if (m_pFolder) m_pFolder->AddRef();
+    m_hwnd    = hwnd;
+    m_mode    = ModeBackground;
+    if (pFolder) m_archivePath = pFolder->GetArchivePath();
 }
 
 // ── IUnknown ─────────────────────────────────────────────
@@ -51,6 +100,7 @@ STDMETHODIMP CContextMenu::Initialize(LPCITEMIDLIST /*pidlFolder*/,
                                        HKEY /*hkeyProgID*/)
 {
     if (!pdtobj) return E_INVALIDARG;
+    m_mode = ModeArchiveFile;
     FORMATETC fe{CF_HDROP,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL};
     STGMEDIUM sm{};
     if (FAILED(pdtobj->GetData(&fe, &sm))) return E_FAIL;
@@ -70,45 +120,97 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
     HMENU hMenu, UINT indexMenu, UINT idCmdFirst,
     UINT /*idCmdLast*/, UINT uFlags)
 {
-    if (uFlags & CMF_DEFAULTONLY) return MAKE_HRESULT(SEVERITY_SUCCESS,0,0);
+    static_assert(ARRAYSIZE(kVerbs) == CMD_COUNT,
+                  "verb table and Cmd enum are out of sync");
+
     m_cmdBase = idCmdFirst;
-    auto& s = Settings::Get();
-    m_useSubMenu = s.ctxUseSubMenu;
 
-    HMENU hTarget = hMenu;
-    UINT  pos     = indexMenu;
+    // CMF_DEFAULTONLY = "tell me the one command a double-click should run".
+    // For an item inside an archive that is Open — answering nothing here is
+    // exactly why double-clicking an entry used to do nothing at all.
+    if (uFlags & CMF_DEFAULTONLY)
+    {
+        if (m_mode != ModeItem || m_pidls.empty())
+            return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
 
-    if (m_useSubMenu) {
-        hTarget = CreatePopupMenu();
-        pos = 0;
+        InsertMenuW(hMenu, indexMenu, MF_BYPOSITION | MF_STRING,
+                    idCmdFirst + CMD_OPEN_ITEM, L"&Open");
+        SetMenuDefaultItem(hMenu, idCmdFirst + CMD_OPEN_ITEM, FALSE);
+        return MAKE_HRESULT(SEVERITY_SUCCESS, 0, CMD_OPEN_ITEM + 1);
     }
 
-    UINT id = idCmdFirst;
-    auto addItem = [&](bool enabled, UINT cmd, const wchar_t* text) {
-        if (enabled) {
-            MENUITEMINFOW mi{sizeof(mi), MIIM_STRING|MIIM_ID|MIIM_STATE};
-            mi.wID       = id + cmd;
-            mi.dwTypeData = (LPWSTR)text;
-            mi.fState    = MFS_ENABLED;
-            InsertMenuItemW(hTarget, pos++, TRUE, &mi);
-        }
+    auto& s = Settings::Get();
+    // The "collect everything under one ShellNSE sub-menu" preference only
+    // applies to the crowded file menu in a normal Explorer folder.
+    m_useSubMenu = s.ctxUseSubMenu && (m_mode == ModeArchiveFile);
+
+    HMENU hTarget = m_useSubMenu ? CreatePopupMenu() : hMenu;
+    UINT  pos     = m_useSubMenu ? 0 : indexMenu;
+    UINT  used    = 0;
+
+    auto addItem = [&](UINT cmd, const wchar_t* text, bool enabled = true) {
+        MENUITEMINFOW mi{sizeof(mi), MIIM_STRING | MIIM_ID | MIIM_STATE};
+        mi.wID        = idCmdFirst + cmd;
+        mi.dwTypeData = (LPWSTR)text;
+        mi.fState     = enabled ? MFS_ENABLED : MFS_GRAYED;
+        InsertMenuItemW(hTarget, pos++, TRUE, &mi);
+        if (cmd + 1 > used) used = cmd + 1;
+    };
+    auto addSep = [&] {
+        InsertMenuW(hTarget, pos++, MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
     };
 
-    if (s.ctxExtract)       addItem(true, CMD_EXTRACT,       L"Extract...");
-    if (s.ctxExtractHere)   addItem(true, CMD_EXTRACTHERE,   L"Extract Here");
-    InsertMenuItemW(hTarget, pos++, TRUE, []{
-        static MENUITEMINFOW sep{sizeof(MENUITEMINFOW)};
-        sep.fMask = MIIM_TYPE;
-        sep.fType = MFT_SEPARATOR;
-        return &sep;
-    }());
-    if (s.ctxAddToArchive)  addItem(true, CMD_ADD,           L"Add to Archive...");
-    if (s.ctxCompressEmail) addItem(true, CMD_COMPRESS_EMAIL,L"Compress and E-mail...");
-    InsertMenuW(hTarget, pos++, MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
-    if (s.ctxOpenInShell)   addItem(true, CMD_OPEN_SHELL,    L"Open with ShellNSE");
-    if (s.ctxTestArchive)   addItem(true, CMD_TEST,          L"Test Archive");
-    if (s.ctxArchiveInfo)   addItem(true, CMD_INFO,          L"Archive Info...");
-    if (s.ctxSettings)      addItem(true, CMD_SETTINGS,      L"ShellNSE Settings...");
+    switch (m_mode)
+    {
+    // ── Items inside an archive ──────────────────────────
+    case ModeItem:
+    {
+        const bool single = (m_pidls.size() == 1);
+        addItem(CMD_OPEN_ITEM, single ? L"&Open" : L"&Open items");
+        SetMenuDefaultItem(hTarget, idCmdFirst + CMD_OPEN_ITEM, FALSE);
+        addSep();
+        addItem(CMD_EXTRACT,     L"E&xtract selected...");
+        addItem(CMD_EXTRACTHERE, L"Extract selected &here");
+        addSep();
+        addItem(CMD_COPY,        L"&Copy");
+        addSep();
+        addItem(CMD_TEST,        L"&Test archive");
+        if (single) addItem(CMD_PROPERTIES, L"P&roperties");
+        break;
+    }
+
+    // ── Empty space in an archive's view ─────────────────
+    case ModeBackground:
+    {
+        addItem(CMD_EXTRACT,     L"E&xtract all...");
+        addItem(CMD_EXTRACTHERE, L"Extract all &here");
+        addSep();
+        addItem(CMD_PASTE,       L"&Paste", ArchiveOps::ClipboardHasFiles());
+        addItem(CMD_REFRESH,     L"&Refresh");
+        addSep();
+        addItem(CMD_TEST,        L"&Test archive");
+        addItem(CMD_INFO,        L"Archive &info...");
+        addItem(CMD_SETTINGS,    L"ShellNSE &settings...");
+        break;
+    }
+
+    // ── An archive file in a normal Explorer folder ──────
+    case ModeArchiveFile:
+    default:
+    {
+        if (s.ctxExtract)       addItem(CMD_EXTRACT,        L"Extract...");
+        if (s.ctxExtractHere)   addItem(CMD_EXTRACTHERE,    L"Extract Here");
+        addSep();
+        if (s.ctxAddToArchive)  addItem(CMD_ADD,            L"Add to Archive...");
+        if (s.ctxCompressEmail) addItem(CMD_COMPRESS_EMAIL, L"Compress and E-mail...");
+        addSep();
+        if (s.ctxOpenInShell)   addItem(CMD_OPEN_SHELL,     L"Open with ShellNSE");
+        if (s.ctxTestArchive)   addItem(CMD_TEST,           L"Test Archive");
+        if (s.ctxArchiveInfo)   addItem(CMD_INFO,           L"Archive Info...");
+        if (s.ctxSettings)      addItem(CMD_SETTINGS,       L"ShellNSE Settings...");
+        break;
+    }
+    }
 
     if (m_useSubMenu) {
         MENUITEMINFOW mi{sizeof(mi),MIIM_STRING|MIIM_SUBMENU|MIIM_STATE};
@@ -118,7 +220,7 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
         InsertMenuItemW(hMenu, indexMenu, TRUE, &mi);
     }
 
-    return MAKE_HRESULT(SEVERITY_SUCCESS, 0, CMD_COUNT);
+    return MAKE_HRESULT(SEVERITY_SUCCESS, 0, used);
 }
 
 // ── IContextMenu::InvokeCommand ───────────────────────────
@@ -158,100 +260,73 @@ STDMETHODIMP CContextMenu::InvokeCommand(LPCMINVOKECOMMANDINFO pici)
     {
         cmd = (UINT)LOWORD(reinterpret_cast<UINT_PTR>(pici->lpVerb));
     }
+    else
+    {
+        // No verb at all: run the default command for this menu.
+        cmd = (m_mode == ModeItem) ? (UINT)CMD_OPEN_ITEM : (UINT)CMD_OPEN_SHELL;
+    }
 
     if (!verb.empty())
     {
-        static const struct { const wchar_t* verb; UINT cmd; } kVerbs[] = {
-            { L"extract",     CMD_EXTRACT        },
-            { L"extracthere", CMD_EXTRACTHERE    },
-            { L"add",         CMD_ADD            },
-            { L"email",       CMD_COMPRESS_EMAIL },
-            { L"openshell",   CMD_OPEN_SHELL     },
-            { L"open",        CMD_OPEN_SHELL     },  // legacy alias
-            { L"test",        CMD_TEST           },
-            { L"info",        CMD_INFO           },
-            { L"settings",    CMD_SETTINGS       },
-        };
-        for (const auto& k : kVerbs)
-            if (_wcsicmp(verb.c_str(), k.verb) == 0) { cmd = k.cmd; break; }
+        for (UINT i = 0; i < CMD_COUNT; ++i)
+            if (_wcsicmp(verb.c_str(), kVerbs[i].verbW) == 0) { cmd = i; break; }
+
+        // "open" means different things in different menus: browse the
+        // archive when invoked on the file, open the entry when invoked
+        // inside it.
+        if (cmd == CMD_OPEN_ITEM && m_mode != ModeItem) cmd = CMD_OPEN_SHELL;
     }
 
     if (cmd >= CMD_COUNT) return E_INVALIDARG;
 
     switch (cmd) {
+    case CMD_OPEN_ITEM:     DoOpenItem();     break;
     case CMD_EXTRACT:       DoExtract(false); break;
     case CMD_EXTRACTHERE:   DoExtract(true);  break;
-    case CMD_ADD:           DoAdd();           break;
-    case CMD_COMPRESS_EMAIL:DoCompressEmail(); break;
-    case CMD_OPEN_SHELL:    DoOpenShell();     break;
-    case CMD_TEST:          DoTest();          break;
-    case CMD_INFO:          DoInfo();          break;
-    case CMD_SETTINGS:      DoSettings();      break;
+    case CMD_ADD:           DoAdd();          break;
+    case CMD_COMPRESS_EMAIL:DoCompressEmail();break;
+    case CMD_OPEN_SHELL:    DoOpenShell();    break;
+    case CMD_TEST:          DoTest();         break;
+    case CMD_INFO:          DoInfo();         break;
+    case CMD_COPY:          DoCopy();         break;
+    case CMD_PASTE:         DoPaste();        break;
+    case CMD_REFRESH:       DoRefresh();      break;
+    case CMD_PROPERTIES:    DoProperties();   break;
+    case CMD_SETTINGS:      DoSettings();     break;
     default: return E_INVALIDARG;
     }
     return S_OK;
 }
 
 // ── IContextMenu::GetCommandString ────────────────────────
-
 STDMETHODIMP CContextMenu::GetCommandString(
     UINT_PTR idCmd, UINT uType,
     UINT* /*pReserved*/, CHAR* pszName, UINT cchMax)
 {
     if (idCmd >= CMD_COUNT) return E_INVALIDARG;
-
-    // Help text (Unicode)
-    static const wchar_t* const helps[] = {
-        L"Extract archive contents to a folder",
-        L"Extract archive contents here",
-        L"Add files to archive",
-        L"Compress and send by e-mail",
-        L"Open archive with ShellNSE",
-        L"Test archive integrity",
-        L"View archive information",
-        L"Open ShellNSE settings",
-    };
-
-    // Verb strings (ANSI)
-    // NOTE: the ShellNSE browse command is "openshell", not "open" — a verb
-    // literally named "open" collides with the file type's own default verb
-    // and can make Explorer route the wrong command here. InvokeCommand()
-    // still accepts "open" as a backwards-compatible alias.
-    static const char* const verbsA[] = {
-        "extract",   "extracthere", "add",  "email",
-        "openshell", "test",        "info", "settings"
-    };
-
-    // Verb strings (Unicode)
-    static const wchar_t* const verbsW[] = {
-        L"extract",   L"extracthere", L"add",   L"email",
-        L"openshell", L"test",        L"info",  L"settings"
-    };
+    const VerbDef& v = kVerbs[idCmd];
 
     switch (uType)
     {
-    case GCS_HELPTEXTW:   // Unicode help text
-        wcsncpy_s(reinterpret_cast<wchar_t*>(pszName),
-                  cchMax, helps[idCmd], _TRUNCATE);
+    case GCS_HELPTEXTW:
+        wcsncpy_s(reinterpret_cast<wchar_t*>(pszName), cchMax, v.help, _TRUNCATE);
         return S_OK;
 
-    case GCS_HELPTEXTA:   // ANSI help text (convert)
+    case GCS_HELPTEXTA:
     {
         char ansiHelp[256] = {};
-        WideCharToMultiByte(CP_ACP, 0,
-            helps[idCmd], -1,
-            ansiHelp, sizeof(ansiHelp), nullptr, nullptr);
+        WideCharToMultiByte(CP_ACP, 0, v.help, -1,
+                            ansiHelp, sizeof(ansiHelp), nullptr, nullptr);
         strncpy_s(pszName, cchMax, ansiHelp, _TRUNCATE);
         return S_OK;
     }
 
-    case GCS_VERBA:       // ANSI verb
-        strncpy_s(pszName, cchMax, verbsA[idCmd], _TRUNCATE);
+    case GCS_VERBA:
+        strncpy_s(pszName, cchMax, v.verbA, _TRUNCATE);
         return S_OK;
 
-    case GCS_VERBW:       // Unicode verb
-        wcsncpy_s(reinterpret_cast<wchar_t*>(pszName),
-                  cchMax, verbsW[idCmd], _TRUNCATE);
+    case GCS_VERBW:
+        wcsncpy_s(reinterpret_cast<wchar_t*>(pszName), cchMax, v.verbW, _TRUNCATE);
         return S_OK;
 
     case GCS_VALIDATEA:
@@ -267,26 +342,180 @@ STDMETHODIMP CContextMenu::HandleMenuMsg(UINT,WPARAM,LPARAM) { return S_OK; }
 STDMETHODIMP CContextMenu::HandleMenuMsg2(UINT,WPARAM,LPARAM,LRESULT* p)
     { if(p)*p=0; return S_OK; }
 
-// ── Command implementations ───────────────────────────────
+// ─────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────
+
+// Inside an archive view we reuse the folder's already-open engine; invoked
+// on an archive file we open our own.
+std::shared_ptr<IArchiveEngine> CContextMenu::AcquireEngine()
+{
+    if (m_pFolder) {
+        if (auto eng = m_pFolder->GetEngine()) return eng;
+    }
+    if (m_archivePath.empty()) return nullptr;
+    auto eng = CreateArchiveEngine(m_archivePath);
+    if (eng && !eng->Open(m_archivePath)) {
+        // Keep the engine: GetCaps() still explains why it cannot be read.
+    }
+    return eng;
+}
+
+bool CContextMenu::SelectedEntries(const std::shared_ptr<IArchiveEngine>& eng,
+                                    std::vector<ArchiveEntry>& out)
+{
+    if (!eng || !m_pFolder) return false;
+    const std::wstring dir = m_pFolder->GetInternalPath();
+    for (auto p : m_pidls) {
+        ArchiveEntry e;
+        if (ArchiveOps::FindEntry(eng, dir, CPidlMgr::GetName(p), e))
+            out.push_back(e);
+    }
+    return !out.empty();
+}
+
+std::wstring CContextMenu::AskForFolder(const wchar_t* title)
+{
+    wchar_t buf[MAX_PATH] = {};
+    BROWSEINFOW bi{ m_hwnd, nullptr, buf, title,
+                    BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE };
+    LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
+    if (!pidl) return L"";
+    SHGetPathFromIDListW(pidl, buf);
+    CoTaskMemFree(pidl);
+    return buf;
+}
+
+HRESULT CContextMenu::MakeDataObject(REFIID riid, void** ppv)
+{
+    if (!m_pFolder || m_pidls.empty()) return E_FAIL;
+    std::vector<LPCITEMIDLIST> items(m_pidls.begin(), m_pidls.end());
+    return CArchiveDataObject::Create(m_pFolder, (UINT)items.size(),
+                                      items.data(), riid, ppv);
+}
+
+void CContextMenu::NotifyRefresh()
+{
+    if (!m_pFolder) return;
+    SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_IDLIST | SHCNF_FLUSH,
+                   m_pFolder->GetAbsPidl(), nullptr);
+}
+
+// ─────────────────────────────────────────────────────────
+// Command implementations
+// ─────────────────────────────────────────────────────────
+
+// Open an entry: a folder opens a window on it, a file is extracted to a
+// private temp copy and handed to whatever application owns its type.
+void CContextMenu::DoOpenItem()
+{
+    if (!m_pFolder || m_pidls.empty()) return;
+
+    auto eng = AcquireEngine();
+    if (!ArchiveOps::EnsureCanRead(m_hwnd, eng)) return;
+
+    std::vector<ArchiveEntry> sel;
+    if (!SelectedEntries(eng, sel)) return;
+
+    WaitCursor wait;
+    std::wstring tempDir;
+
+    for (const auto& e : sel)
+    {
+        if (e.isDirectory)
+        {
+            // Browse it: combine this folder's PIDL with the item's.
+            for (auto p : m_pidls)
+            {
+                if (_wcsicmp(CPidlMgr::GetName(p).c_str(), e.name.c_str()) != 0)
+                    continue;
+                if (LPITEMIDLIST abs = ILCombine(m_pFolder->GetAbsPidl(), p))
+                {
+                    SHOpenFolderAndSelectItems(abs, 0, nullptr, 0);
+                    ILFree(abs);
+                }
+                break;
+            }
+            continue;
+        }
+
+        if (tempDir.empty())
+            tempDir = ArchiveOps::MakeTempDir(
+                PathFindFileNameW(m_archivePath.c_str()));
+        if (tempDir.empty()) return;
+
+        std::wstring onDisk;
+        if (!ArchiveOps::ExtractEntry(eng, e, tempDir, &onDisk))
+        {
+            MessageBoxW(m_hwnd,
+                (L"ShellNSE could not extract \"" + e.name +
+                 L"\" from the archive.").c_str(),
+                L"ShellNSE", MB_ICONERROR | MB_OK);
+            continue;
+        }
+
+        // The copy is read-only on purpose: edits cannot be written back
+        // into the archive, and a silently discarded edit is worse than a
+        // "this file is read-only" prompt.
+        SetFileAttributesW(onDisk.c_str(), FILE_ATTRIBUTE_READONLY);
+
+        SHELLEXECUTEINFOW sei{ sizeof(sei) };
+        sei.fMask  = SEE_MASK_INVOKEIDLIST | SEE_MASK_FLAG_NO_UI;
+        sei.hwnd   = m_hwnd;
+        sei.lpVerb = nullptr;              // the file type's default verb
+        sei.lpFile = onDisk.c_str();
+        sei.nShow  = SW_SHOWNORMAL;
+        if (!ShellExecuteExW(&sei))
+        {
+            // No association: let the user pick an application.
+            std::wstring args = L"shell32.dll,OpenAs_RunDLL " + onDisk;
+            ShellExecuteW(m_hwnd, L"open", L"rundll32.exe", args.c_str(),
+                          nullptr, SW_SHOWNORMAL);
+        }
+    }
+}
+
+// Extract: the whole archive when invoked on the file or the view's
+// background, just the selection when invoked on items.
 void CContextMenu::DoExtract(bool here)
 {
+    auto eng = AcquireEngine();
+    if (!ArchiveOps::EnsureCanRead(m_hwnd, eng)) return;
+
     std::wstring dest;
     if (here) {
-        wchar_t dir[MAX_PATH]; wcscpy_s(dir, m_archivePath.c_str());
-        PathRemoveFileSpecW(dir); dest = dir;
+        wchar_t dir[MAX_PATH * 2] = {};
+        wcsncpy_s(dir, m_archivePath.c_str(), _TRUNCATE);
+        PathRemoveFileSpecW(dir);
+        dest = dir;
     } else {
-        wchar_t buf[MAX_PATH] = {};
-        BROWSEINFOW bi{m_hwnd,nullptr,buf,L"Select destination folder:",
-            BIF_RETURNONLYFSDIRS|BIF_NEWDIALOGSTYLE};
-        LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
-        if (!pidl) return;
-        SHGetPathFromIDListW(pidl, buf);
-        CoTaskMemFree(pidl); dest = buf;
+        dest = AskForFolder(L"Select destination folder:");
+        if (dest.empty()) return;
     }
-    auto engine = CreateArchiveEngine(m_archivePath);
-    if (!engine || !engine->Open(m_archivePath)) return;
-    engine->ExtractAll(dest, nullptr);
+    if (dest.empty()) return;
+
+    WaitCursor wait;
+    bool ok = true;
+
+    std::vector<ArchiveEntry> sel;
+    if (m_mode == ModeItem && SelectedEntries(eng, sel))
+    {
+        for (const auto& e : sel)
+            ok = eng->ExtractFile(e, dest, nullptr) && ok;
+    }
+    else
+    {
+        ok = eng->ExtractAll(dest, nullptr);
+    }
+
     SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATH, dest.c_str(), nullptr);
+
+    if (!ok)
+        MessageBoxW(m_hwnd,
+            L"Some items could not be extracted.\n\n"
+            L"The archive may be damaged, or it may contain encrypted items "
+            L"(ShellNSE has no password prompt yet).",
+            L"ShellNSE", MB_ICONWARNING | MB_OK);
 }
 
 void CContextMenu::DoAdd()
@@ -448,8 +677,10 @@ void CContextMenu::DoOpenShell()
 
 void CContextMenu::DoTest()
 {
-    auto engine = CreateArchiveEngine(m_archivePath);
-    if (!engine || !engine->Open(m_archivePath)) return;
+    auto engine = AcquireEngine();
+    if (!ArchiveOps::EnsureCanRead(m_hwnd, engine)) return;
+
+    WaitCursor wait;
     bool ok = engine->Test(nullptr);
     MessageBoxW(m_hwnd,
         ok ? L"Archive test: PASSED\nAll files are intact."
@@ -459,16 +690,138 @@ void CContextMenu::DoTest()
 
 void CContextMenu::DoInfo()
 {
-    auto engine = CreateArchiveEngine(m_archivePath);
-    if (!engine || !engine->Open(m_archivePath)) return;
-    wchar_t buf[512];
-    swprintf_s(buf, 512,
-        L"Archive: %s\nFiles: %llu\nSize: %s\nPacked: %s",
-        PathFindFileNameW(m_archivePath.c_str()),
-        engine->GetFileCount(),
-        engine->GetFormattedSize(engine->GetTotalSize()).c_str(),
-        engine->GetFormattedSize(engine->GetPackedSize()).c_str());
-    MessageBoxW(m_hwnd, buf, L"Archive Info", MB_ICONINFORMATION);
+    auto engine = AcquireEngine();
+    if (!engine) return;
+
+    EngineCaps caps = engine->GetCaps();
+    std::wstring msg =
+        L"Archive: " + std::wstring(PathFindFileNameW(m_archivePath.c_str())) +
+        L"\nFormat: " + engine->GetFormatName();
+
+    if (caps.canExtract)
+    {
+        wchar_t buf[256];
+        swprintf_s(buf, 256, L"\nFiles: %llu\nSize: %s\nPacked: %s",
+            (unsigned long long)engine->GetFileCount(),
+            engine->GetFormattedSize(engine->GetTotalSize()).c_str(),
+            engine->GetFormattedSize(engine->GetPackedSize()).c_str());
+        msg += buf;
+    }
+
+    msg += L"\n\nEngine: ";
+    msg += caps.backendPath.empty() ? L"(none loaded)" : caps.backendPath;
+    msg += L"\nCan extract: ";  msg += caps.canExtract ? L"yes" : L"no";
+    msg += L"\nCan add files: "; msg += caps.canAdd    ? L"yes" : L"no";
+    if (!caps.unavailableReason.empty())
+        msg += L"\n\n" + caps.unavailableReason;
+
+    MessageBoxW(m_hwnd, msg.c_str(), L"Archive Info", MB_ICONINFORMATION | MB_OK);
+}
+
+// Copy selected entries to the clipboard. The data object extracts lazily,
+// so pasting into Explorer produces the real files.
+void CContextMenu::DoCopy()
+{
+    auto eng = AcquireEngine();
+    if (!ArchiveOps::EnsureCanRead(m_hwnd, eng)) return;
+
+    IDataObject* pdo = nullptr;
+    if (FAILED(MakeDataObject(IID_IDataObject, (void**)&pdo)) || !pdo)
+    {
+        MessageBoxW(m_hwnd, L"Nothing could be copied from this selection.",
+                    L"ShellNSE", MB_ICONWARNING | MB_OK);
+        return;
+    }
+
+    // NOTE: deliberately no OleFlushClipboard() here. Flushing renders every
+    // advertised format up front, which would extract the whole selection
+    // immediately AND collapse CFSTR_FILECONTENTS to a single item. OLE keeps
+    // a reference to this live object instead, and the DLL stays loaded for
+    // as long as the clipboard holds it.
+    OleSetClipboard(pdo);
+    pdo->Release();
+}
+
+// Paste file-system files INTO the archive (needs a writing engine).
+void CContextMenu::DoPaste()
+{
+    auto eng = AcquireEngine();
+    if (!ArchiveOps::EnsureCanAdd(m_hwnd, eng)) return;
+
+    IDataObject* pdo = nullptr;
+    if (FAILED(OleGetClipboard(&pdo)) || !pdo) return;
+
+    std::vector<std::wstring> roots;
+    ArchiveOps::PathsFromDataObject(pdo, roots);
+    pdo->Release();
+    if (roots.empty()) return;
+
+    std::vector<ArchiveOps::AddItem> items;
+    ArchiveOps::ExpandForAdd(roots, items);
+
+    WaitCursor wait;
+    const std::wstring dir = m_pFolder ? m_pFolder->GetInternalPath() : L"";
+    bool ok = true;
+    for (const auto& it : items)
+        ok = eng->AddFile(it.src, ArchiveOps::TargetDirFor(dir, it), nullptr) && ok;
+
+    NotifyRefresh();
+    if (!ok)
+        MessageBoxW(m_hwnd, L"Some files could not be added to the archive.",
+                    L"ShellNSE", MB_ICONWARNING | MB_OK);
+}
+
+void CContextMenu::DoRefresh()
+{
+    NotifyRefresh();
+}
+
+// Properties for one entry inside the archive.
+void CContextMenu::DoProperties()
+{
+    auto eng = AcquireEngine();
+    if (!eng) return;
+
+    std::vector<ArchiveEntry> sel;
+    if (!SelectedEntries(eng, sel)) return;
+    const ArchiveEntry& e = sel.front();
+
+    auto fmt = [&](uint64_t v) { return eng->GetFormattedSize(v); };
+
+    std::wstring msg = e.name;
+    msg += e.isDirectory ? L"\n\nType: Folder inside archive"
+                         : L"\n\nType: File inside archive";
+    msg += L"\nLocation: " + std::wstring(PathFindFileNameW(m_archivePath.c_str()));
+    std::wstring inner = ArchiveOps::ToWin32(e.fullPath);
+    msg += L"\nPath in archive: " + (inner.empty() ? std::wstring(L"\\") : inner);
+
+    if (!e.isDirectory)
+    {
+        wchar_t buf[256];
+        double ratio = e.uncompressedSize
+            ? 100.0 * (1.0 - (double)e.compressedSize / (double)e.uncompressedSize)
+            : 0.0;
+        swprintf_s(buf, 256,
+            L"\n\nSize: %s\nPacked: %s\nRatio: %.0f%%\nCRC-32: %08X",
+            fmt(e.uncompressedSize).c_str(), fmt(e.compressedSize).c_str(),
+            ratio, e.crc32);
+        msg += buf;
+        if (!e.compressionMethod.empty())
+            msg += L"\nMethod: " + e.compressionMethod;
+    }
+
+    SYSTEMTIME st{}; FILETIME lft{};
+    if (FileTimeToLocalFileTime(&e.modifiedTime, &lft) &&
+        FileTimeToSystemTime(&lft, &st) && st.wYear > 1601)
+    {
+        wchar_t when[64];
+        swprintf_s(when, 64, L"\nModified: %04d-%02d-%02d %02d:%02d:%02d",
+                   st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+        msg += when;
+    }
+    if (e.isEncrypted) msg += L"\n\nThis item is encrypted.";
+
+    MessageBoxW(m_hwnd, msg.c_str(), L"Properties", MB_ICONINFORMATION | MB_OK);
 }
 
 void CContextMenu::DoSettings()

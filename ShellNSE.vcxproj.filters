@@ -68,6 +68,15 @@
     <ClCompile Include="src\ArchiveEngine.cpp">
       <Filter>Source Files\Handlers</Filter>
     </ClCompile>
+    <ClCompile Include="src\ArchiveOps.cpp">
+      <Filter>Source Files\Handlers</Filter>
+    </ClCompile>
+    <ClCompile Include="src\DataObject.cpp">
+      <Filter>Source Files\Handlers</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ThirdParty.cpp">
+      <Filter>Source Files\Handlers</Filter>
+    </ClCompile>
     <ClCompile Include="src\SevenZipEngine.cpp">
       <Filter>Source Files\Handlers</Filter>
     </ClCompile>
@@ -92,6 +101,9 @@
     <ClInclude Include="src\PreviewHandler.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\PropertySheet.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\ArchiveEngine.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ArchiveOps.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\DataObject.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ThirdParty.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\SevenZipEngine.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\Sdk7z.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\Registry.h"><Filter>Header Files</Filter></ClInclude>

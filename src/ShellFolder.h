@@ -17,6 +17,9 @@ struct NSE_ITEMID {
     UINT64  fileSize;     // uncompressed size
     UINT64  packedSize;   // compressed size
     FILETIME mtime;       // last modified
+    // Compression method, carried in the ID itself so the details view can
+    // fill the column without re-listing the archive for every row.
+    WCHAR   method[16];
     WCHAR   name[1];      // null-terminated name (variable length)
 };
 #pragma pack(pop)
@@ -39,6 +42,7 @@ public:
     static bool          IsOurs(LPCITEMIDLIST pidl);
     static const NSE_ITEMID* GetItem(LPCITEMIDLIST pidl);
     static std::wstring  GetName(LPCITEMIDLIST pidl);
+    static std::wstring  GetMethod(LPCITEMIDLIST pidl);
     static bool          IsDir (LPCITEMIDLIST pidl);
     static UINT          GetSize(const ArchiveEntry& e);
     // Walk to last item in a multi-level PIDL
@@ -111,12 +115,14 @@ public:
     std::shared_ptr<IArchiveEngine> GetEngine() const { return m_engine; }
     const std::wstring& GetArchivePath() const { return m_archivePath; }
     const std::wstring& GetInternalPath() const { return m_internalPath; }
+    // Fully qualified PIDL of this folder (the archive, plus any sub-folder
+    // inside it). Needed to build a shell ID list for the data object.
+    LPCITEMIDLIST GetAbsPidl() const { return m_pidlAbs; }
 
 private:
     ~CShellFolder();
 
     void BuildInternalPath();
-    HRESULT DropFiles(IDataObject* pDataObj);
 
     long     m_cRef         = 1;
     LPITEMIDLIST m_pidlAbs  = nullptr;  // absolute PIDL to this folder
@@ -127,6 +133,10 @@ private:
     std::wstring   m_internalPath;  // path inside archive e.g. "src/utils/"
 
     std::shared_ptr<IArchiveEngine> m_engine;
+
+    // Drop feedback between DragEnter and Drop. (This used to be a file
+    // scope global shared by every folder instance.)
+    DWORD    m_lastEffect = DROPEFFECT_NONE;
 
     // Column definitions
     struct ColDef { const wchar_t* name; int width; SHCOLSTATEF state; };

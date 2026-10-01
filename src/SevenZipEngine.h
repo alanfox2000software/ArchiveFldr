@@ -45,6 +45,10 @@ public:
 
     bool Test(ProgressFn cb) override;
 
+    // Real extraction + testing; no compressor is wired up, so adding,
+    // deleting and renaming stay off (the shell greys those commands out).
+    EngineCaps GetCaps() const override;
+
     std::wstring GetFormatName()  const override { return L"7-Zip"; }
     std::wstring GetFilePath()    const override { return m_filePath; }
     std::wstring GetComment()     const override { return L""; }

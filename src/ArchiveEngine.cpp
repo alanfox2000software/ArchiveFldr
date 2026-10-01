@@ -259,6 +259,25 @@ bool CStubArchiveEngine::Test(ProgressFn cb)
 
 // ── Metadata ─────────────────────────────────────────────
 std::wstring CStubArchiveEngine::GetFormatName() const { return m_formatName; }
+
+// The stub has no decoder behind it: it lists plausible sample entries so
+// the shell plumbing can be exercised, but it cannot produce one byte of
+// real data. Say so, loudly, instead of letting the shell "succeed" with
+// empty files.
+EngineCaps CStubArchiveEngine::GetCaps() const
+{
+    EngineCaps c;
+    c.engineName = m_formatName;
+    c.isStub     = true;
+    c.unavailableReason =
+        L"ShellNSE has no engine wired up for " + m_formatName +
+        L" archives yet, so it cannot read their real contents.\n\n"
+        L"Engines are supplied as third-party DLLs under the ShellNSE "
+        L"\"thirdparty\" folder (see thirdparty\\README.md). Only .7z is "
+        L"implemented today, via thirdparty\\7z\\7z." +
+        std::wstring((sizeof(void*) == 8) ? L"64" : L"32") + L".dll.";
+    return c;
+}
 uint64_t CStubArchiveEngine::GetFileCount() const {
     return std::count_if(m_allEntries.begin(),m_allEntries.end(),
         [](const ArchiveEntry& e){ return !e.isDirectory; });

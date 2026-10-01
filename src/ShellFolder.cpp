@@ -4,9 +4,75 @@
 #include "ShellView.h"
 #include "ContextMenu.h"
 #include "DropTarget.h"
+#include "DataObject.h"
+#include "ArchiveOps.h"
 #include "ThumbnailProvider.h"
 #include "GUIDs.h"
 #include "Settings.h"
+
+// ─────────────────────────────────────────────────────────
+// CFolderViewCB — the view callback handed to the Shell's default folder
+// view (DefView). It is how an extension states its LAYOUT: which view mode
+// an archive opens in, and that the enumeration is cheap enough to run on
+// the UI thread.
+//
+// Only messages whose parameter contract is unambiguous are handled; the
+// rest fall through to E_NOTIMPL so DefView keeps its own behaviour.
+// ─────────────────────────────────────────────────────────
+namespace {
+
+class CFolderViewCB final : public IShellFolderViewCB
+{
+public:
+    CFolderViewCB() { InterlockedIncrement(&g_cDllRefCount); }
+
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override
+    {
+        if (!ppv) return E_POINTER;
+        *ppv = nullptr;
+        if (IsEqualIID(riid, IID_IUnknown) ||
+            IsEqualIID(riid, IID_IShellFolderViewCB))
+        { *ppv = static_cast<IShellFolderViewCB*>(this); AddRef(); return S_OK; }
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override
+    { return InterlockedIncrement(&m_cRef); }
+    STDMETHODIMP_(ULONG) Release() override
+    { ULONG n = InterlockedDecrement(&m_cRef); if (!n) delete this; return n; }
+
+    STDMETHODIMP MessageSFVCB(UINT uMsg, WPARAM /*wParam*/, LPARAM lParam) override
+    {
+        switch (uMsg)
+        {
+        case SFVM_DEFVIEWMODE:
+            // An archive is a table of name/size/packed/ratio/date — open in
+            // Details so those columns are visible without the user asking.
+            if (lParam)
+            {
+                *reinterpret_cast<FOLDERVIEWMODE*>(lParam) = FVM_DETAILS;
+                return S_OK;
+            }
+            break;
+
+        case SFVM_BACKGROUNDENUM:
+            // Listing comes from an already-parsed, in-memory table.
+            return S_OK;
+
+        case SFVM_COLUMNCLICK:
+            return S_FALSE;        // let DefView do the sorting
+
+        case SFVM_WINDOWCREATED:
+            return S_OK;
+        }
+        return E_NOTIMPL;
+    }
+
+private:
+    ~CFolderViewCB() { InterlockedDecrement(&g_cDllRefCount); }
+    long m_cRef = 1;
+};
+
+} // namespace
 
 // ── Column table ──────────────────────────────────────────
 const CShellFolder::ColDef CShellFolder::s_cols[CShellFolder::kNumCols] = {
@@ -38,6 +104,8 @@ LPITEMIDLIST CPidlMgr::Create(const ArchiveEntry& e)
     item->fileSize  = e.uncompressedSize;
     item->packedSize= e.compressedSize;
     item->mtime     = e.modifiedTime;
+    if (e.isEncrypted) item->flags |= NSE_FLAG_ENC;
+    wcsncpy_s(item->method, e.compressionMethod.c_str(), _TRUNCATE);
     memcpy(item->name, e.name.c_str(), nameBytes);
 
     // Terminating zero USHORT
@@ -81,6 +149,16 @@ std::wstring CPidlMgr::GetName(LPCITEMIDLIST pidl)
 {
     auto* item = GetItem(pidl);
     return item ? item->name : L"";
+}
+
+std::wstring CPidlMgr::GetMethod(LPCITEMIDLIST pidl)
+{
+    auto* item = GetItem(pidl);
+    if (!item) return L"";
+    // Fixed-size field: make sure a full-length value still terminates.
+    wchar_t buf[ARRAYSIZE(item->method) + 1] = {};
+    memcpy(buf, item->method, sizeof(item->method));
+    return buf;
 }
 
 bool CPidlMgr::IsDir(LPCITEMIDLIST pidl)
@@ -432,10 +510,12 @@ STDMETHODIMP CShellFolder::CreateViewObject(HWND hwnd, REFIID riid, void** ppv)
         // keyboard handling all come for free, which a hand-rolled list
         // control cannot provide inside an Explorer frame.
         SFV_CREATE sfv = { sizeof(sfv) };
-        sfv.pshf = static_cast<IShellFolder*>(static_cast<IShellFolder2*>(this));
+        sfv.pshf   = static_cast<IShellFolder*>(static_cast<IShellFolder2*>(this));
+        sfv.psfvcb = new(std::nothrow) CFolderViewCB();   // view layout
 
         IShellView* pDefView = nullptr;
         HRESULT hr = SHCreateShellFolderView(&sfv, &pDefView);
+        if (sfv.psfvcb) sfv.psfvcb->Release();            // the view keeps a ref
         if (SUCCEEDED(hr) && pDefView) {
             hr = pDefView->QueryInterface(riid, ppv);
             pDefView->Release();
@@ -448,6 +528,18 @@ STDMETHODIMP CShellFolder::CreateViewObject(HWND hwnd, REFIID riid, void** ppv)
         hr = pView->QueryInterface(riid, ppv);
         pView->Release(); return hr;
     }
+    // Right-click on empty space in the view: the background menu belongs to
+    // the folder, not to any item (Extract all, Paste, Refresh, Info...).
+    if (IsEqualIID(riid, IID_IContextMenu)  ||
+        IsEqualIID(riid, IID_IContextMenu2) ||
+        IsEqualIID(riid, IID_IContextMenu3)) {
+        auto* p = new(std::nothrow) CContextMenu();
+        if (!p) return E_OUTOFMEMORY;
+        p->SetBackground(this, hwnd);
+        HRESULT hr = p->QueryInterface(riid, ppv);
+        p->Release(); return hr;
+    }
+
     if (IsEqualIID(riid, IID_IDropTarget)) {
         AddRef(); *ppv = static_cast<IDropTarget*>(this);
         return S_OK;
@@ -476,14 +568,24 @@ STDMETHODIMP CShellFolder::GetAttributesOf(
     SFGAOF attrs = *rgfInOut;
     SFGAOF result = 0xFFFFFFFF;
 
+    // Only advertise what the engine behind this archive can actually do.
+    // Claiming CANDELETE/CANRENAME on a read-only engine puts live Delete
+    // and Rename commands in the menu that then silently do nothing.
+    EngineCaps caps;
+    if (m_engine) caps = m_engine->GetCaps();
+
     for (UINT i = 0; i < cidl; i++) {
         if (!CPidlMgr::IsOurs(apidl[i])) { result = 0; break; }
         bool isDir = CPidlMgr::IsDir(apidl[i]);
-        SFGAOF a =
-            SFGAO_CANCOPY | SFGAO_CANMOVE | SFGAO_CANDELETE |
-            SFGAO_CANRENAME | SFGAO_HASPROPSHEET;
+
+        SFGAOF a = SFGAO_HASPROPSHEET;
+        if (caps.canExtract) a |= SFGAO_CANCOPY;   // copy == extract a copy
+        if (caps.canDelete)  a |= SFGAO_CANDELETE | SFGAO_CANMOVE;
+        if (caps.canRename)  a |= SFGAO_CANRENAME;
+
         if (isDir)
-            a |= SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_BROWSABLE;
+            a |= SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_BROWSABLE |
+                 SFGAO_STORAGEANCESTOR;
         else
             a |= SFGAO_STREAM;
         result &= a;
@@ -514,8 +616,15 @@ STDMETHODIMP CShellFolder::GetUIObjectOf(
         auto* p = new(std::nothrow) CDropTarget();
         if (!p) return E_OUTOFMEMORY;
         p->SetFolder(this);
+        p->SetSite(hwnd);
         HRESULT hr = p->QueryInterface(riid, ppv);
         p->Release(); return hr;
+    }
+    // Copy (Ctrl+C) and drag-OUT of the archive. Without this the shell has
+    // no way to ask for the bytes, so dragging an entry to the desktop did
+    // nothing at all.
+    if (IsEqualIID(riid, IID_IDataObject)) {
+        return CArchiveDataObject::Create(this, cidl, apidl, riid, ppv);
     }
     if (IsEqualIID(riid, IID_IExtractIconW) ||
         IsEqualIID(riid, IID_IExtractIconA)) {
@@ -622,21 +731,61 @@ STDMETHODIMP CShellFolder::GetDetailsEx(
     LPCITEMIDLIST pidl, const SHCOLUMNID* pscid, VARIANT* pv)
 {
     if (!pidl||!pscid||!pv) return E_POINTER;
-    SHELLDETAILS sd; sd.str.uType = STRRET_WSTR; sd.str.pOleStr = nullptr;
-    // map SCID to column index (simplified)
+    VariantInit(pv);
+
+    const NSE_ITEMID* item = CPidlMgr::GetItem(pidl);
+    if (!item) return E_INVALIDARG;
+
+    // Find which of our columns was asked for.
+    UINT col = kNumCols;
     for (UINT i = 0; i < kNumCols; i++) {
         SHCOLUMNID scid; MapColumnToSCID(i, &scid);
-        if (IsEqualPropertyKey(*pscid, scid)) {
-            HRESULT hr = GetDetailsOf(pidl, i, &sd);
-            if (FAILED(hr)) return hr;
-            V_VT(pv) = VT_BSTR;
-            V_BSTR(pv) = sd.str.pOleStr ?
-                SysAllocString(sd.str.pOleStr) : SysAllocString(L"");
-            CoTaskMemFree(sd.str.pOleStr);
-            return S_OK;
-        }
+        if (IsEqualPropertyKey(*pscid, scid)) { col = i; break; }
     }
-    return E_FAIL;
+    if (col >= kNumCols) return E_FAIL;
+
+    // Hand back a TYPED value wherever one exists: the view sorts, groups
+    // and filters on these, so a size returned as text sorts "10 KB" before
+    // "9 KB" and a date cannot be grouped at all.
+    const bool isDir = (item->flags & NSE_FLAG_DIR) != 0;
+    switch (col)
+    {
+    case 1:                                   // Size
+        if (isDir) return S_FALSE;
+        V_VT(pv)  = VT_UI8;
+        V_UI8(pv) = item->fileSize;
+        return S_OK;
+
+    case 2:                                   // Packed size
+        if (isDir) return S_FALSE;
+        V_VT(pv)  = VT_UI8;
+        V_UI8(pv) = item->packedSize;
+        return S_OK;
+
+    case 5:                                   // Modified
+    {
+        SYSTEMTIME st{};
+        DOUBLE     date = 0;
+        if (!FileTimeToSystemTime(&item->mtime, &st) || st.wYear <= 1601)
+            return S_FALSE;
+        if (!SystemTimeToVariantTime(&st, &date)) return S_FALSE;
+        V_VT(pv)   = VT_DATE;
+        V_DATE(pv) = date;
+        return S_OK;
+    }
+
+    default:
+        break;
+    }
+
+    // Everything else is genuinely textual (name, ratio, method, CRC).
+    SHELLDETAILS sd{}; sd.str.uType = STRRET_WSTR; sd.str.pOleStr = nullptr;
+    HRESULT hr = GetDetailsOf(pidl, col, &sd);
+    if (FAILED(hr)) return hr;
+    V_VT(pv)   = VT_BSTR;
+    V_BSTR(pv) = SysAllocString(sd.str.pOleStr ? sd.str.pOleStr : L"");
+    CoTaskMemFree(sd.str.pOleStr);
+    return S_OK;
 }
 
 STDMETHODIMP CShellFolder::GetDetailsOf(
@@ -669,18 +818,22 @@ STDMETHODIMP CShellFolder::GetDetailsOf(
         else StrFormatByteSizeW(item->packedSize, buf, 64);
         psd->fmt = LVCFMT_RIGHT; break;
     case 3: { // Ratio
+        if (item->flags & NSE_FLAG_DIR) { psd->fmt = LVCFMT_RIGHT; break; }
         double r = item->fileSize > 0 ?
             100.0*(1.0-(double)item->packedSize/item->fileSize) : 0.0;
         swprintf_s(buf,128,L"%.0f%%", r);
         psd->fmt = LVCFMT_RIGHT; break; }
-    case 4: // Method - retrieved from engine
-        wcscpy_s(buf, L"Deflate"); break;
+    case 4: { // Method — carried in the item ID (see NSE_ITEMID::method)
+        std::wstring m = CPidlMgr::GetMethod(pidl);
+        if (m.empty() && !(item->flags & NSE_FLAG_DIR)) m = L"Store";
+        wcsncpy_s(buf, m.c_str(), _TRUNCATE);
+        break; }
     case 5: { // Modified
-        SYSTEMTIME st; FILETIME lft;
-        FileTimeToLocalFileTime(&item->mtime, &lft);
-        FileTimeToSystemTime(&lft, &st);
-        swprintf_s(buf,128,L"%04d-%02d-%02d %02d:%02d",
-            st.wYear,st.wMonth,st.wDay,st.wHour,st.wMinute);
+        SYSTEMTIME st{}; FILETIME lft{};
+        if (FileTimeToLocalFileTime(&item->mtime, &lft) &&
+            FileTimeToSystemTime(&lft, &st) && st.wYear > 1601)
+            swprintf_s(buf,128,L"%04d-%02d-%02d %02d:%02d",
+                st.wYear,st.wMonth,st.wDay,st.wHour,st.wMinute);
         break; }
     case 6: // CRC
         if (!(item->flags & NSE_FLAG_DIR))
@@ -750,20 +903,18 @@ STDMETHODIMP CShellFolder::MapColumnToSCID(UINT col, SHCOLUMNID* pscid)
 
 STDMETHODIMP CShellFolder::ColumnClick(UINT /*col*/) { return S_FALSE; }
 
-DWORD m_lastEffect = DROPEFFECT_NONE;
-
 // ─────────────────────────────────────────────────────────
 // IDropTarget (folder-level — accept drops FROM Explorer)
 // ─────────────────────────────────────────────────────────
 STDMETHODIMP CShellFolder::DragEnter(
-    IDataObject* pObj, DWORD grfKey, POINTL pt, DWORD* pdwEffect)
+    IDataObject* pObj, DWORD /*grfKey*/, POINTL pt, DWORD* pdwEffect)
 {
     (void)pt;
-    *pdwEffect = (grfKey & MK_CONTROL) ? DROPEFFECT_COPY : DROPEFFECT_MOVE;
-    FORMATETC fe{CF_HDROP,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL};
-    *pdwEffect = SUCCEEDED(pObj->QueryGetData(&fe))
-        ? *pdwEffect : DROPEFFECT_NONE;
-    m_lastEffect = *pdwEffect;   // ← save it
+    if (!pdwEffect) return E_POINTER;
+    // Dropping into an archive is always a COPY: the engine cannot promise
+    // the data landed, so the source must never delete its originals.
+    m_lastEffect = ArchiveDrop::EffectFor(pObj);
+    *pdwEffect   = m_lastEffect;
     return S_OK;
 }
 STDMETHODIMP CShellFolder::DragOver(DWORD grfKeyState, POINTL pt, DWORD* pdwEffect)
@@ -773,34 +924,17 @@ STDMETHODIMP CShellFolder::DragOver(DWORD grfKeyState, POINTL pt, DWORD* pdwEffe
     if (pdwEffect) *pdwEffect = m_lastEffect;
     return S_OK;
 }
-STDMETHODIMP CShellFolder::DragLeave() { return S_OK; }
+STDMETHODIMP CShellFolder::DragLeave()
+{
+    m_lastEffect = DROPEFFECT_NONE;
+    return S_OK;
+}
 STDMETHODIMP CShellFolder::Drop(IDataObject* pObj,DWORD,POINTL,DWORD* pdwEffect)
 {
-    *pdwEffect = DROPEFFECT_NONE;
-    return DropFiles(pObj);
-}
-
-HRESULT CShellFolder::DropFiles(IDataObject* pObj)
-{
-    FORMATETC fe{CF_HDROP,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL};
-    STGMEDIUM sm{};
-    RETURN_IF_FAILED(pObj->GetData(&fe, &sm));
-
-    HDROP hDrop = (HDROP)GlobalLock(sm.hGlobal);
-    if (!hDrop) { ReleaseStgMedium(&sm); return E_FAIL; }
-
-    UINT count = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
-    if (m_engine) {
-        for (UINT i = 0; i < count; i++) {
-            wchar_t path[MAX_PATH*2] = {};
-            DragQueryFileW(hDrop, i, path, MAX_PATH*2);
-            m_engine->AddFile(path, m_internalPath, nullptr);
-        }
-    }
-    GlobalUnlock(sm.hGlobal);
-    ReleaseStgMedium(&sm);
-    // Notify Explorer to refresh
-    SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_IDLIST, m_pidlAbs, nullptr);
+    if (!pdwEffect) return E_POINTER;
+    HRESULT hr = ArchiveDrop::Perform(nullptr, this, pObj);
+    *pdwEffect = (hr == S_OK) ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+    m_lastEffect = DROPEFFECT_NONE;
     return S_OK;
 }
 

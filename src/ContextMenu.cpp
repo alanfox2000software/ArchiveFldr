@@ -130,23 +130,17 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
 
     // CMF_DEFAULTONLY = "tell me the one command a double-click should run".
     //
-    // For a FILE that is Open (extract a temp copy and launch it) — saying
-    // nothing here is why double-clicking a file used to do nothing.
-    //
-    // For a FOLDER we must stay silent: the view browses into a sub-folder
-    // by itself, and any default command we claim here replaces that
-    // navigation with our own handler. That is exactly what stopped
-    // double-click from entering folders inside an archive.
+    // Every item in this view needs an answer here, FOLDERS INCLUDED. The
+    // default view has no navigation of its own for a namespace extension:
+    // activating an item means invoking the default verb of the menu this
+    // call returns. Answering nothing (an earlier attempt at this bug) is
+    // why double-clicking a folder did nothing at all — the view had no
+    // command to run. DoOpenItem() browses folders and extracts-and-runs
+    // files, which is exactly what the shell does for a file system folder.
     if (uFlags & CMF_DEFAULTONLY)
     {
         if (m_mode != ModeItem || m_pidls.empty())
             return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
-
-        bool allFolders = true;
-        for (auto p : m_pidls)
-            if (!CPidlMgr::IsDir(p)) { allFolders = false; break; }
-        if (allFolders)
-            return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);   // let the view navigate
 
         InsertMenuW(hMenu, indexMenu, MF_BYPOSITION | MF_STRING,
                     idCmdFirst + CMD_OPEN_ITEM, L"&Open");
@@ -418,30 +412,93 @@ std::wstring CContextMenu::AskForFolder(const wchar_t* title)
     return buf;
 }
 
+// Ask one site object for the browser that hosts this view and navigate it.
+static bool BrowseWithSite(IUnknown* punk, LPCITEMIDLIST pidlRel,
+                           LPCITEMIDLIST pidlAbs)
+{
+    if (!punk) return false;
+
+    const GUID* kServices[] = { &SID_SShellBrowser, &SID_STopLevelBrowser };
+    for (const GUID* sid : kServices)
+    {
+        IShellBrowser* psb = nullptr;
+        if (FAILED(IUnknown_QueryService(punk, *sid, IID_IShellBrowser,
+                                         (void**)&psb)) || !psb)
+            continue;
+
+        HRESULT hr = psb->BrowseObject(pidlRel, SBSP_RELATIVE | SBSP_DEFBROWSER);
+        if (FAILED(hr) && pidlAbs)      // not the browser's current folder
+            hr = psb->BrowseObject(pidlAbs, SBSP_ABSOLUTE | SBSP_DEFBROWSER);
+        psb->Release();
+        if (SUCCEEDED(hr)) return true;
+    }
+    return false;
+}
+
+// Same, for a window: the default view answers WM_GETISHELLBROWSER with its
+// IShellBrowser (borrowed, not ref-counted). Only SHELLDLL_DefView windows
+// are asked, because the message number is in the private WM_USER range.
+static bool BrowseWithWindow(HWND hwnd, LPCITEMIDLIST pidlRel,
+                             LPCITEMIDLIST pidlAbs)
+{
+    const UINT kGetIShellBrowser = WM_USER + 7;
+
+    for (HWND h = hwnd; h; h = GetParent(h))
+    {
+        HWND candidates[2] = {
+            h, FindWindowExW(h, nullptr, L"SHELLDLL_DefView", nullptr) };
+
+        for (HWND c : candidates)
+        {
+            wchar_t cls[64] = {};
+            if (!c || !GetClassNameW(c, cls, ARRAYSIZE(cls))) continue;
+            if (_wcsicmp(cls, L"SHELLDLL_DefView") != 0) continue;
+
+            auto* psb = (IShellBrowser*)SendMessageW(c, kGetIShellBrowser, 0, 0);
+            if (!psb) continue;
+
+            HRESULT hr = psb->BrowseObject(pidlRel, SBSP_RELATIVE | SBSP_DEFBROWSER);
+            if (FAILED(hr) && pidlAbs)
+                hr = psb->BrowseObject(pidlAbs, SBSP_ABSOLUTE | SBSP_DEFBROWSER);
+            if (SUCCEEDED(hr)) return true;
+        }
+    }
+    return false;
+}
+
 // Navigate the window the user is looking at into `pidlRel`, a child of this
-// folder. Falls back to opening a new window when there is no site to ask.
+// folder. SHOpenFolderAndSelectItems is the last resort on purpose: it has to
+// re-resolve our PIDL from the desktop down, which only works when the
+// archive's file association junction is live, and it opens a second window.
 bool CContextMenu::BrowseTo(LPCITEMIDLIST pidlRel)
 {
     if (!m_pFolder || !pidlRel) return false;
 
-    if (m_pSite)
+    LPITEMIDLIST abs = ILCombine(m_pFolder->GetAbsPidl(), pidlRel);
+
+    // 1. The site the view handed us through IObjectWithSite.
+    bool ok = BrowseWithSite(m_pSite, pidlRel, abs);
+
+    // 2. The view window itself, for menus invoked without a site.
+    if (!ok && m_hwnd)
+        ok = BrowseWithWindow(m_hwnd, pidlRel, abs);
+
+    // 3. Explorer keeps a reference to the browser on its UI thread.
+    if (!ok)
     {
-        IShellBrowser* psb = nullptr;
-        if (SUCCEEDED(IUnknown_QueryService(m_pSite, SID_SShellBrowser,
-                                            IID_IShellBrowser, (void**)&psb)) && psb)
+        IUnknown* punkThread = nullptr;
+        if (SUCCEEDED(SHGetThreadRef(&punkThread)) && punkThread)
         {
-            HRESULT hr = psb->BrowseObject(pidlRel, SBSP_RELATIVE | SBSP_DEFBROWSER);
-            psb->Release();
-            if (SUCCEEDED(hr)) return true;
+            ok = BrowseWithSite(punkThread, pidlRel, abs);
+            punkThread->Release();
         }
     }
 
-    bool ok = false;
-    if (LPITEMIDLIST abs = ILCombine(m_pFolder->GetAbsPidl(), pidlRel))
-    {
+    // 4. Give up on navigating in place and open a window on the item.
+    if (!ok && abs)
         ok = SUCCEEDED(SHOpenFolderAndSelectItems(abs, 0, nullptr, 0));
-        ILFree(abs);
-    }
+
+    if (abs) ILFree(abs);
     return ok;
 }
 
@@ -470,6 +527,25 @@ void CContextMenu::DoOpenItem()
 {
     if (!m_pFolder || m_pidls.empty()) return;
 
+    // ── Folders first, and deliberately before the engine is touched:
+    // navigating needs nothing but the PIDL, so entering a sub-folder keeps
+    // working even when the backend DLL is missing or the archive is
+    // unreadable. Only one navigation per activation.
+    bool browsed = false, anyFile = false;
+    for (auto p : m_pidls)
+    {
+        if (!CPidlMgr::IsDir(p)) { anyFile = true; continue; }
+        if (browsed) continue;
+        browsed = true;
+        if (!BrowseTo(p))
+            MessageBoxW(m_hwnd,
+                (L"ShellNSE could not open \"" + CPidlMgr::GetName(p) +
+                 L"\" inside the archive.").c_str(),
+                L"ShellNSE", MB_ICONWARNING | MB_OK);
+    }
+    if (!anyFile) return;
+
+    // ── Files: extract a copy to a temp folder and launch it.
     auto eng = AcquireEngine();
     if (!ArchiveOps::EnsureCanRead(m_hwnd, eng)) return;
 
@@ -478,27 +554,10 @@ void CContextMenu::DoOpenItem()
 
     WaitCursor wait;
     std::wstring tempDir;
-    bool browsed = false;
 
     for (const auto& e : sel)
     {
-        if (e.isDirectory)
-        {
-            if (browsed) continue;   // one navigation per invocation
-            for (auto p : m_pidls)
-            {
-                if (_wcsicmp(CPidlMgr::GetName(p).c_str(), e.name.c_str()) != 0)
-                    continue;
-                browsed = true;
-                if (!BrowseTo(p))
-                    MessageBoxW(m_hwnd,
-                        (L"ShellNSE could not open \"" + e.name +
-                         L"\" inside the archive.").c_str(),
-                        L"ShellNSE", MB_ICONWARNING | MB_OK);
-                break;
-            }
-            continue;
-        }
+        if (e.isDirectory) continue;            // handled above
 
         if (tempDir.empty())
             tempDir = ArchiveOps::MakeTempDir(

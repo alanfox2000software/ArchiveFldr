@@ -42,14 +42,14 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v180</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <!-- RELEASE | Win32 -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v180</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -64,7 +64,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v180</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -72,28 +72,34 @@
   <!-- ═══════════════════════════════════════════════════
        Output / Intermediate Directories
   ════════════════════════════════════════════════════ -->
+  <!-- NOTE: both platforms now share one OutDir (bin\$(Configuration)\) so
+       that ShellNSE.32.dll and ShellNSE.64.dll land side by side, alongside
+       a shared thirdparty\7z\ copy (see PostBuildEvent below) — this is
+       what lets ShellNSE locate its bitness-matched 7z engine DLL relative
+       to its own module path at runtime. IntDir stays per-arch so the two
+       builds' object files never collide. -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\x86\</OutDir>
+    <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x86\</IntDir>
-    <TargetName>ShellNSE</TargetName>
+    <TargetName>ShellNSE.32</TargetName>
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\x86\</OutDir>
+    <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x86\</IntDir>
-    <TargetName>ShellNSE</TargetName>
+    <TargetName>ShellNSE.32</TargetName>
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\x64\</OutDir>
+    <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x64\</IntDir>
-    <TargetName>ShellNSE</TargetName>
+    <TargetName>ShellNSE.64</TargetName>
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\x64\</OutDir>
+    <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x64\</IntDir>
-    <TargetName>ShellNSE</TargetName>
+    <TargetName>ShellNSE.64</TargetName>
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
   <!-- ═══════════════════════════════════════════════════
@@ -201,7 +207,8 @@
       <!-- Do NOT link runtimeobject.lib (WinRT) -->
     </Link>
     <PostBuildEvent>
-      <Command>regsvr32 /s "$(TargetPath)"
+      <Command>if exist "$(ProjectDir)thirdparty\7z\" xcopy /y /i /e "$(ProjectDir)thirdparty\7z\*.dll" "$(OutDir)thirdparty\7z\" &gt;nul 2&gt;nul
+regsvr32 /s "$(TargetPath)"
 echo [ShellNSE] Registered Debug x86: $(TargetFileName)</Command>
       <Message>Registering Shell Extension (Debug x86)...</Message>
     </PostBuildEvent>
@@ -263,7 +270,8 @@ echo [ShellNSE] Registered Debug x86: $(TargetFileName)</Command>
       </AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>regsvr32 /s "$(TargetPath)"
+      <Command>if exist "$(ProjectDir)thirdparty\7z\" xcopy /y /i /e "$(ProjectDir)thirdparty\7z\*.dll" "$(OutDir)thirdparty\7z\" &gt;nul 2&gt;nul
+regsvr32 /s "$(TargetPath)"
 echo [ShellNSE] Registered Release x86: $(TargetFileName)</Command>
       <Message>Registering Shell Extension (Release x86)...</Message>
     </PostBuildEvent>
@@ -321,7 +329,8 @@ echo [ShellNSE] Registered Release x86: $(TargetFileName)</Command>
       </AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>regsvr32 /s "$(TargetPath)"
+      <Command>if exist "$(ProjectDir)thirdparty\7z\" xcopy /y /i /e "$(ProjectDir)thirdparty\7z\*.dll" "$(OutDir)thirdparty\7z\" &gt;nul 2&gt;nul
+regsvr32 /s "$(TargetPath)"
 echo [ShellNSE] Registered Debug x64: $(TargetFileName)</Command>
       <Message>Registering Shell Extension (Debug x64)...</Message>
     </PostBuildEvent>
@@ -383,7 +392,8 @@ echo [ShellNSE] Registered Debug x64: $(TargetFileName)</Command>
       </AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>regsvr32 /s "$(TargetPath)"
+      <Command>if exist "$(ProjectDir)thirdparty\7z\" xcopy /y /i /e "$(ProjectDir)thirdparty\7z\*.dll" "$(OutDir)thirdparty\7z\" &gt;nul 2&gt;nul
+regsvr32 /s "$(TargetPath)"
 echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
       <Message>Registering Shell Extension (Release x64)...</Message>
     </PostBuildEvent>
@@ -415,6 +425,7 @@ echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
     <ClCompile Include="src\PropertySheet.cpp" />
     <!-- Archive Engine -->
     <ClCompile Include="src\ArchiveEngine.cpp" />
+    <ClCompile Include="src\SevenZipEngine.cpp" />
     <!-- Settings & GUI -->
     <ClCompile Include="src\Settings.cpp" />
     <ClCompile Include="src\SettingsDialog.cpp" />
@@ -435,6 +446,8 @@ echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
     <ClInclude Include="src\PreviewHandler.h" />
     <ClInclude Include="src\PropertySheet.h" />
     <ClInclude Include="src\ArchiveEngine.h" />
+    <ClInclude Include="src\SevenZipEngine.h" />
+    <ClInclude Include="src\Sdk7z.h" />
     <ClInclude Include="src\Registry.h" />
     <ClInclude Include="src\Settings.h" />
     <ClInclude Include="src\SettingsDialog.h" />

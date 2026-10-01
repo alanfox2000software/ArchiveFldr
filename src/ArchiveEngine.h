@@ -15,6 +15,12 @@ struct ArchiveEntry {
     std::wstring compressionMethod;
     FILETIME     modifiedTime      = {};
     bool         isEncrypted       = false;
+
+    // Index of this entry inside the backing archive engine's own item
+    // table (e.g. the 7z SDK's IInArchive item index). -1 means this entry
+    // has no single backing item — e.g. a directory synthesized by the
+    // engine because the archive didn't store an explicit entry for it.
+    int64_t      engineIndex       = -1;
 };
 
 // ── Progress callback ─────────────────────────────────────

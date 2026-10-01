@@ -2,6 +2,7 @@
 #include "stdafx.h"
 #include <initguid.h>
 #include "GUIDs.h"
+#include "Sdk7z.h"           // emits storage for the 7z-engine GUIDs (see Sdk7z.h)
 #include "ClassFactory.h"
 #include "Registry.h"
 #include "Settings.h"

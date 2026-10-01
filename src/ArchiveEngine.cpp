@@ -2,6 +2,7 @@
 #include "stdafx.h"
 #include "ArchiveEngine.h"
 #include "GUIDs.h"
+#include "SevenZipEngine.h"
 
 // ─────────────────────────────────────────────────────────
 // CStubArchiveEngine
@@ -285,8 +286,15 @@ std::shared_ptr<IArchiveEngine> CreateArchiveEngine(const std::wstring& path)
     LPCWSTR ext = PathFindExtensionW(path.c_str());
     if (!IsArchiveExtension(ext)) return nullptr;
 
-    // In production, dispatch here:
-    // if 7z format   → C7zEngine (7-zip SDK IInArchive)
+    // .7z / .7zip → real 7-Zip engine (thirdparty\7z\7z.64.dll / 7z.32.dll).
+    // Open() returns false honestly (no fake/demo data) if the engine DLL
+    // is missing, unloadable, or the file isn't a valid 7z archive — the
+    // caller (ShellFolder/ContextMenu) is expected to handle that failure
+    // the same way it would any other unreadable archive.
+    if (_wcsicmp(ext, L".7z") == 0 || _wcsicmp(ext, L".7zip") == 0)
+        return std::make_shared<C7zArchiveEngine>();
+
+    // In production, dispatch remaining formats here:
     // if zip format  → CZipEngine (minizip / zlibwapi)
     // if rar format  → CRarEngine (UnRAR DLL)
     // if iso format  → CIsoEngine (libisofs / custom)

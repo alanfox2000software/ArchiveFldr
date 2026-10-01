@@ -68,6 +68,9 @@
     <ClCompile Include="src\ArchiveEngine.cpp">
       <Filter>Source Files\Handlers</Filter>
     </ClCompile>
+    <ClCompile Include="src\SevenZipEngine.cpp">
+      <Filter>Source Files\Handlers</Filter>
+    </ClCompile>
     <ClCompile Include="src\Settings.cpp">
       <Filter>Source Files\Settings</Filter>
     </ClCompile>
@@ -89,6 +92,8 @@
     <ClInclude Include="src\PreviewHandler.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\PropertySheet.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\ArchiveEngine.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\SevenZipEngine.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\Sdk7z.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\Registry.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\Settings.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\SettingsDialog.h"><Filter>Header Files</Filter></ClInclude>

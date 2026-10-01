@@ -45,6 +45,7 @@ static const Format kFormats[] =
     { L".bz2",   L"BZip2",         L"ShellNSE.Bz2File",   EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".bzip2", L"BZip2",         nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".xz",    L"XZ",            L"ShellNSE.XzFile",    EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".z",     L"compress",      nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".lz",    L"Lzip",          nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".lzma",  L"LZMA",          nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".lzh",   L"LZH",           L"ShellNSE.LzhFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },

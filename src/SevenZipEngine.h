@@ -1,5 +1,6 @@
 // SevenZipEngine.h
-// Real IArchiveEngine implementation for .7z / .7zip archives, backed by
+// Real IArchiveEngine implementation for every container 7z.dll can read
+// — .7z, .zip, .tar, .wim, .iso, .cab, .gz, .xz and the rest — backed by
 // the external 7-Zip engine DLL dropped in by the user at:
 //   thirdparty\7z\7z.64.dll   (64-bit ShellNSE.64.dll)
 //   thirdparty\7z\7z.32.dll   (32-bit ShellNSE.32.dll)
@@ -49,7 +50,8 @@ public:
     // deleting and renaming stay off (the shell greys those commands out).
     EngineCaps GetCaps() const override;
 
-    std::wstring GetFormatName()  const override { return L"7-Zip"; }
+    std::wstring GetFormatName()  const override
+    { return m_formatName.empty() ? std::wstring(L"7-Zip") : m_formatName; }
     std::wstring GetFilePath()    const override { return m_filePath; }
     std::wstring GetComment()     const override { return L""; }
     uint64_t     GetFileCount()   const override;
@@ -60,6 +62,9 @@ public:
     const std::wstring& GetLastError() const { return m_lastError; }
 
 private:
+    // Display name of the handler that actually opened the file ("tar",
+    // "wim", …), so the UI does not call every archive "7-Zip".
+    std::wstring m_formatName;
     bool ExtractIndices(const std::vector<UINT32>& indices,
                         const std::wstring& destDir, ProgressFn cb);
     void BuildEntryList();

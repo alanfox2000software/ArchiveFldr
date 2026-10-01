@@ -175,5 +175,22 @@ DEFINE_GUID(CLSID_CFormat7z,
 // ─────────────────────────────────────────────────────────
 // 7z.dll exported entry points we call via GetProcAddress
 // ─────────────────────────────────────────────────────────
+// 7z.dll publishes its own format list. Asking it which formats it has,
+// instead of hard-coding a table of class GUIDs, means ShellNSE supports
+// exactly what the user's copy of 7z.dll supports — including formats
+// added in versions newer than this source.
+typedef HRESULT (WINAPI *Func7z_GetNumberOfFormats)(UINT32* numFormats);
+typedef HRESULT (WINAPI *Func7z_GetHandlerProperty2)(UINT32 formatIndex,
+                                                     PROPID propID,
+                                                     PROPVARIANT* value);
+
+// PROPIDs understood by GetHandlerProperty2.
+enum
+{
+    kHandlerName      = 0,   // VT_BSTR  "tar"
+    kHandlerClassID   = 1,   // VT_BSTR  raw 16-byte GUID
+    kHandlerExtension = 2,   // VT_BSTR  "tar ova"
+};
+
 typedef HRESULT (WINAPI *Func7z_CreateObject)(
     const GUID* clsid, const GUID* iid, void** outObject);

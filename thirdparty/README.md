@@ -106,14 +106,14 @@ drop the DLL at any one of them and retry.
 
 | id | folder | primary file(s) | extensions | status |
 |----|--------|-----------------|------------|--------|
-| `7z` | `thirdparty\7z\` | `7z.dll`, `7za.dll` | `.7z` | extract + test |
+| `7z` | `thirdparty\7z\` | `7z.dll`, `7za.dll` | `.7z` `.zip` `.tar` `.wim` `.iso` `.cab` `.gz` `.xz` `.bz2` … | extract + test |
 | `Unrar` | `thirdparty\Unrar\` | `unrar64.dll`, `unrar.dll` | `.rar` `.r00` `.cbr` | extract + test |
 | `zstd` | `thirdparty\zstd\` | `libzstd.<bits>.dll` | `.zst` `.zstd` `.tzst` | extract + test |
 | `brotli` | `thirdparty\brotli\<bits>\` | `libbrotlidec.dll` (+ common, enc) | `.br` | extract + test |
 | `lz4` | `thirdparty\lz4\` | `liblz4.<bits>.dll` | `.lz4` `.tlz4` | extract + test |
 | `lz5` | `thirdparty\lz5\` | `liblz5.<bits>.dll` | `.lz5` | extract + test |
 | `lizard` | `thirdparty\lizard\` | `liblizard.<bits>.dll` | `.liz` | extract + test |
-| `WimLib` | `thirdparty\WimLib\` | `libwim-15.<bits>.dll` | `.wim` `.swm` `.esd` | resolved, engine pending |
+| `WimLib` | `thirdparty\WimLib\` | `libwim-15.<bits>.dll` | `.wim` `.swm` `.esd` | resolved, engine pending — 7z.dll reads these today |
 
 Registry hints: `7z` → `HKLM\SOFTWARE\7-Zip\Path`, `Unrar` →
 `HKLM\SOFTWARE\WinRAR\exe64`.
@@ -141,10 +141,18 @@ WinRAR licence. Encrypted archives are reported rather than prompted for,
 because a modal password dialog on Explorer's UI thread would hang the
 window.
 
+**7-Zip** is the broadest engine by far, and the one to install first.
+ShellNSE asks `7z.dll` which formats it supports (`GetNumberOfFormats` /
+`GetHandlerProperty2`) instead of carrying a hard-coded list, so it reads
+exactly what your copy of 7-Zip reads — including formats added after
+this was written. When a file's extension does not match its contents,
+every other handler is tried as well.
+
 **WimLib**'s DLL is resolved and diagnosed, but the engine that drives it
 is not written yet: `wimlib_dir_entry` has to be transcribed exactly or it
-corrupts memory inside Explorer, and that is not worth guessing at. `.wim`
-files are not left unsupported in practice — 7-Zip reads them.
+corrupts memory inside Explorer, and that is not worth guessing at. `.wim`,
+`.swm` and `.esd` are not unsupported in the meantime — they are handled
+by `7z.dll`.
 
 ## Adding another engine
 

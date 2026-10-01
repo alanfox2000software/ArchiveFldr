@@ -14,6 +14,7 @@
 // items, will fail (or fail per-item) until a password UI is wired in.
 #include "stdafx.h"
 #include "SevenZipEngine.h"
+#include "Formats.h"
 #include "Sdk7z.h"
 #include "ThirdParty.h"
 
@@ -22,10 +23,12 @@
 // ═════════════════════════════════════════════════════════
 namespace {
 
-HMODULE             g_hLib          = nullptr;
-Func7z_CreateObject g_pCreateObject = nullptr;
-std::wstring        g_enginePath;
-std::once_flag      g_initOnce;
+HMODULE                    g_hLib          = nullptr;
+Func7z_CreateObject        g_pCreateObject = nullptr;
+Func7z_GetNumberOfFormats  g_pNumFormats   = nullptr;
+Func7z_GetHandlerProperty2 g_pHandlerProp  = nullptr;
+std::wstring               g_enginePath;
+std::once_flag             g_initOnce;
 
 // Engine discovery is delegated to the universal third-party DLL layout
 // (see ThirdParty.h): thirdparty\7z\7z.64.dll, thirdparty\7z\7z.dll,
@@ -48,6 +51,14 @@ void InitEngineOnce()
 
     g_pCreateObject = reinterpret_cast<Func7z_CreateObject>(
         GetProcAddress(g_hLib, "CreateObject"));
+
+    // Optional: present in every real 7z.dll, absent from some cut-down
+    // builds. Without them we fall back to the 7z format class alone.
+    g_pNumFormats = reinterpret_cast<Func7z_GetNumberOfFormats>(
+        GetProcAddress(g_hLib, "GetNumberOfFormats"));
+    g_pHandlerProp = reinterpret_cast<Func7z_GetHandlerProperty2>(
+        GetProcAddress(g_hLib, "GetHandlerProperty2"));
+
     if (!g_pCreateObject)
     {
         FreeLibrary(g_hLib);
@@ -60,6 +71,97 @@ Func7z_CreateObject Get7zCreateObjectFunc()
 {
     std::call_once(g_initOnce, InitEngineOnce);
     return g_pCreateObject;
+}
+
+// ═════════════════════════════════════════════════════════
+// Format handlers published by 7z.dll
+//
+// 7z.dll knows its own format list, so ask it rather than carrying a
+// table of class GUIDs that would silently rot every time 7-Zip adds a
+// format. Enumerated once, on first use.
+// ═════════════════════════════════════════════════════════
+struct Handler7z
+{
+    GUID                      clsid{};
+    std::wstring              name;      // "tar", "wim", "zip", ...
+    std::vector<std::wstring> exts;      // without the leading dot
+};
+
+std::vector<Handler7z> g_handlers;
+std::once_flag         g_handlersOnce;
+
+std::wstring HandlerPropStr(UINT32 i, PROPID pid)
+{
+    PROPVARIANT v; PropVariantInit(&v);
+    std::wstring out;
+    if (SUCCEEDED(g_pHandlerProp(i, pid, &v)) && v.vt == VT_BSTR && v.bstrVal)
+        out = v.bstrVal;
+    PropVariantClear(&v);
+    return out;
+}
+
+void EnumerateHandlersOnce()
+{
+    if (!g_pNumFormats || !g_pHandlerProp) return;
+
+    UINT32 count = 0;
+    if (FAILED(g_pNumFormats(&count)) || count == 0 || count > 512) return;
+
+    g_handlers.reserve(count);
+    for (UINT32 i = 0; i < count; ++i)
+    {
+        Handler7z h;
+
+        // The class id arrives as a BSTR carrying the raw 16 GUID bytes,
+        // not as text — so check the byte length before copying.
+        PROPVARIANT v; PropVariantInit(&v);
+        bool haveClsid = false;
+        if (SUCCEEDED(g_pHandlerProp(i, kHandlerClassID, &v)) &&
+            v.vt == VT_BSTR && v.bstrVal &&
+            SysStringByteLen(v.bstrVal) == sizeof(GUID))
+        {
+            memcpy(&h.clsid, v.bstrVal, sizeof(GUID));
+            haveClsid = true;
+        }
+        PropVariantClear(&v);
+        if (!haveClsid) continue;
+
+        h.name = HandlerPropStr(i, kHandlerName);
+
+        // Extensions come space separated: "tar ova".
+        std::wstring ext = HandlerPropStr(i, kHandlerExtension);
+        size_t start = 0;
+        while (start <= ext.size())
+        {
+            size_t sp = ext.find(L' ', start);
+            if (sp == std::wstring::npos) sp = ext.size();
+            if (sp > start) h.exts.push_back(ext.substr(start, sp - start));
+            if (sp == ext.size()) break;
+            start = sp + 1;
+        }
+
+        g_handlers.push_back(std::move(h));
+    }
+}
+
+const std::vector<Handler7z>& Handlers()
+{
+    Get7zCreateObjectFunc();                       // make sure the DLL is in
+    std::call_once(g_handlersOnce, EnumerateHandlersOnce);
+    return g_handlers;
+}
+
+// Handlers whose declared extension list contains `ext` (".tar" -> "tar").
+std::vector<const Handler7z*> HandlersForExt(const wchar_t* ext)
+{
+    std::vector<const Handler7z*> out;
+    if (!ext || !*ext) return out;
+    const wchar_t* bare = (*ext == L'.') ? ext + 1 : ext;
+
+    for (const auto& h : Handlers())
+        for (const auto& e : h.exts)
+            if (_wcsicmp(e.c_str(), bare) == 0) { out.push_back(&h); break; }
+    return out;
 }
 
 // ═════════════════════════════════════════════════════════
@@ -493,36 +595,86 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
         return false;
     }
 
-    auto* fsRaw = new CInFileStream();
-    if (!fsRaw->OpenFile(path))
-    {
-        delete fsRaw;
-        m_lastError = L"Cannot open archive file for reading.";
-        return false;
-    }
-    ComPtr<IInStream7z> inStream;
-    inStream.Attach(fsRaw);
+    // Which handler? Start with the ones that claim this extension, then
+    // fall back to every other handler, so a .tar that is really a .gz —
+    // or a file with no extension at all — still opens. Each attempt gets
+    // a fresh stream, because a failed Open leaves the position anywhere.
+    LPCWSTR ext = PathFindExtensionW(path.c_str());
 
-    void* rawArchive = nullptr;
-    HRESULT hr = createObj(&CLSID_CFormat7z, &IID_IInArchive7z, &rawArchive);
-    if (FAILED(hr) || !rawArchive)
+    std::vector<const Handler7z*> candidates = HandlersForExt(ext);
+    const size_t preferred = candidates.size();
+    for (const auto& h : Handlers())
     {
-        m_lastError = L"7-Zip engine failed to create a 7z archive handler.";
-        return false;
+        bool already = false;
+        for (size_t i = 0; i < preferred; ++i)
+            if (candidates[i] == &h) { already = true; break; }
+        if (!already) candidates.push_back(&h);
     }
+
     ComPtr<IInArchive7z> archive;
-    archive.Attach(static_cast<IInArchive7z*>(rawArchive));
+    std::wstring         chosenName;
 
-    ComPtr<IArchiveOpenCallback7z> openCb;
-    openCb.Attach(new CArchiveOpenCallback());
-
-    UINT64 maxCheckStartPosition = 1 << 20; // tolerate SFX stubs etc.
-    hr = archive->Open(inStream.Get(), &maxCheckStartPosition, openCb.Get());
-    if (FAILED(hr))
+    auto tryHandler = [&](const GUID& clsid, const std::wstring& name) -> bool
     {
-        m_lastError = L"Not a valid 7z archive (or its headers are encrypted — "
-                      L"password-protected headers are not yet supported).";
+        auto* fsRaw = new CInFileStream();
+        if (!fsRaw->OpenFile(path)) { delete fsRaw; return false; }
+        ComPtr<IInStream7z> inStream;
+        inStream.Attach(fsRaw);
+
+        void* rawArchive = nullptr;
+        if (FAILED(createObj(&clsid, &IID_IInArchive7z, &rawArchive)) ||
+            !rawArchive)
+            return false;
+
+        ComPtr<IInArchive7z> candidate;
+        candidate.Attach(static_cast<IInArchive7z*>(rawArchive));
+
+        ComPtr<IArchiveOpenCallback7z> openCb;
+        openCb.Attach(new CArchiveOpenCallback());
+
+        UINT64 maxCheckStartPosition = 1 << 20;   // tolerate SFX stubs etc.
+        if (FAILED(candidate->Open(inStream.Get(), &maxCheckStartPosition,
+                                   openCb.Get())))
+            return false;
+
+        archive    = candidate;
+        chosenName = name;
+        return true;
+    };
+
+    if (candidates.empty())
+    {
+        // No handler list available (a cut-down 7z.dll without
+        // GetNumberOfFormats). The 7z format class is always there.
+        tryHandler(CLSID_CFormat7z, L"7-Zip");
+    }
+    else
+    {
+        for (const Handler7z* h : candidates)
+            if (tryHandler(h->clsid, h->name)) break;
+    }
+
+    if (!archive)
+    {
+        if (!PathFileExistsW(path.c_str()))
+            m_lastError = L"The archive file no longer exists.";
+        else if (Handlers().empty() && !HandlersForExt(ext).size())
+            m_lastError = L"This 7z.dll could not open the file. It may be "
+                          L"damaged, or its headers may be encrypted — "
+                          L"password-protected headers are not yet supported.";
+        else
+            m_lastError = L"No 7-Zip handler could read this file. It may be "
+                          L"damaged or incomplete, or its headers may be "
+                          L"encrypted — password-protected headers are not "
+                          L"yet supported.";
         return false;
+    }
+
+    // Prefer the friendly name from the format table over 7-Zip's short
+    // handler id, so the UI says "Windows image" rather than "wim".
+    {
+        std::wstring pretty = Formats::NameFor(ext);
+        m_formatName = pretty.empty() ? chosenName : pretty;
     }
 
     m_archive = archive;

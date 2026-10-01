@@ -47,6 +47,10 @@ public:
     static UINT          GetSize(const ArchiveEntry& e);
     // Walk to last item in a multi-level PIDL
     static LPCITEMIDLIST  GetLast(LPCITEMIDLIST pidl);
+    // Copy just the FIRST item of a multi-level PIDL.
+    static LPITEMIDLIST   CloneFirst(LPCITEMIDLIST pidl);
+    // "dir1\dir2\file.txt" — every one of our segments joined together.
+    static std::wstring   GetChainPath(LPCITEMIDLIST pidl);
     static LPITEMIDLIST   RemoveLast(LPCITEMIDLIST pidl);
 };
 

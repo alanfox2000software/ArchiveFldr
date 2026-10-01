@@ -172,6 +172,29 @@ LPCITEMIDLIST CPidlMgr::GetLast(LPCITEMIDLIST pidl)
     return ILFindLastID(pidl);
 }
 
+LPITEMIDLIST CPidlMgr::CloneFirst(LPCITEMIDLIST pidl)
+{
+    if (!pidl || !pidl->mkid.cb) return nullptr;
+    const USHORT cb = pidl->mkid.cb;
+    auto* p = (LPITEMIDLIST)CoTaskMemAlloc(cb + sizeof(USHORT));
+    if (!p) return nullptr;
+    memcpy(p, pidl, cb);
+    *(USHORT*)((BYTE*)p + cb) = 0;      // terminator
+    return p;
+}
+
+std::wstring CPidlMgr::GetChainPath(LPCITEMIDLIST pidl)
+{
+    std::wstring path;
+    for (LPCITEMIDLIST cur = pidl; cur && cur->mkid.cb; cur = ILNext(cur))
+    {
+        if (!IsOurs(cur)) continue;
+        if (!path.empty()) path += L'\\';
+        path += GetName(cur);
+    }
+    return path;
+}
+
 // ─────────────────────────────────────────────────────────
 // CShellFolder — constructors / destructor
 // ─────────────────────────────────────────────────────────
@@ -428,19 +451,33 @@ STDMETHODIMP CShellFolder::EnumObjects(HWND /*hwnd*/, DWORD grfFlags, IEnumIDLis
 // IShellFolder::BindToObject — navigate into sub-folder
 // ─────────────────────────────────────────────────────────
 STDMETHODIMP CShellFolder::BindToObject(
-    LPCITEMIDLIST pidl, LPBC /*pbc*/, REFIID riid, void** ppv)
+    LPCITEMIDLIST pidl, LPBC pbc, REFIID riid, void** ppv)
 {
     if (!ppv) return E_POINTER;
     *ppv = nullptr;
     if (!CPidlMgr::IsOurs(pidl)) return E_INVALIDARG;
-    if (!CPidlMgr::IsDir(pidl)) return E_INVALIDARG;
+    if (!CPidlMgr::IsDir(pidl))  return E_INVALIDARG;
 
-    LPITEMIDLIST pidlAbs = CPidlMgr::Concat(m_pidlAbs, pidl);
+    // The shell may hand over several levels at once ("dir1\\dir2"). Bind the
+    // first one and let the resulting folder deal with the remainder, so the
+    // child always knows its own leaf item — getting this wrong leaves the
+    // view pointing at the wrong directory inside the archive.
+    LPCITEMIDLIST rest = ILNext(pidl);
+    const bool    multi = rest && rest->mkid.cb;
+
+    LPITEMIDLIST first = multi ? CPidlMgr::CloneFirst(pidl) : nullptr;
+    LPCITEMIDLIST leaf = multi ? (LPCITEMIDLIST)first : pidl;
+    if (multi && !first) return E_OUTOFMEMORY;
+
+    LPITEMIDLIST pidlAbs = CPidlMgr::Concat(m_pidlAbs, leaf);
     auto* pSub = new(std::nothrow) CShellFolder(
-        this, pidlAbs, pidl, m_engine, m_archivePath);
+        this, pidlAbs, leaf, m_engine, m_archivePath);
     ILFree(pidlAbs);
+    if (first) ILFree(first);
     if (!pSub) return E_OUTOFMEMORY;
-    HRESULT hr = pSub->QueryInterface(riid, ppv);
+
+    HRESULT hr = multi ? pSub->BindToObject(rest, pbc, riid, ppv)
+                       : pSub->QueryInterface(riid, ppv);
     pSub->Release();
     return hr;
 }
@@ -575,8 +612,11 @@ STDMETHODIMP CShellFolder::GetAttributesOf(
     if (m_engine) caps = m_engine->GetCaps();
 
     for (UINT i = 0; i < cidl; i++) {
-        if (!CPidlMgr::IsOurs(apidl[i])) { result = 0; break; }
-        bool isDir = CPidlMgr::IsDir(apidl[i]);
+        // A relative PIDL may hold several levels; the attributes describe
+        // the item it ends at.
+        LPCITEMIDLIST leaf = CPidlMgr::GetLast(apidl[i]);
+        if (!CPidlMgr::IsOurs(leaf)) { result = 0; break; }
+        bool isDir = CPidlMgr::IsDir(leaf);
 
         SFGAOF a = SFGAO_HASPROPSHEET;
         if (caps.canExtract) a |= SFGAO_CANCOPY;   // copy == extract a copy
@@ -632,8 +672,9 @@ STDMETHODIMP CShellFolder::GetUIObjectOf(
         // entry name so the association lookup keys off its extension.
         // (Passing the archive path, as before, drew every row — .txt, .exe,
         // folders — with the archive's icon.)
-        const bool isDir = CPidlMgr::IsDir(apidl[0]);
-        std::wstring name = CPidlMgr::GetName(apidl[0]);
+        LPCITEMIDLIST leaf = CPidlMgr::GetLast(apidl[0]);
+        const bool isDir = CPidlMgr::IsDir(leaf);
+        std::wstring name = CPidlMgr::GetName(leaf);
         if (name.empty()) name = isDir ? L"folder" : L"file";
         return SHCreateFileExtractIconW(name.c_str(),
             isDir ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL,
@@ -675,7 +716,8 @@ STDMETHODIMP CShellFolder::GetDisplayNameOf(
         }
         else if (m_pidlRel && CPidlMgr::IsOurs(m_pidlRel))
         {
-            self = CPidlMgr::GetName(m_pidlRel);        // sub-folder name
+            // Leaf, not the first segment: m_pidlRel can hold several levels.
+            self = CPidlMgr::GetName(CPidlMgr::GetLast(m_pidlRel));
         }
         else
         {
@@ -686,7 +728,9 @@ STDMETHODIMP CShellFolder::GetDisplayNameOf(
 
     if (!CPidlMgr::IsOurs(pidl)) return E_INVALIDARG;
 
-    std::wstring name = CPidlMgr::GetName(pidl);
+    // The name shown in the view is the leaf's; a relative PIDL that spans
+    // several levels still has to parse back as the whole chain.
+    std::wstring name = CPidlMgr::GetName(CPidlMgr::GetLast(pidl));
 
     // A fully qualified parsing name (SHGDN_FORPARSING without
     // SHGDN_INFOLDER) must identify the item from the desktop down, the way
@@ -696,7 +740,8 @@ STDMETHODIMP CShellFolder::GetDisplayNameOf(
         std::wstring full = m_archivePath;
         std::wstring inner = InternalPathToWin32(m_internalPath);
         if (!inner.empty()) full += L"\\" + inner;
-        full += L"\\" + name;
+        std::wstring chain = CPidlMgr::GetChainPath(pidl);
+        if (!chain.empty()) full += L"\\" + chain;
         name.swap(full);
     }
 

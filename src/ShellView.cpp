@@ -241,10 +241,24 @@ void CShellView::OnDblClick(int idx)
     if (!ListView_GetItem(m_hwndList,&item)) return;
     LPITEMIDLIST pidl = (LPITEMIDLIST)item.lParam;
     if (!pidl) return;
-    if (CPidlMgr::IsDir(pidl) && m_pBrowser) {
-    if (m_pBrowser)
-        m_pBrowser->BrowseObject(pidl, SBSP_RELATIVE);
+
+    // A folder navigates this window; a file runs the item context menu's
+    // default verb (extract a temp copy and open it), same as DefView does.
+    if (CPidlMgr::IsDir(pidl))
+    {
+        if (m_pBrowser)
+            m_pBrowser->BrowseObject(pidl, SBSP_RELATIVE | SBSP_DEFBROWSER);
+        return;
     }
+
+    auto* pCM = new(std::nothrow) CContextMenu();
+    if (!pCM) return;
+    LPCITEMIDLIST one = pidl;
+    pCM->SetFolder(m_pFolder, m_hwnd, 1, &one);
+    CMINVOKECOMMANDINFO ci{ sizeof(ci), 0, m_hwnd, "open",
+                            nullptr, nullptr, SW_SHOWNORMAL };
+    pCM->InvokeCommand(&ci);
+    pCM->Release();
 }
 
 void CShellView::OnContextMenu(int x, int y)

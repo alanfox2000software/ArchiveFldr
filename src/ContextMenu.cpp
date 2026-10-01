@@ -54,6 +54,7 @@ CContextMenu::~CContextMenu()
 {
     for (auto p : m_pidls) ILFree(p);
     if (m_pFolder) m_pFolder->Release();
+    if (m_pSite)   m_pSite->Release();
     InterlockedDecrement(&g_cDllRefCount);
 }
 
@@ -87,6 +88,8 @@ STDMETHODIMP CContextMenu::QueryInterface(REFIID riid, void** ppv)
     { *ppv=static_cast<IContextMenu3*>(this); AddRef(); return S_OK; }
     if (IsEqualIID(riid,IID_IShellExtInit))
     { *ppv=static_cast<IShellExtInit*>(this); AddRef(); return S_OK; }
+    if (IsEqualIID(riid,IID_IObjectWithSite))
+    { *ppv=static_cast<IObjectWithSite*>(this); AddRef(); return S_OK; }
     return E_NOINTERFACE;
 }
 STDMETHODIMP_(ULONG) CContextMenu::AddRef()
@@ -126,12 +129,24 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
     m_cmdBase = idCmdFirst;
 
     // CMF_DEFAULTONLY = "tell me the one command a double-click should run".
-    // For an item inside an archive that is Open — answering nothing here is
-    // exactly why double-clicking an entry used to do nothing at all.
+    //
+    // For a FILE that is Open (extract a temp copy and launch it) — saying
+    // nothing here is why double-clicking a file used to do nothing.
+    //
+    // For a FOLDER we must stay silent: the view browses into a sub-folder
+    // by itself, and any default command we claim here replaces that
+    // navigation with our own handler. That is exactly what stopped
+    // double-click from entering folders inside an archive.
     if (uFlags & CMF_DEFAULTONLY)
     {
         if (m_mode != ModeItem || m_pidls.empty())
             return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
+
+        bool allFolders = true;
+        for (auto p : m_pidls)
+            if (!CPidlMgr::IsDir(p)) { allFolders = false; break; }
+        if (allFolders)
+            return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);   // let the view navigate
 
         InsertMenuW(hMenu, indexMenu, MF_BYPOSITION | MF_STRING,
                     idCmdFirst + CMD_OPEN_ITEM, L"&Open");
@@ -338,6 +353,23 @@ STDMETHODIMP CContextMenu::GetCommandString(
     }
 }
 
+// ── IObjectWithSite ──────────────────────────────────────
+STDMETHODIMP CContextMenu::SetSite(IUnknown* pUnkSite)
+{
+    if (m_pSite) { m_pSite->Release(); m_pSite = nullptr; }
+    m_pSite = pUnkSite;
+    if (m_pSite) m_pSite->AddRef();
+    return S_OK;
+}
+
+STDMETHODIMP CContextMenu::GetSite(REFIID riid, void** ppv)
+{
+    if (!ppv) return E_POINTER;
+    *ppv = nullptr;
+    if (!m_pSite) return E_FAIL;
+    return m_pSite->QueryInterface(riid, ppv);
+}
+
 STDMETHODIMP CContextMenu::HandleMenuMsg(UINT,WPARAM,LPARAM) { return S_OK; }
 STDMETHODIMP CContextMenu::HandleMenuMsg2(UINT,WPARAM,LPARAM,LRESULT* p)
     { if(p)*p=0; return S_OK; }
@@ -386,6 +418,33 @@ std::wstring CContextMenu::AskForFolder(const wchar_t* title)
     return buf;
 }
 
+// Navigate the window the user is looking at into `pidlRel`, a child of this
+// folder. Falls back to opening a new window when there is no site to ask.
+bool CContextMenu::BrowseTo(LPCITEMIDLIST pidlRel)
+{
+    if (!m_pFolder || !pidlRel) return false;
+
+    if (m_pSite)
+    {
+        IShellBrowser* psb = nullptr;
+        if (SUCCEEDED(IUnknown_QueryService(m_pSite, SID_SShellBrowser,
+                                            IID_IShellBrowser, (void**)&psb)) && psb)
+        {
+            HRESULT hr = psb->BrowseObject(pidlRel, SBSP_RELATIVE | SBSP_DEFBROWSER);
+            psb->Release();
+            if (SUCCEEDED(hr)) return true;
+        }
+    }
+
+    bool ok = false;
+    if (LPITEMIDLIST abs = ILCombine(m_pFolder->GetAbsPidl(), pidlRel))
+    {
+        ok = SUCCEEDED(SHOpenFolderAndSelectItems(abs, 0, nullptr, 0));
+        ILFree(abs);
+    }
+    return ok;
+}
+
 HRESULT CContextMenu::MakeDataObject(REFIID riid, void** ppv)
 {
     if (!m_pFolder || m_pidls.empty()) return E_FAIL;
@@ -419,21 +478,23 @@ void CContextMenu::DoOpenItem()
 
     WaitCursor wait;
     std::wstring tempDir;
+    bool browsed = false;
 
     for (const auto& e : sel)
     {
         if (e.isDirectory)
         {
-            // Browse it: combine this folder's PIDL with the item's.
+            if (browsed) continue;   // one navigation per invocation
             for (auto p : m_pidls)
             {
                 if (_wcsicmp(CPidlMgr::GetName(p).c_str(), e.name.c_str()) != 0)
                     continue;
-                if (LPITEMIDLIST abs = ILCombine(m_pFolder->GetAbsPidl(), p))
-                {
-                    SHOpenFolderAndSelectItems(abs, 0, nullptr, 0);
-                    ILFree(abs);
-                }
+                browsed = true;
+                if (!BrowseTo(p))
+                    MessageBoxW(m_hwnd,
+                        (L"ShellNSE could not open \"" + e.name +
+                         L"\" inside the archive.").c_str(),
+                        L"ShellNSE", MB_ICONWARNING | MB_OK);
                 break;
             }
             continue;

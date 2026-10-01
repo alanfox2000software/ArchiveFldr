@@ -16,7 +16,8 @@ class CShellFolder;
 
 class CContextMenu :
     public IContextMenu3,
-    public IShellExtInit
+    public IShellExtInit,
+    public IObjectWithSite
 {
 public:
     CContextMenu();
@@ -47,6 +48,12 @@ public:
 
     // IContextMenu3
     STDMETHODIMP HandleMenuMsg2(UINT, WPARAM, LPARAM, LRESULT*) override;
+
+    // IObjectWithSite — the view passes us its IShellBrowser through this,
+    // which is what lets "Open" on a sub-folder navigate the window the user
+    // is looking at instead of spawning a second one.
+    STDMETHODIMP SetSite(IUnknown* pUnkSite) override;
+    STDMETHODIMP GetSite(REFIID riid, void** ppv) override;
 
 private:
     ~CContextMenu();
@@ -95,6 +102,8 @@ private:
     bool SelectedEntries(const std::shared_ptr<IArchiveEngine>& eng,
                          std::vector<ArchiveEntry>& out);
     std::wstring AskForFolder(const wchar_t* title);
+    // Navigate the hosting view into a child of this folder.
+    bool         BrowseTo(LPCITEMIDLIST pidlRel);
     HRESULT      MakeDataObject(REFIID riid, void** ppv);
     void         NotifyRefresh();
 
@@ -104,6 +113,8 @@ private:
     UINT           m_cmdBase   = 0;
     bool           m_useSubMenu = false;
     Mode           m_mode      = ModeArchiveFile;
+
+    IUnknown*      m_pSite     = nullptr;  // the hosting shell view/browser
 
     std::vector<LPITEMIDLIST> m_pidls;   // selected items (owned copies)
     std::wstring              m_archivePath;

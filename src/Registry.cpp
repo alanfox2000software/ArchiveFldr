@@ -516,11 +516,31 @@ static bool ExtensionIsWanted(const wchar_t* ext)
     return wanted.find(low) != wanted.end();
 }
 
+// Registration is best-effort, step by step.
+//
+// RETURN_IF_FAILED used to guard every write in RegisterExtension and every
+// call to it, which meant one refusal stopped everything after it. Several
+// of the keys involved belong to TrustedInstaller — Windows 11 ships its
+// own handler for .7z, .rar, .tar and .gz — so an elevated regsvr32 can
+// still be told no, and when it was, every file type later in the table
+// went unregistered without a word. That is why ArchiveFldr appeared in
+// the app picker for some extensions and not others.
+//
+// Each write is attempted on its own now. The first failure is remembered
+// and returned at the end, so a genuine problem is still reported, but a
+// key we are not allowed to touch costs only that key.
+struct FirstFailure
+{
+    HRESULT hr = S_OK;
+    void operator()(HRESULT h) { if (FAILED(h) && SUCCEEDED(hr)) hr = h; }
+};
+
 // ── File extension registration ───────────────────────────
 HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
                                       const wchar_t* progId,
                                       const wchar_t* dllPath)
 {
+    FirstFailure keep;
     const std::wstring folder = ClsidToStr(CLSID_ArchiveFldrFolder);
 
     // ── 1) ProgID ─────────────────────────────────────────
@@ -530,13 +550,13 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
 
     const std::wstring typeName = TypeNameFor(ext);
 
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, progBase.c_str(),
+    keep(SetRegStr(HKEY_LOCAL_MACHINE, progBase.c_str(),
         nullptr, typeName.c_str()));
 
     {
         const std::wstring icon = SystemIcon(L"zipfldr.dll", 0);
         if (!icon.empty())
-            RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
+            keep(SetRegStr(HKEY_LOCAL_MACHINE,
                 (progBase + L"\\DefaultIcon").c_str(), nullptr, icon.c_str()));
         else
             DelRegKey(HKEY_LOCAL_MACHINE,
@@ -547,21 +567,21 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
     // subkey of that name, where nothing reads it — which is why every
     // archive type showed as "Archive File" everywhere it was named.
     DelRegKey(HKEY_LOCAL_MACHINE, (progBase + L"\\FriendlyTypeName").c_str());
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, progBase.c_str(),
+    keep(SetRegStr(HKEY_LOCAL_MACHINE, progBase.c_str(),
         L"FriendlyTypeName", typeName.c_str()));
 
-    RETURN_IF_FAILED(RegisterShellExOnBase(progBase));
+    keep(RegisterShellExOnBase(progBase));
 
     // Make the ProgID a "file as folder" junction: this single value is what
     // makes Explorer hand the archive to our namespace extension instead of
     // treating it as an opaque file. Modelled on CompressedFolder (.zip),
     // which registers HKCR\CompressedFolder\CLSID the same way.
-    RETURN_IF_FAILED(TakeOverJunction(progBase + L"\\CLSID", folder));
+    keep(TakeOverJunction(progBase + L"\\CLSID", folder));
 
     // The open verb — Explorer's, delegate and all. See kFolderOpenDelegate.
     {
         std::wstring openKey = progBase + L"\\shell\\open";
-        RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, openKey.c_str(),
+        keep(SetRegStr(HKEY_LOCAL_MACHINE, openKey.c_str(),
             L"MultiSelectModel", L"Document"));
 
         // What Windows' app picker calls this entry. Without it the name
@@ -569,13 +589,13 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
         // names — Explorer.exe — so the row would read "File Explorer",
         // the one label that cannot be told apart from the handler already
         // in the list.
-        RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, openKey.c_str(),
+        keep(SetRegStr(HKEY_LOCAL_MACHINE, openKey.c_str(),
             L"FriendlyAppName", kFriendlyAppName));
 
         const std::wstring cmdKey = openKey + L"\\command";
-        RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(),
+        keep(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(),
             nullptr, ExplorerOpenCommand().c_str()));
-        RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(),
+        keep(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(),
             L"DelegateExecute", kFolderOpenDelegate));
     }
 
@@ -585,6 +605,15 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
 
     // ── 2) Extension (.zip) ───────────────────────────────
     std::wstring extBase = std::wstring(L"Software\\Classes\\") + ext;
+
+    // Offer the ProgID as a choice for this extension. This is the value
+    // the "choose an app" list is built from — the Capabilities key only
+    // decides what the Default apps *page* lists, not what the picker
+    // behind it contains, which is why ArchiveFldr could be on that page
+    // with .7z under it and still be absent from the list that opens.
+    // Adding a value here takes the type from no one.
+    OfferProgIdFor(ext, progId, ExtensionIsWanted(ext));
+
 
     // Claim the type only when it is unclaimed, or when the claim is
     // already ours. Overwriting a live association — CompressedFolder on
@@ -601,20 +630,12 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
             owner.rfind(L"ArchiveFldr.", 0) == 0 ||
             owner.rfind(L"ShellNSE.",   0) == 0;   // upgrading in place
         if (unowned || alreadyOurs)
-            RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, extBase.c_str(),
+            keep(SetRegStr(HKEY_LOCAL_MACHINE, extBase.c_str(),
                 nullptr, progId));
     }
 
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, extBase.c_str(),
+    keep(SetRegStr(HKEY_LOCAL_MACHINE, extBase.c_str(),
         L"PerceivedType", L"compressed"));
-
-    // Offer the ProgID as a choice for this extension. This is the value
-    // the "choose an app" list is built from — the Capabilities key only
-    // decides what the Default apps *page* lists, not what the picker
-    // behind it contains, which is why ArchiveFldr could be on that page
-    // with .7z under it and still be absent from the list that opens.
-    // Adding a value here takes the type from no one.
-    OfferProgIdFor(ext, progId, ExtensionIsWanted(ext));
 
     // Older ArchiveFldr builds wrote a bogus ".ext\ShellFolder = {CLSID}" key.
     // That is not a junction location the shell has ever read, so it did
@@ -622,7 +643,7 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
     DelRegKey(HKEY_LOCAL_MACHINE, (extBase + L"\\ShellFolder").c_str());
 
     // Also on the extension (harmless; ignored when ProgID owns the type)
-    RETURN_IF_FAILED(RegisterShellExOnBase(extBase));
+    keep(RegisterShellExOnBase(extBase));
 
     // ── 3) SystemFileAssociations\.ext ────────────────────
     // Used by Explorer even when UserChoice / ProgID differs. The CLSID
@@ -631,10 +652,10 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
     // archiver owns the file association.
     std::wstring sfaBase =
         std::wstring(L"Software\\Classes\\SystemFileAssociations\\") + ext;
-    RETURN_IF_FAILED(RegisterShellExOnBase(sfaBase));
-    RETURN_IF_FAILED(TakeOverJunction(sfaBase + L"\\CLSID", folder));
+    keep(RegisterShellExOnBase(sfaBase));
+    keep(TakeOverJunction(sfaBase + L"\\CLSID", folder));
 
-    return S_OK;
+    return keep.hr;
 }
 
 HRESULT CRegistry::UnregisterExtension(const wchar_t* ext,
@@ -844,8 +865,11 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
     //    they cannot drift apart the way two hand-written copies did.
     //    Office containers deliberately have no progId: .docx really is a
     //    zip, but taking Word's file association is hostile.
+    //    One file type that will not take registration must not cost the
+    //    rest of them theirs, so the loop records and continues.
+    FirstFailure extensions;
     for (const auto* f : Formats::Registrable())
-        RETURN_IF_FAILED(RegisterExtension(f->ext, f->progId, dllPath));
+        extensions(RegisterExtension(f->ext, f->progId, dllPath));
 
     // 6. Offer ourselves in Settings > Default apps. This is the only way
     //    to take a file type that Windows' built-in archive handler owns
@@ -868,7 +892,9 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
         RETURN_IF_FAILED(RegisterContextMenuOnBase(
             std::wstring(L"Software\\Classes\\") + base));
 
-    return S_OK;
+    // Everything that could be registered has been. If a file type refused,
+    // report it — but only after the other twenty got their turn.
+    return extensions.hr;
 }
 
 // ─────────────────────────────────────────────────────────

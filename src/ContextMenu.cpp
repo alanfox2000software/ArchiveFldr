@@ -567,37 +567,6 @@ static bool BrowseWithWindow(HWND hwnd, LPCITEMIDLIST pidlRel,
     return false;
 }
 
-// Which shell folder would the shell bind this file to? A "file as folder"
-// junction is resolved through whichever ProgID the file type points at, so
-// the answer is ours only when ArchiveFldr owns the association. Asking the
-// shell directly beats re-implementing its lookup order.
-static bool JunctionIsOurs(LPCITEMIDLIST pidlAbs)
-{
-    if (!pidlAbs) return false;
-
-    IShellFolder* desktop = nullptr;
-    if (FAILED(SHGetDesktopFolder(&desktop)) || !desktop) return false;
-
-    bool ours = false;
-    IShellFolder* target = nullptr;
-    if (SUCCEEDED(desktop->BindToObject(pidlAbs, nullptr, IID_IShellFolder,
-                                        (void**)&target)) && target)
-    {
-        IPersist* persist = nullptr;
-        if (SUCCEEDED(target->QueryInterface(IID_IPersist, (void**)&persist))
-            && persist)
-        {
-            CLSID clsid{};
-            if (SUCCEEDED(persist->GetClassID(&clsid)))
-                ours = IsEqualCLSID(clsid, CLSID_ArchiveFldrFolder) != FALSE;
-            persist->Release();
-        }
-        target->Release();
-    }
-    desktop->Release();
-    return ours;
-}
-
 // Navigate the window the user is looking at to an absolute PIDL, in place.
 static bool BrowseAbsoluteInPlace(IUnknown* site, HWND hwnd,
                                   LPCITEMIDLIST pidlAbs)
@@ -1079,22 +1048,17 @@ void CContextMenu::DoOpenShell()
     // ─────────────────────────────────────────────────────────────────
     // "Open with ArchiveFldr" — browse the archive inside Windows Explorer.
     //
-    // This used to be ShellExecute(L"open", <archive>), which just asks the
-    // shell to run the file type's *default* open command. For an archive
-    // that is either nothing at all (silent no-op — the bug), or whatever
-    // other archiver owns the association. It could never show the archive
-    // in Explorer, because nothing told Explorer to use our namespace
-    // extension.
+    // It used to be ShellExecute("open", <archive>), which only asks the
+    // shell to run the file type's default command: either nothing, or
+    // whatever other archiver owns the type. Nothing in it told Explorer
+    // to use this namespace extension.
     //
-    // The documented way to open a view of a namespace extension on a
-    // specific object is (see "Specifying a Namespace Extension's Location"):
-    //
-    //     %SystemRoot%\Explorer.exe /e,::{extension CLSID},<object name>
-    //
-    // Explorer parses <object name> into a PIDL and hands it to our
-    // IPersistFolder::Initialize — exactly what CShellFolder expects. Going
-    // through the CLSID explicitly also means this works no matter which
-    // application currently owns the .7z/.zip file association.
+    // There is no command line that opens a namespace extension on a
+    // specific file either — Explorer's /e takes an object to browse, not
+    // a ::{CLSID} to browse it with. What works is the ordinary thing:
+    // build the archive's PIDL and ask the browser to navigate to it. The
+    // file-as-folder junction registered on the file type is what makes
+    // that land in CShellFolder.
     // ─────────────────────────────────────────────────────────────────
     if (m_archivePath.empty()) {
         MessageBoxW(m_hwnd, L"No archive was selected.",
@@ -1164,37 +1128,13 @@ void CContextMenu::DoOpenShell()
         return;
     }
 
-    // A file-as-folder junction belongs to whichever ProgID the file type
-    // points at, and that beats everything we register elsewhere. If the
-    // type is not ours, browsing the PIDL would land in the other handler's
-    // view — so say so plainly rather than appearing to do nothing.
-    if (!JunctionIsOurs(pidl))
-    {
-        ILFree(pidl);
-
-        LPCWSTR dot = PathFindExtensionW(m_archivePath.c_str());
-        std::wstring msg =
-            L"Another program currently owns the ";
-        msg += (dot && *dot) ? dot : L"archive";
-        msg += L" file type, so Windows opens it with that program instead "
-               L"of ArchiveFldr.\n\n"
-               L"To change it, open Settings > Apps > Default apps, search "
-               L"for ArchiveFldr, and point the file type at it.\n\n"
-               L"Open Default apps now?";
-
-        if (MessageBoxW(m_hwnd, msg.c_str(), L"ArchiveFldr",
-                        MB_ICONINFORMATION | MB_YESNO) == IDYES)
-        {
-            // Windows 10/11. Older releases get the Control Panel page.
-            HINSTANCE rc = ShellExecuteW(m_hwnd, L"open",
-                L"ms-settings:defaultapps", nullptr, nullptr, SW_SHOWNORMAL);
-            if ((INT_PTR)rc <= 32)
-                ShellExecuteW(m_hwnd, L"open", L"control.exe",
-                    L"/name Microsoft.DefaultPrograms /page pageFileAssoc",
-                    nullptr, SW_SHOWNORMAL);
-        }
-        return;
-    }
+    // No ownership check in front of this. There used to be one, and it
+    // put a dialog about Default apps between the user and the archive
+    // every time another program held the file type — which is most of
+    // them on a stock Windows 11. The command says "open", so it opens:
+    // SystemFileAssociations\<ext>\CLSID is registered too, and the shell
+    // falls back to it whenever the owning ProgID is not itself a
+    // file-as-folder, so this usually lands in ArchiveFldr's view anyway.
 
     // Same window first; a new one only if there is no browser to reuse
     // (invoked from the desktop, or from a host that exposes no site).

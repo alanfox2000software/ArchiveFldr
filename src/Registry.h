@@ -21,7 +21,12 @@ private:
     static HRESULT UnregisterCOMServer (const CLSID&);
     static HRESULT RegisterExtension   (const wchar_t* ext, const wchar_t* progId,
                                         const wchar_t* dllPath);
-    static HRESULT UnregisterExtension (const wchar_t* ext);
+    static HRESULT UnregisterExtension (const wchar_t* ext, const wchar_t* progId);
+
+    // HKCR\Applications\<companion exe> — the name and icon Windows shows
+    // for ArchiveFldr wherever it offers it as an application.
+    static HRESULT RegisterOpenWithApp  (const wchar_t* dllPath);
+    static void    UnregisterOpenWithApp();
     // Windows "Default apps" integration. Publishing a Capabilities key
     // under HKLM\SOFTWARE\RegisteredApplications is what puts ArchiveFldr
     // in the Default apps list, so the user can hand it a file type that

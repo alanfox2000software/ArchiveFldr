@@ -365,6 +365,173 @@ HRESULT CRegistry::UnregisterCOMServer(const CLSID& clsid)
     return DelRegKey(HKEY_LOCAL_MACHINE, base.c_str());
 }
 
+
+// ─────────────────────────────────────────────────────────
+// Being choosable in "Default apps"
+// ─────────────────────────────────────────────────────────
+//
+// Windows does not build its app picker out of RegisteredApplications.
+// That key only decides whether ArchiveFldr gets a page of its own in
+// Settings > Default apps and which file types that page lists. The list
+// of apps offered *for one extension* comes from the shell's association
+// handlers, and a handler has to be reachable from the extension key:
+//
+//     HKCR\.7z\OpenWithProgids\ArchiveFldr.7zFile = ""
+//
+// Without that value our ProgID is never a candidate, so the page could
+// list .7z and the picker behind it still had nothing of ours to offer.
+// The value is a list, not an owner: adding ourselves there takes the type
+// from nobody and is exactly how an installer asks to be choosable.
+static constexpr wchar_t kFriendlyAppName[] = L"ArchiveFldr";
+
+// A handler also has to be a program. ArchiveFldr's code is in a DLL, and
+// a DLL cannot appear in a list of applications, so the open verb points
+// at the companion executable that ships beside it — the same one the
+// context menu opens for settings, which browses an archive when it is
+// handed a path. When it is missing (DLL deployed on its own) the verb
+// falls back to Explorer, which still works; it just shows up in the
+// picker as "File Explorer", indistinguishable from the built-in handler.
+static std::wstring CompanionExe(const wchar_t* dllPath)
+{
+    if (!dllPath || !*dllPath) return L"";
+
+    wchar_t dir[MAX_PATH] = {};
+    wcsncpy_s(dir, dllPath, _TRUNCATE);
+    PathRemoveFileSpecW(dir);
+
+#ifdef _WIN64
+    const wchar_t* tagged = L"ArchiveFldrSetting.64.exe";
+#else
+    const wchar_t* tagged = L"ArchiveFldrSetting.32.exe";
+#endif
+    const wchar_t* candidates[] = { tagged, L"ArchiveFldrSetting.exe" };
+    for (const wchar_t* c : candidates)
+    {
+        std::wstring p = std::wstring(dir) + L"\\" + c;
+        if (PathFileExistsW(p.c_str())) return p;
+    }
+    return L"";
+}
+
+static std::wstring OpenCommandFor(const wchar_t* dllPath)
+{
+    const std::wstring exe = CompanionExe(dllPath);
+    if (!exe.empty())
+        return L"\"" + exe + L"\" /open \"%1\"";
+
+    wchar_t win[MAX_PATH] = {};
+    if (!GetWindowsDirectoryW(win, ARRAYSIZE(win)))
+        wcscpy_s(win, L"C:\\Windows");
+    return std::wstring(win) + L"\\Explorer.exe /idlist,%I,%L";
+}
+
+// The type description Explorer shows in its Type column and Settings
+// shows next to the extension. Every ProgID used to say "Archive File",
+// which told the user nothing about which of the 21 types they were
+// looking at.
+static std::wstring TypeNameFor(const wchar_t* ext)
+{
+    const Formats::Format* f = Formats::Find(ext);
+    if (!f || !f->name || !*f->name) return L"Archive";
+
+    std::wstring name = f->name, low = f->name;
+    for (auto& ch : low) ch = (wchar_t)towlower(ch);
+
+    // "Java archive", "ISO image", "Android pack" already read as a type.
+    if (low.find(L"archive") != std::wstring::npos ||
+        low.find(L"image")   != std::wstring::npos ||
+        low.find(L"pack")    != std::wstring::npos)
+        return name;
+    return name + L" archive";
+}
+
+// HKCR\Applications\<exe> is where the shell looks up the display name and
+// icon of a program it is about to offer or has just been told to use.
+// Deliberately no SupportedTypes value: that would add a *second*
+// ArchiveFldr row to every picker, one for the ProgID and one for the
+// executable, and the two behave differently once chosen.
+HRESULT CRegistry::RegisterOpenWithApp(const wchar_t* dllPath)
+{
+    const std::wstring exe = CompanionExe(dllPath);
+    if (exe.empty()) return S_FALSE;
+
+    const std::wstring base = std::wstring(L"Software\\Classes\\Applications\\") +
+                              PathFindFileNameW(exe.c_str());
+
+    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, base.c_str(),
+        nullptr, kFriendlyAppName));
+    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, base.c_str(),
+        L"FriendlyAppName", kFriendlyAppName));
+
+    {
+        const std::wstring icon = SystemIcon(L"zipfldr.dll", 0);
+        if (!icon.empty())
+            SetRegStr(HKEY_LOCAL_MACHINE, (base + L"\\DefaultIcon").c_str(),
+                      nullptr, icon.c_str());
+    }
+
+    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
+        (base + L"\\shell\\open").c_str(), L"FriendlyAppName", kFriendlyAppName));
+    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
+        (base + L"\\shell\\open\\command").c_str(), nullptr,
+        OpenCommandFor(dllPath).c_str()));
+    return S_OK;
+}
+
+// Add or remove one ProgID in one extension's picker list. Driven by the
+// Formats page: a type the user unticked should stop being offered, and a
+// type they ticked should start, without either touching the current
+// owner of the file type.
+static void OfferProgIdFor(const wchar_t* ext, const wchar_t* progId,
+                           bool offer)
+{
+    if (!ext || !progId || !*progId) return;
+
+    const std::wstring key = std::wstring(L"Software\\Classes\\") + ext +
+                             L"\\OpenWithProgids";
+    HKEY hk = nullptr;
+    if (offer)
+    {
+        if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, key.c_str(), 0, nullptr,
+                REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &hk, nullptr)
+                == ERROR_SUCCESS)
+        {
+            // An empty REG_SZ: the value name is the whole message.
+            RegSetValueExW(hk, progId, 0, REG_SZ,
+                           reinterpret_cast<const BYTE*>(L""),
+                           sizeof(wchar_t));
+            RegCloseKey(hk);
+        }
+        return;
+    }
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key.c_str(), 0, KEY_SET_VALUE, &hk)
+            == ERROR_SUCCESS)
+    {
+        RegDeleteValueW(hk, progId);
+        RegCloseKey(hk);
+    }
+}
+
+// Is this extension ticked on the Formats page?
+static bool ExtensionIsWanted(const wchar_t* ext)
+{
+    std::wstring low = ext ? ext : L"";
+    for (auto& ch : low) ch = (wchar_t)towlower(ch);
+    const std::set<std::wstring>& wanted = Settings::Get().associatedExts;
+    return wanted.find(low) != wanted.end();
+}
+
+void CRegistry::UnregisterOpenWithApp()
+{
+    const wchar_t* names[] = { L"ArchiveFldrSetting.64.exe",
+                               L"ArchiveFldrSetting.32.exe",
+                               L"ArchiveFldrSetting.exe" };
+    for (const wchar_t* n : names)
+        DelRegKey(HKEY_LOCAL_MACHINE,
+                  (std::wstring(L"Software\\Classes\\Applications\\") + n).c_str());
+}
+
 // ── File extension registration ───────────────────────────
 HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
                                       const wchar_t* progId,
@@ -377,8 +544,10 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
     // from the ProgID — NOT from .zip. This was the missing piece.
     std::wstring progBase = std::wstring(L"Software\\Classes\\") + progId;
 
+    const std::wstring typeName = TypeNameFor(ext);
+
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, progBase.c_str(),
-        nullptr, L"Archive File"));
+        nullptr, typeName.c_str()));
 
     {
         const std::wstring icon = SystemIcon(L"zipfldr.dll", 0);
@@ -390,9 +559,12 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
                       (progBase + L"\\DefaultIcon").c_str());
     }
 
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
-        (progBase + L"\\FriendlyTypeName").c_str(),
-        nullptr, L"Archive File"));
+    // FriendlyTypeName is a value ON the ProgID key. Earlier builds wrote a
+    // subkey of that name, where nothing reads it — which is why every
+    // archive type showed as "Archive File" everywhere it was named.
+    DelRegKey(HKEY_LOCAL_MACHINE, (progBase + L"\\FriendlyTypeName").c_str());
+    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, progBase.c_str(),
+        L"FriendlyTypeName", typeName.c_str()));
 
     RETURN_IF_FAILED(RegisterShellExOnBase(progBase));
 
@@ -402,20 +574,26 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
     // which registers HKCR\CompressedFolder\CLSID the same way.
     RETURN_IF_FAILED(TakeOverJunction(progBase + L"\\CLSID", folder));
 
-    // Double-clicking the archive browses it, exactly like a zip folder:
-    //   HKCR\<ProgID>\shell\open\command = %SystemRoot%\Explorer.exe /idlist,%I,%L
+    // The open verb. Inside Explorer a double-click rarely reaches it —
+    // the CLSID junction above makes the file report itself as a folder, so
+    // the shell navigates into it instead of invoking a command. The verb is
+    // what everything else uses: "Open with", ShellExecute from another
+    // program, and the row Windows shows in its app picker.
     {
         std::wstring openKey = progBase + L"\\shell\\open";
         RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, openKey.c_str(),
             L"MultiSelectModel", L"Document"));
 
-        wchar_t explorerExe[MAX_PATH] = {};
-        if (!GetWindowsDirectoryW(explorerExe, MAX_PATH))
-            wcscpy_s(explorerExe, L"C:\\Windows");
-        std::wstring cmd = std::wstring(explorerExe) +
-                           L"\\Explorer.exe /idlist,%I,%L";
+        // What the picker calls this entry. Without it the name comes from
+        // the version resource of whatever the command line names, so the
+        // Explorer fallback would read "File Explorer" — the one label that
+        // cannot be told apart from the handler already in the list.
+        RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, openKey.c_str(),
+            L"FriendlyAppName", kFriendlyAppName));
+
         RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
-            (openKey + L"\\command").c_str(), nullptr, cmd.c_str()));
+            (openKey + L"\\command").c_str(), nullptr,
+            OpenCommandFor(dllPath).c_str()));
     }
 
     // (No extra "open with ArchiveFldr" static verb here on purpose: the
@@ -447,6 +625,14 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, extBase.c_str(),
         L"PerceivedType", L"compressed"));
 
+    // Offer the ProgID as a choice for this extension. This is the value
+    // the "choose an app" list is built from — the Capabilities key only
+    // decides what the Default apps *page* lists, not what the picker
+    // behind it contains, which is why ArchiveFldr could be on that page
+    // with .7z under it and still be absent from the list that opens.
+    // Adding a value here takes the type from no one.
+    OfferProgIdFor(ext, progId, ExtensionIsWanted(ext));
+
     // Older ArchiveFldr builds wrote a bogus ".ext\ShellFolder = {CLSID}" key.
     // That is not a junction location the shell has ever read, so it did
     // nothing; drop it instead of leaving confusing leftovers behind.
@@ -468,13 +654,29 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
     return S_OK;
 }
 
-HRESULT CRegistry::UnregisterExtension(const wchar_t* ext)
+HRESULT CRegistry::UnregisterExtension(const wchar_t* ext,
+                                       const wchar_t* progId)
 {
     const std::wstring folder = ClsidToStr(CLSID_ArchiveFldrFolder);
 
     std::wstring extBase = std::wstring(L"Software\\Classes\\") + ext;
     UnregisterShellExOnBase(extBase);
     DelRegKey(HKEY_LOCAL_MACHINE, (extBase + L"\\ShellFolder").c_str());
+
+    // Stop offering ourselves in this extension's app picker. One value,
+    // not the key: everyone else who can open a .zip is listed in there
+    // too, and deleting the key would take them all out with us.
+    if (progId && *progId)
+    {
+        HKEY hk = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                (extBase + L"\\OpenWithProgids").c_str(), 0, KEY_SET_VALUE,
+                &hk) == ERROR_SUCCESS)
+        {
+            RegDeleteValueW(hk, progId);
+            RegCloseKey(hk);
+        }
+    }
 
     std::wstring sfaBase =
         std::wstring(L"Software\\Classes\\SystemFileAssociations\\") + ext;
@@ -561,7 +763,13 @@ HRESULT CRegistry::RegisterCapabilities(const wchar_t* /*dllPath*/)
     {
         std::wstring ext = f->ext;
         for (auto& ch : ext) ch = (wchar_t)towlower(ch);
-        if (wanted.find(ext) == wanted.end()) continue;
+        const bool want = wanted.find(ext) != wanted.end();
+
+        // Keep the picker list in step with the page the user just left,
+        // so ticking a format here does not need a re-register to show up.
+        OfferProgIdFor(f->ext, f->progId, want);
+
+        if (!want) continue;
         RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, assoc.c_str(),
                                    f->ext, f->progId));
     }
@@ -644,6 +852,10 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
     UnregisterApproved(CLSID_ArchiveFldrPropSheet);
     UnregisterCOMServer(CLSID_ArchiveFldrPropSheet);
 
+    // 4c. The companion program, so the open verb each ProgID gets below
+    //     has a name and an icon to show in Windows' app picker.
+    RegisterOpenWithApp(dllPath);
+
     // 5. Extensions — every row in the Formats table that carries a
     //    progId. Registering and unregistering now read the same list, so
     //    they cannot drift apart the way two hand-written copies did.
@@ -689,6 +901,9 @@ HRESULT CRegistry::UnregisterAll()
     for (const wchar_t* base : kAllFilesBases)
         UnregisterContextMenuOnBase(std::wstring(L"Software\\Classes\\") + base);
 
+    // The companion program's application registration.
+    UnregisterOpenWithApp();
+
     // Everything we ever registered, plus a few progIds from older builds
     // that are no longer in the table, so an upgrade cleans up after
     // itself rather than leaving orphans behind.
@@ -706,7 +921,7 @@ HRESULT CRegistry::UnregisterAll()
 
     for (const auto& e : exts)
     {
-        UnregisterExtension(e.ext);
+        UnregisterExtension(e.ext, e.progId);
 
         // Remove entire ProgID tree we created
         std::wstring progBase = std::wstring(L"Software\\Classes\\") + e.progId;

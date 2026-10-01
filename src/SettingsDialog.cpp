@@ -306,7 +306,8 @@ static std::wstring ReadRegString(HKEY root, const std::wstring& key,
 
 // What Windows runs for the open verb of the first file type ArchiveFldr
 // registers. Shown on the Integration page because "nothing happens when I
-// double-click" has exactly two causes, and this tells them apart.
+// double-click" is otherwise unanswerable from outside the registry: this
+// says whether the file type is wired to Explorer at all.
 static std::wstring RegisteredOpenCommand()
 {
     for (const auto* f : Formats::Registrable())
@@ -372,10 +373,9 @@ void CPageIntegration::Load() {
     status += advertised ? L"  \u2022  listed in Default apps"
                          : L"  \u2022  not listed in Default apps";
 
-    // Second line: the command Windows runs when an archive is opened.
-    // It is the one piece of this that cannot be guessed from the outside
-    // — if it names Explorer rather than the companion program, the
-    // program was not beside the DLL when registration ran.
+    // Second line: the command Windows runs when an archive is opened. It
+    // should name Explorer.exe with /idlist, the same verb the built-in zip
+    // folder uses; anything else means another program owns the type.
     status += L"\r\n";
     status += L"Opens with: " + RegisteredOpenCommand();
 

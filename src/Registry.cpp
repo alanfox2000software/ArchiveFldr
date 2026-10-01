@@ -244,21 +244,41 @@ HRESULT CRegistry::RegisterNamespaceFolder(const wchar_t* dllPath)
         (base + L"\\Implemented Categories\\" + kCatidBrowsableShellExt).c_str(),
         nullptr, L""));
 
-    // What a ZIP file reports, which is the shape the shell already knows
-    // how to handle: a folder whose backing store is a file. SFGAO_STREAM is
-    // the bit that says so — without it the junction describes a virtual
-    // folder that merely happens to live at a file's path.
-    const DWORD kFolderAttributes =
-        SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_BROWSABLE |
-        SFGAO_DROPTARGET | SFGAO_STREAM;
+    // The value Windows ships for CompressedFolder, the .zip junction this
+    // one is modelled on: 0x200001A0.
+    //
+    //   0x20000000  SFGAO_FOLDER      — the file browses as a folder
+    //   0x00000100  SFGAO_DROPTARGET  — things can be dropped on it
+    //   0x00000020  SFGAO_CANDELETE
+    //   0x00000080  undocumented, and shipped anyway
+    //
+    // Guessing a set was the mistake here. Earlier builds added
+    // SFGAO_HASSUBFOLDER and SFGAO_BROWSABLE, neither of which zipfldr
+    // sets: the first hangs an expand arrow off every archive in the
+    // navigation pane, and the second describes a root that can be hosted
+    // in a browser frame, which a file junction is not.
+    const DWORD kFolderAttributes = 0x200001A0;
 
     RETURN_IF_FAILED(SetRegDword(HKEY_LOCAL_MACHINE,
         (base + L"\\ShellFolder").c_str(), L"Attributes", kFolderAttributes));
 
-    // Tells the shell to ask IShellFolder::GetDisplayNameOf(SHGDN_FORPARSING)
-    // for this junction's parsing name (used by the address bar / breadcrumb).
+    // Send drops to the DropHandler registered on the file type rather than
+    // to the folder object. Also copied from CompressedFolder.
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
-        (base + L"\\ShellFolder").c_str(), L"WantsFORPARSING", L""));
+        (base + L"\\ShellFolder").c_str(), L"UseDropHandler", L""));
+
+    // WantsFORPARSING is gone with the rest of the guesswork: the parsing
+    // name of an archive is its path, which is what the shell uses anyway
+    // when no one asks to answer for it. zipfldr does not set it either.
+    {
+        HKEY hk = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, (base + L"\\ShellFolder").c_str(),
+                          0, KEY_SET_VALUE, &hk) == ERROR_SUCCESS)
+        {
+            RegDeleteValueW(hk, L"WantsFORPARSING");
+            RegCloseKey(hk);
+        }
+    }
 
     return S_OK;
 }
@@ -388,41 +408,29 @@ HRESULT CRegistry::UnregisterCOMServer(const CLSID& clsid)
 // from nobody and is exactly how an installer asks to be choosable.
 static constexpr wchar_t kFriendlyAppName[] = L"ArchiveFldr";
 
-// A handler also has to be a program. ArchiveFldr's code is in a DLL, and
-// a DLL cannot appear in a list of applications, so the open verb points
-// at the companion executable that ships beside it — the same one the
-// context menu opens for settings, which browses an archive when it is
-// handed a path. When it is missing (DLL deployed on its own) the verb
-// falls back to Explorer, which still works; it just shows up in the
-// picker as "File Explorer", indistinguishable from the built-in handler.
-static std::wstring CompanionExe(const wchar_t* dllPath)
+// The verb itself stays with Explorer. ArchiveFldr opens archives through
+// its namespace extension — the DLL — exactly the way the built-in zip
+// folder does, so the open verb is the same one Windows registers for
+// CompressedFolder and the browsing is done by the shell, in the window
+// the user is already looking at. An executable in the middle of that is
+// a second process that can only get in the way.
+//
+// Windows registers it like this (HKCR\CompressedFolder\shell\Open):
+//
+//     MultiSelectModel = Document
+//     Command\(Default)       = %SystemRoot%\Explorer.exe /idlist,%I,%L
+//     Command\DelegateExecute = {11dbb47c-a525-400b-9e80-a54615a090c0}
+//
+// That GUID is the shell's own "open this folder" IExecuteCommand handler,
+// and on Windows 10 and 11 it is what actually runs; the command line is
+// the fallback for callers that cannot use a delegate. Registering only
+// the command line — which is what ArchiveFldr did — leaves the open verb
+// taking a different code path from every real folder on the machine.
+static constexpr wchar_t kFolderOpenDelegate[] =
+    L"{11dbb47c-a525-400b-9e80-a54615a090c0}";
+
+static std::wstring ExplorerOpenCommand()
 {
-    if (!dllPath || !*dllPath) return L"";
-
-    wchar_t dir[MAX_PATH] = {};
-    wcsncpy_s(dir, dllPath, _TRUNCATE);
-    PathRemoveFileSpecW(dir);
-
-#ifdef _WIN64
-    const wchar_t* tagged = L"ArchiveFldrSetting.64.exe";
-#else
-    const wchar_t* tagged = L"ArchiveFldrSetting.32.exe";
-#endif
-    const wchar_t* candidates[] = { tagged, L"ArchiveFldrSetting.exe" };
-    for (const wchar_t* c : candidates)
-    {
-        std::wstring p = std::wstring(dir) + L"\\" + c;
-        if (PathFileExistsW(p.c_str())) return p;
-    }
-    return L"";
-}
-
-static std::wstring OpenCommandFor(const wchar_t* dllPath)
-{
-    const std::wstring exe = CompanionExe(dllPath);
-    if (!exe.empty())
-        return L"\"" + exe + L"\" /open \"%1\"";
-
     wchar_t win[MAX_PATH] = {};
     if (!GetWindowsDirectoryW(win, ARRAYSIZE(win)))
         wcscpy_s(win, L"C:\\Windows");
@@ -449,37 +457,19 @@ static std::wstring TypeNameFor(const wchar_t* ext)
     return name + L" archive";
 }
 
-// HKCR\Applications\<exe> is where the shell looks up the display name and
-// icon of a program it is about to offer or has just been told to use.
-// Deliberately no SupportedTypes value: that would add a *second*
-// ArchiveFldr row to every picker, one for the ProgID and one for the
-// executable, and the two behave differently once chosen.
-HRESULT CRegistry::RegisterOpenWithApp(const wchar_t* dllPath)
+// Earlier builds pointed the open verb at the settings program and gave it
+// an application registration so Windows' app picker had a name to show.
+// The verb belongs to Explorer again, so the key is dead weight: remove it
+// on registration as well as on unregistration, or an install that was
+// upgraded keeps advertising a program that no longer opens anything.
+void CRegistry::UnregisterOpenWithApp()
 {
-    const std::wstring exe = CompanionExe(dllPath);
-    if (exe.empty()) return S_FALSE;
-
-    const std::wstring base = std::wstring(L"Software\\Classes\\Applications\\") +
-                              PathFindFileNameW(exe.c_str());
-
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, base.c_str(),
-        nullptr, kFriendlyAppName));
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, base.c_str(),
-        L"FriendlyAppName", kFriendlyAppName));
-
-    {
-        const std::wstring icon = SystemIcon(L"zipfldr.dll", 0);
-        if (!icon.empty())
-            SetRegStr(HKEY_LOCAL_MACHINE, (base + L"\\DefaultIcon").c_str(),
-                      nullptr, icon.c_str());
-    }
-
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
-        (base + L"\\shell\\open").c_str(), L"FriendlyAppName", kFriendlyAppName));
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
-        (base + L"\\shell\\open\\command").c_str(), nullptr,
-        OpenCommandFor(dllPath).c_str()));
-    return S_OK;
+    const wchar_t* names[] = { L"ArchiveFldrSetting.64.exe",
+                               L"ArchiveFldrSetting.32.exe",
+                               L"ArchiveFldrSetting.exe" };
+    for (const wchar_t* n : names)
+        DelRegKey(HKEY_LOCAL_MACHINE,
+                  (std::wstring(L"Software\\Classes\\Applications\\") + n).c_str());
 }
 
 // Add or remove one ProgID in one extension's picker list. Driven by the
@@ -526,16 +516,6 @@ static bool ExtensionIsWanted(const wchar_t* ext)
     return wanted.find(low) != wanted.end();
 }
 
-void CRegistry::UnregisterOpenWithApp()
-{
-    const wchar_t* names[] = { L"ArchiveFldrSetting.64.exe",
-                               L"ArchiveFldrSetting.32.exe",
-                               L"ArchiveFldrSetting.exe" };
-    for (const wchar_t* n : names)
-        DelRegKey(HKEY_LOCAL_MACHINE,
-                  (std::wstring(L"Software\\Classes\\Applications\\") + n).c_str());
-}
-
 // ── File extension registration ───────────────────────────
 HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
                                       const wchar_t* progId,
@@ -578,26 +558,25 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
     // which registers HKCR\CompressedFolder\CLSID the same way.
     RETURN_IF_FAILED(TakeOverJunction(progBase + L"\\CLSID", folder));
 
-    // The open verb. Inside Explorer a double-click rarely reaches it —
-    // the CLSID junction above makes the file report itself as a folder, so
-    // the shell navigates into it instead of invoking a command. The verb is
-    // what everything else uses: "Open with", ShellExecute from another
-    // program, and the row Windows shows in its app picker.
+    // The open verb — Explorer's, delegate and all. See kFolderOpenDelegate.
     {
         std::wstring openKey = progBase + L"\\shell\\open";
         RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, openKey.c_str(),
             L"MultiSelectModel", L"Document"));
 
-        // What the picker calls this entry. Without it the name comes from
-        // the version resource of whatever the command line names, so the
-        // Explorer fallback would read "File Explorer" — the one label that
-        // cannot be told apart from the handler already in the list.
+        // What Windows' app picker calls this entry. Without it the name
+        // comes from the version resource of whatever the command line
+        // names — Explorer.exe — so the row would read "File Explorer",
+        // the one label that cannot be told apart from the handler already
+        // in the list.
         RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, openKey.c_str(),
             L"FriendlyAppName", kFriendlyAppName));
 
-        RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
-            (openKey + L"\\command").c_str(), nullptr,
-            OpenCommandFor(dllPath).c_str()));
+        const std::wstring cmdKey = openKey + L"\\command";
+        RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(),
+            nullptr, ExplorerOpenCommand().c_str()));
+        RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(),
+            L"DelegateExecute", kFolderOpenDelegate));
     }
 
     // (No extra "open with ArchiveFldr" static verb here on purpose: the
@@ -856,9 +835,9 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
     UnregisterApproved(CLSID_ArchiveFldrPropSheet);
     UnregisterCOMServer(CLSID_ArchiveFldrPropSheet);
 
-    // 4c. The companion program, so the open verb each ProgID gets below
-    //     has a name and an icon to show in Windows' app picker.
-    RegisterOpenWithApp(dllPath);
+    // 4c. Drop the application registration older builds wrote for the
+    //     settings program, which is no longer part of opening anything.
+    UnregisterOpenWithApp();
 
     // 5. Extensions — every row in the Formats table that carries a
     //    progId. Registering and unregistering now read the same list, so
@@ -905,7 +884,8 @@ HRESULT CRegistry::UnregisterAll()
     for (const wchar_t* base : kAllFilesBases)
         UnregisterContextMenuOnBase(std::wstring(L"Software\\Classes\\") + base);
 
-    // The companion program's application registration.
+    // The application registration older builds wrote for the settings
+    // program.
     UnregisterOpenWithApp();
 
     // Everything we ever registered, plus a few progIds from older builds

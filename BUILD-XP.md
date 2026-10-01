@@ -89,27 +89,13 @@ The solution produces two binaries per configuration, both into
 | File | What it is |
 |---|---|
 | `ArchiveFldr.64.dll` / `ArchiveFldr.32.dll` | the shell extension — this is the file `regsvr32` registers |
-| `ArchiveFldrSetting.64.exe` / `ArchiveFldrSetting.32.exe` | the companion program: the settings window, and the `open` verb for archive file types |
+| `ArchiveFldrSetting.64.exe` / `ArchiveFldrSetting.32.exe` | the settings window, started by "ArchiveFldr settings..." |
 
-Only the DLL is registered. The companion program is an ordinary
+Only the DLL is registered. The settings program is an ordinary
 executable that the DLL starts on demand, which keeps a six-page dialog
 out of every process that loads a context menu. It looks for the
 bitness-matched DLL next to itself when you use its Register button, so
 keep the pair together.
-
-It has a second job. Windows' "choose an app" list is a list of
-*applications*, and a shell extension DLL can never be a row in it, so
-each archive file type registers its open verb against this executable:
-
-```
-ArchiveFldrSetting.64.exe /open "C:\path\to\archive.7z"
-```
-
-Run with no arguments it shows the settings window; handed a path it
-browses that archive in Explorer and exits. If the executable is missing
-at registration time the verb falls back to
-`Explorer.exe /idlist,%I,%L`, which still opens the archive but is
-indistinguishable from the built-in handler in the app picker.
 
 Registration writes to HKLM. The settings program runs `asInvoker`, so
 its Register / Unregister buttons only work when it was started as

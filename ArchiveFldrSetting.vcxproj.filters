@@ -22,14 +22,12 @@
     <ClCompile Include="src\Registry.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\Formats.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\SysInfo.cpp"><Filter>Source Files</Filter></ClCompile>
-    <ClCompile Include="src\BrowseTo.cpp"><Filter>Source Files</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\stdafx.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\Settings.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\SettingsDialog.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\Registry.h"><Filter>Header Files</Filter></ClInclude>
-    <ClInclude Include="src\BrowseTo.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\Formats.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\SysInfo.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\GUIDs.h"><Filter>Header Files</Filter></ClInclude>

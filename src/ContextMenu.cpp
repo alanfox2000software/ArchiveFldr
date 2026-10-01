@@ -519,7 +519,13 @@ static bool BrowseWithSite(IUnknown* punk, LPCITEMIDLIST pidlRel,
                                          (void**)&psb)) || !psb)
             continue;
 
-        HRESULT hr = psb->BrowseObject(pidlRel, SBSP_RELATIVE | SBSP_DEFBROWSER);
+        // pidlRel is null when the caller only has an absolute PIDL. Handing
+        // one to SBSP_RELATIVE asks the browser to append it to the folder
+        // it is already showing, which navigates somewhere that does not
+        // exist — and can report success doing it.
+        HRESULT hr = E_FAIL;
+        if (pidlRel)
+            hr = psb->BrowseObject(pidlRel, SBSP_RELATIVE | SBSP_DEFBROWSER);
         if (FAILED(hr) && pidlAbs)      // not the browser's current folder
             hr = psb->BrowseObject(pidlAbs, SBSP_ABSOLUTE | SBSP_DEFBROWSER);
         psb->Release();
@@ -550,7 +556,9 @@ static bool BrowseWithWindow(HWND hwnd, LPCITEMIDLIST pidlRel,
             auto* psb = (IShellBrowser*)SendMessageW(c, kGetIShellBrowser, 0, 0);
             if (!psb) continue;
 
-            HRESULT hr = psb->BrowseObject(pidlRel, SBSP_RELATIVE | SBSP_DEFBROWSER);
+            HRESULT hr = E_FAIL;
+            if (pidlRel)
+                hr = psb->BrowseObject(pidlRel, SBSP_RELATIVE | SBSP_DEFBROWSER);
             if (FAILED(hr) && pidlAbs)
                 hr = psb->BrowseObject(pidlAbs, SBSP_ABSOLUTE | SBSP_DEFBROWSER);
             if (SUCCEEDED(hr)) return true;
@@ -594,13 +602,13 @@ static bool JunctionIsOurs(LPCITEMIDLIST pidlAbs)
 static bool BrowseAbsoluteInPlace(IUnknown* site, HWND hwnd,
                                   LPCITEMIDLIST pidlAbs)
 {
-    if (BrowseWithSite(site, pidlAbs, pidlAbs)) return true;
-    if (hwnd && BrowseWithWindow(hwnd, pidlAbs, pidlAbs)) return true;
+    if (BrowseWithSite(site, nullptr, pidlAbs)) return true;
+    if (hwnd && BrowseWithWindow(hwnd, nullptr, pidlAbs)) return true;
 
     IUnknown* punkThread = nullptr;
     if (SUCCEEDED(SHGetThreadRef(&punkThread)) && punkThread)
     {
-        const bool ok = BrowseWithSite(punkThread, pidlAbs, pidlAbs);
+        const bool ok = BrowseWithSite(punkThread, nullptr, pidlAbs);
         punkThread->Release();
         if (ok) return true;
     }

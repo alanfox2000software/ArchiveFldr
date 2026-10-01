@@ -150,23 +150,31 @@ int OpenArchiveWindow(const std::wstring& raw)
         return 1;
     }
 
-    // A folder is just a folder — open it and say nothing about junctions.
-    if (!PathIsDirectoryW(path.c_str()) && !JunctionIsOurs(pidl))
+    // Try first, diagnose afterwards. A check in front of the attempt can
+    // only turn a working case into a dialog; a check behind it can only
+    // explain one that already failed.
+    const bool opened = ShellBrowseToFolder(nullptr, pidl);
+    if (opened)
     {
         ILFree(pidl);
+        return 0;
+    }
+
+    const bool ours = PathIsDirectoryW(path.c_str()) || JunctionIsOurs(pidl);
+    ILFree(pidl);
+
+    if (!ours)
+    {
         LPCWSTR dot = PathFindExtensionW(path.c_str());
         OfferDefaultApps((dot && *dot) ? dot : L"");
         return 1;
     }
 
-    const bool opened = ShellBrowseToFolder(nullptr, pidl);
-    ILFree(pidl);
-    if (opened) return 0;
-
     MessageBoxW(nullptr,
-        L"ArchiveFldr could not open a view of this archive.\n\n"
-        L"Make sure the extension is registered (run, as administrator):\n"
-        L"    regsvr32 ArchiveFldr.64.dll",
+        (L"ArchiveFldr could not open a view of this archive:\n\n" + path +
+         L"\n\nThe file type points at ArchiveFldr, so the extension is "
+         L"registered — it is Explorer that refused to browse the item. "
+         L"Restarting Explorer usually clears this.").c_str(),
         L"ArchiveFldr", MB_ICONERROR | MB_OK);
     return 1;
 }

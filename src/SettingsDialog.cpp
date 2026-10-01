@@ -286,6 +286,39 @@ void CPageIntegration::Resize(const RECT& rc) {
         rc.left,rc.top,rc.right-rc.left,rc.bottom-rc.top,
         SWP_NOZORDER|SWP_NOACTIVATE);
 }
+// Read one string value; empty when the key or value is absent.
+static std::wstring ReadRegString(HKEY root, const std::wstring& key,
+                                  const wchar_t* value)
+{
+    HKEY hk = nullptr;
+    if (RegOpenKeyExW(root, key.c_str(), 0, KEY_QUERY_VALUE, &hk)
+            != ERROR_SUCCESS)
+        return L"";
+    wchar_t buf[1024] = {};
+    DWORD cb = sizeof(buf), type = 0;
+    const LONG rc = RegQueryValueExW(hk, value, nullptr, &type,
+                                     reinterpret_cast<BYTE*>(buf), &cb);
+    RegCloseKey(hk);
+    if (rc != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ))
+        return L"";
+    return buf;
+}
+
+// What Windows runs for the open verb of the first file type ArchiveFldr
+// registers. Shown on the Integration page because "nothing happens when I
+// double-click" has exactly two causes, and this tells them apart.
+static std::wstring RegisteredOpenCommand()
+{
+    for (const auto* f : Formats::Registrable())
+    {
+        const std::wstring cmd = ReadRegString(HKEY_LOCAL_MACHINE,
+            std::wstring(L"Software\\Classes\\") + f->progId +
+            L"\\shell\\open\\command", nullptr);
+        if (!cmd.empty()) return cmd;
+    }
+    return L"(nothing registered)";
+}
+
 void CPageIntegration::Load() {
     if (!m_hwnd) return;
     auto& s = Settings::Get();
@@ -302,16 +335,22 @@ void CPageIntegration::Load() {
     SetChk(m_hwnd, IDC_CHK_CTX_SUBMENU,        s.ctxUseSubMenu);
     SetDlgItemTextW(m_hwnd, IDC_EDIT_SUBMENU_TITLE, s.ctxSubMenuTitle.c_str());
 
-    // Registration status
+    // Registration status.
+    //
+    // This used to report "Registered" whenever the Approved key could be
+    // opened — a key that exists on every Windows install, so the answer
+    // was always yes. Ask the question that actually matters instead: is
+    // the namespace extension's COM server registered, and is the file it
+    // names still there?
     const std::wstring dllPath = ShellExtensionPath();
-    bool registered = !dllPath.empty() && PathFileExistsW(dllPath.c_str()) &&
-        []{
-            HKEY hk=nullptr;
-            bool ok = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-                kRegKeyApproved,0,KEY_READ,&hk)==ERROR_SUCCESS;
-            if(hk) RegCloseKey(hk);
-            return ok;
-        }();
+    const bool registered = []{
+        wchar_t sid[64] = {};
+        StringFromGUID2(CLSID_ArchiveFldrFolder, sid, ARRAYSIZE(sid));
+        const std::wstring key = std::wstring(L"Software\\Classes\\CLSID\\") +
+                                 sid + L"\\InProcServer32";
+        const std::wstring server = ReadRegString(HKEY_LOCAL_MACHINE, key, nullptr);
+        return !server.empty() && PathFileExistsW(server.c_str());
+    }();
     // What the registry actually says, which is not necessarily what the
     // checkboxes were left at: writing needs admin and can have failed.
     const bool advertised = []{
@@ -332,6 +371,14 @@ void CPageIntegration::Load() {
                                      : L"\u2717 Not registered";
     status += advertised ? L"  \u2022  listed in Default apps"
                          : L"  \u2022  not listed in Default apps";
+
+    // Second line: the command Windows runs when an archive is opened.
+    // It is the one piece of this that cannot be guessed from the outside
+    // — if it names Explorer rather than the companion program, the
+    // program was not beside the DLL when registration ran.
+    status += L"\r\n";
+    status += L"Opens with: " + RegisteredOpenCommand();
+
     SetDlgItemTextW(m_hwnd, IDC_LBL_STATUS_REG, status.c_str());
 }
 void CPageIntegration::Save() {

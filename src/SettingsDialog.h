@@ -17,6 +17,7 @@ public:
     virtual void  Resize (const RECT& rc) = 0;
     virtual bool  Dirty  () const       = 0;
     virtual const wchar_t* Title() const = 0;
+    virtual HWND  GetHwnd() const       = 0;
 };
 
 // ── Concrete pages ────────────────────────────────────────
@@ -27,6 +28,7 @@ public:
     void  Resize(const RECT&) override;
     bool  Dirty() const override { return m_dirty; }
     const wchar_t* Title() const override { return L"General"; }
+    HWND GetHwnd() const override { return m_hwnd; }
 private:
     static INT_PTR CALLBACK DlgProc(HWND,UINT,WPARAM,LPARAM);
     HWND m_hwnd=nullptr; bool m_dirty=false;
@@ -39,6 +41,7 @@ public:
     void  Resize(const RECT&) override;
     bool  Dirty() const override { return m_dirty; }
     const wchar_t* Title() const override { return L"Formats"; }
+    HWND GetHwnd() const override { return m_hwnd; }
 private:
     static INT_PTR CALLBACK DlgProc(HWND,UINT,WPARAM,LPARAM);
     HWND m_hwnd=nullptr; bool m_dirty=false;
@@ -54,6 +57,7 @@ public:
     void  Resize(const RECT&) override;
     bool  Dirty() const override { return m_dirty; }
     const wchar_t* Title() const override { return L"Integration"; }
+    HWND GetHwnd() const override { return m_hwnd; }
 private:
     static INT_PTR CALLBACK DlgProc(HWND,UINT,WPARAM,LPARAM);
     HWND m_hwnd=nullptr; bool m_dirty=false;
@@ -66,6 +70,7 @@ public:
     void  Resize(const RECT&) override;
     bool  Dirty() const override { return m_dirty; }
     const wchar_t* Title() const override { return L"Appearance"; }
+    HWND GetHwnd() const override { return m_hwnd; }
 private:
     static INT_PTR CALLBACK DlgProc(HWND,UINT,WPARAM,LPARAM);
     HWND m_hwnd=nullptr; bool m_dirty=false;
@@ -78,6 +83,7 @@ public:
     void  Resize(const RECT&) override;
     bool  Dirty() const override { return m_dirty; }
     const wchar_t* Title() const override { return L"Advanced"; }
+    HWND GetHwnd() const override { return m_hwnd; }
 private:
     static INT_PTR CALLBACK DlgProc(HWND,UINT,WPARAM,LPARAM);
     HWND m_hwnd=nullptr; bool m_dirty=false;
@@ -90,6 +96,7 @@ public:
     void  Resize(const RECT&) override;
     bool  Dirty() const override { return false; }
     const wchar_t* Title() const override { return L"About"; }
+    HWND GetHwnd() const override { return m_hwnd; }
 private:
     static INT_PTR CALLBACK DlgProc(HWND,UINT,WPARAM,LPARAM);
     HWND m_hwnd=nullptr;

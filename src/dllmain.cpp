@@ -31,7 +31,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, LPVOID /*lpReserved*/)
         {
             INITCOMMONCONTROLSEX icc{sizeof(icc),
                 ICC_WIN95_CLASSES | ICC_BAR_CLASSES |
-                ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES};
+                ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES |
+                ICC_UPDOWN_CLASS};
             InitCommonControlsEx(&icc);
         }
         // Load settings

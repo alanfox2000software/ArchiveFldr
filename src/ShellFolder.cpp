@@ -107,6 +107,7 @@ LPITEMIDLIST CPidlMgr::Create(const ArchiveEntry& e)
     item->mtime     = e.modifiedTime;
     if (e.isEncrypted) item->flags |= NSE_FLAG_ENC;
     if (e.hasCrc)      item->flags |= NSE_FLAG_HASCRC;
+    if (!e.sizeKnown)  item->flags |= NSE_FLAG_NOSIZE;
     wcsncpy_s(item->method, e.compressionMethod.c_str(), _TRUNCATE);
     memcpy(item->name, e.name.c_str(), nameBytes);
 
@@ -800,7 +801,10 @@ STDMETHODIMP CShellFolder::GetDetailsEx(
     switch (col)
     {
     case 1:                                   // Size
-        if (isDir) return S_FALSE;
+        // Explorer formats this column itself from PKEY_Size. Handing it a
+        // zero for "unknown" made it print "0 KB"; S_FALSE leaves the cell
+        // to GetDetailsOf, which writes an em dash.
+        if (isDir || (item->flags & NSE_FLAG_NOSIZE)) return S_FALSE;
         V_VT(pv)  = VT_UI8;
         V_UI8(pv) = item->fileSize;
         return S_OK;
@@ -860,6 +864,7 @@ STDMETHODIMP CShellFolder::GetDetailsOf(
         return SHStrDupW(item->name, &psd->str.pOleStr);
     case 1: // Size
         if (item->flags & NSE_FLAG_DIR) wcscpy_s(buf,L"<DIR>");
+        else if (item->flags & NSE_FLAG_NOSIZE) wcscpy_s(buf, L"\u2014");
         else wcsncpy_s(buf, ArchiveOps::FormatSizeKB(item->fileSize).c_str(),
                        _TRUNCATE);
         psd->fmt = LVCFMT_RIGHT; break;
@@ -875,6 +880,8 @@ STDMETHODIMP CShellFolder::GetDetailsOf(
         psd->fmt = LVCFMT_RIGHT; break;
     case 3: { // Ratio
         if (item->flags & NSE_FLAG_DIR) { psd->fmt = LVCFMT_RIGHT; break; }
+        if (item->flags & NSE_FLAG_NOSIZE) {       // nothing to compare to
+            wcscpy_s(buf, L"\u2014"); psd->fmt = LVCFMT_RIGHT; break; }
         std::wstring r = ArchiveOps::FormatRatio(item->fileSize,
                                                  item->packedSize);
         wcsncpy_s(buf, r.c_str(), _TRUNCATE);

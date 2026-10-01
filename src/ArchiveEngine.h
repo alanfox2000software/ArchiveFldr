@@ -10,6 +10,10 @@ struct ArchiveEntry {
     std::wstring fullPath;
     bool         isDirectory       = false;
     uint64_t     uncompressedSize  = 0;
+    // False when the format does not record the original size. A raw
+    // Brotli stream never does, and LZ4/LZ5/Zstandard only do when the
+    // compressor chose to write it. Zero must not be shown as "0 KB".
+    bool         sizeKnown         = true;
     uint64_t     compressedSize    = 0;
     // True when compressedSize is this item's share of a solid block
     // rather than a figure the archive stores for it alone.

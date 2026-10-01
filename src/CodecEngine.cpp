@@ -200,11 +200,107 @@ std::wstring Widen(const char* s)
     return w;
 }
 
+// ── Reading the original size out of the frame header ───────────────────
+//
+// Every one of these formats may record the uncompressed size in its
+// frame header. Parsing those few bytes ourselves beats asking the codec
+// DLL for two reasons: the size then shows even when the DLL is missing,
+// and it does not depend on which helper functions a given build happens
+// to export.
+//
+// Returns false when the format did not record a size — which is normal
+// and must be reported as "unknown", never as zero.
+
+bool ReadHead(const std::wstring& path, uint8_t* buf, DWORD want, DWORD* got)
+{
+    *got = 0;
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    BOOL ok = ReadFile(h, buf, want, got, nullptr);
+    CloseHandle(h);
+    return ok != FALSE;
+}
+
+uint64_t LoadLE(const uint8_t* p, int n)
+{
+    uint64_t v = 0;
+    for (int i = n - 1; i >= 0; --i) v = (v << 8) | p[i];
+    return v;
+}
+
+// Zstandard frame header, per RFC 8878 section 3.1.1.1.
+bool ZstdFrameSize(const uint8_t* b, DWORD n, uint64_t* out)
+{
+    if (n < 6) return false;
+    if (LoadLE(b, 4) != 0xFD2FB528ULL) return false;      // not a zstd frame
+
+    const uint8_t fhd        = b[4];
+    const int  fcsFlag       = (fhd >> 6) & 3;
+    const bool singleSegment = ((fhd >> 5) & 1) != 0;
+    const int  dictIdFlag    = fhd & 3;
+
+    // Frame_Content_Size is 0 bytes unless the flag says otherwise — but a
+    // single-segment frame always carries at least one byte of it.
+    static const int kFcsSize[4] = { 0, 2, 4, 8 };
+    int fcsSize = kFcsSize[fcsFlag];
+    if (fcsFlag == 0 && singleSegment) fcsSize = 1;
+    if (fcsSize == 0) return false;                       // size not stored
+
+    static const int kDictSize[4] = { 0, 1, 2, 4 };
+    DWORD pos = 5;
+    if (!singleSegment) pos += 1;                         // Window_Descriptor
+    pos += kDictSize[dictIdFlag];
+
+    if (pos + (DWORD)fcsSize > n) return false;
+    uint64_t v = LoadLE(b + pos, fcsSize);
+    if (fcsSize == 2) v += 256;                           // per the spec
+    *out = v;
+    return true;
+}
+
+// LZ4 frame header (RFC-documented). LZ5 and Lizard are forks that kept
+// the same layout and only bumped the magic number.
+bool Lz4FamilyFrameSize(const uint8_t* b, DWORD n, uint64_t* out)
+{
+    if (n < 15) return false;
+    const uint64_t magic = LoadLE(b, 4);
+    if (magic < 0x184D2204ULL || magic > 0x184D2208ULL) return false;
+
+    const uint8_t flg = b[4];
+    if (((flg >> 6) & 3) != 1) return false;              // version must be 01
+    if (((flg >> 3) & 1) == 0) return false;              // no content size
+
+    *out = LoadLE(b + 6, 8);                              // after FLG and BD
+    return true;
+}
+
+bool ProbeOriginalSize(const std::wstring& codecId,
+                       const std::wstring& path, uint64_t* out)
+{
+    uint8_t head[64] = {};
+    DWORD   got = 0;
+    if (!ReadHead(path, head, sizeof(head), &got) || got < 6) return false;
+
+    if (codecId == L"zstd")
+        return ZstdFrameSize(head, got, out);
+    if (codecId == L"lz4" || codecId == L"lz5" || codecId == L"lizard")
+        return Lz4FamilyFrameSize(head, got, out);
+
+    // Brotli streams carry no uncompressed length at all.
+    return false;
+}
+
 // ── Output sink: a real file, or nowhere (for Test) ─────────────────────
 class Sink
 {
 public:
-    explicit Sink(const std::wstring& path) : m_discard(path.empty())
+    // `limit` caps how many bytes we are willing to accept (0 = no cap).
+    // Only the size-measuring pass sets it, so a deliberately crafted
+    // stream cannot expand without bound while Explorer waits.
+    explicit Sink(const std::wstring& path, uint64_t limit = 0)
+        : m_discard(path.empty()), m_limit(limit)
     {
         if (m_discard) return;
         m_h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
@@ -217,14 +313,18 @@ public:
     bool Write(const void* data, size_t n)
     {
         m_total += n;
+        if (m_limit && m_total > m_limit) { m_overflowed = true; return false; }
         if (m_discard || n == 0) return true;
         DWORD wrote = 0;
         return WriteFile(m_h, data, (DWORD)n, &wrote, nullptr) && wrote == n;
     }
     uint64_t Total() const { return m_total; }
+    bool Overflowed() const { return m_overflowed; }
 
 private:
     bool     m_discard;
+    uint64_t m_limit = 0;
+    bool     m_overflowed = false;
     HANDLE   m_h     = INVALID_HANDLE_VALUE;
     uint64_t m_total = 0;
 };
@@ -283,34 +383,60 @@ bool CCodecEngine::Open(const std::wstring& path)
     m_entry.compressionMethod = m_formatName;
     m_entry.engineIndex       = 0;
 
-    // zstd records the decompressed size in its frame header, so the view
-    // can show a real size without decoding anything. The other four do
-    // not, and inventing a number would be worse than leaving it blank.
-    Codec& c = GetCodec(m_codecId);
-    if (c.kind == Codec::Kind::Zstd && c.zstd.getFrameContentSize)
+    // Read the original size straight out of the frame header. This works
+    // with no codec DLL present at all, and several of these formats
+    // simply never record it — in which case the size stays unknown and
+    // the view shows that honestly rather than printing "0 KB".
+    uint64_t original = 0;
+    if (ProbeOriginalSize(m_codecId, path, &original))
     {
-        HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
-                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
-                               nullptr);
-        if (h != INVALID_HANDLE_VALUE)
-        {
-            uint8_t head[64] = {};
-            DWORD   got = 0;
-            if (ReadFile(h, head, sizeof(head), &got, nullptr) && got > 0)
-            {
-                unsigned long long sz = c.zstd.getFrameContentSize(head, got);
-                if (sz != kZstdContentSizeUnknown && sz != kZstdContentSizeError)
-                {
-                    m_entry.uncompressedSize = (uint64_t)sz;
-                    m_sizeIsExact = true;
-                }
-            }
-            CloseHandle(h);
-        }
+        m_entry.uncompressedSize = original;
+        m_entry.sizeKnown        = true;
+        m_sizeIsExact            = true;
+    }
+    else
+    {
+        // The header did not record it. The lz4 and lz5 command line tools
+        // only write the content size when asked (--content-size), and a
+        // raw Brotli stream has nowhere to put it at all.
+        m_entry.uncompressedSize = 0;
+        m_entry.sizeKnown        = false;
+        m_open = true;                      // Decode() needs us open
+        MeasureSize();
     }
 
     m_open = true;
     return true;
+}
+
+// Decompress the stream to nowhere purely to count the bytes. Only worth
+// doing for a small file: this runs while Explorer waits for the folder
+// listing, so it is capped on both sides and simply gives up rather than
+// holding up the view.
+void CCodecEngine::MeasureSize()
+{
+    // 16 MB in: a one-file archive decodes in milliseconds, and anything
+    // larger is not worth reading end to end for a column value.
+    const uint64_t kMaxInput  = 16ull * 1024 * 1024;
+    // 2 GB out: a ceiling no honest single file of this size will reach.
+    const uint64_t kMaxOutput =  2ull * 1024 * 1024 * 1024;
+
+    if (m_entry.compressedSize == 0 ||
+        m_entry.compressedSize > kMaxInput) return;
+    if (!IsCodecAvailable(m_codecId.c_str())) return;   // no DLL, no answer
+
+    const std::wstring savedError = m_lastError;
+    if (Decode(L"", nullptr, kMaxOutput))
+    {
+        // Decode() has already stored the byte count it produced.
+        m_entry.sizeKnown = true;
+    }
+    else
+    {
+        m_entry.uncompressedSize = 0;
+        m_entry.sizeKnown        = false;
+    }
+    m_lastError = savedError;      // a failed probe is not a user-facing error
 }
 
 bool CCodecEngine::Create(const std::wstring&) { return false; }
@@ -358,7 +484,8 @@ EngineCaps CCodecEngine::GetCaps() const
 // ─────────────────────────────────────────────────────────────────────────
 // Decode — the one real piece of work in this file
 // ─────────────────────────────────────────────────────────────────────────
-bool CCodecEngine::Decode(const std::wstring& destFile, ProgressFn cb)
+bool CCodecEngine::Decode(const std::wstring& destFile, ProgressFn cb,
+                          uint64_t outputLimit)
 {
     m_lastError.clear();
 
@@ -378,7 +505,7 @@ bool CCodecEngine::Decode(const std::wstring& destFile, ProgressFn cb)
         return false;
     }
 
-    Sink out(destFile);
+    Sink out(destFile, outputLimit);
     if (!out.Ok())
     {
         CloseHandle(in);
@@ -533,7 +660,9 @@ bool CCodecEngine::Decode(const std::wstring& destFile, ProgressFn cb)
 
     CloseHandle(in);
 
-    if (ok && !finished)
+    if (!ok && out.Overflowed())
+        m_lastError = L"The stream expands beyond the size limit.";
+    else if (ok && !finished)
     {
         // Ran out of input without the codec declaring the frame complete.
         ok = false;

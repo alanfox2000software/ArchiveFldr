@@ -180,6 +180,31 @@ bool PropGetBool(IInArchive7z* arc, UINT32 idx, PROPID pid, bool defVal = false)
 // Like PropGetUInt64, but says whether the archive actually carried the
 // property. GetProperty succeeds with VT_EMPTY for anything a format does
 // not record, so a plain "returned 0" cannot be trusted.
+// As above, for 64-bit values. The distinction matters most for the
+// single-stream formats: bzip2 records no uncompressed size anywhere, so
+// 7-Zip reports VT_EMPTY and a plain default of 0 would be shown to the
+// user as a confident "0 KB".
+bool PropGetUInt64If(IInArchive7z* arc, UINT32 idx, PROPID pid, uint64_t* out)
+{
+    PROPVARIANT v; PropVariantInit(&v);
+    bool got = false;
+    if (SUCCEEDED(arc->GetProperty(idx, pid, &v)))
+    {
+        switch (v.vt)
+        {
+        case VT_UI1: *out = v.bVal;  got = true; break;
+        case VT_UI2: *out = v.uiVal; got = true; break;
+        case VT_UI4: *out = v.ulVal; got = true; break;
+        case VT_UI8: *out = v.uhVal.QuadPart; got = true; break;
+        case VT_I4:  *out = (uint64_t)(int64_t)v.lVal; got = true; break;
+        case VT_I8:  *out = (uint64_t)v.hVal.QuadPart; got = true; break;
+        default: break;        // VT_EMPTY / VT_NULL: not stored
+        }
+    }
+    PropVariantClear(&v);
+    return got;
+}
+
 bool PropGetUInt32If(IInArchive7z* arc, UINT32 idx, PROPID pid, uint32_t* out)
 {
     PROPVARIANT v; PropVariantInit(&v);
@@ -761,7 +786,17 @@ void C7zArchiveEngine::BuildEntryList()
         }
         else
         {
-            if (path.empty()) continue;
+            // Single-stream containers — .xz, .gz, .bz2, .lzma — hold one
+            // nameless payload, so 7-Zip reports an empty kpidPath and we
+            // used to skip the only item there was, leaving Explorer to
+            // say "This folder is empty". Name it after the archive with
+            // the suffix removed, which is what 7-Zip's own UI does.
+            if (path.empty())
+            {
+                if (numItems != 1) continue;     // genuinely unnamed, skip
+                path = Formats::InnerNameFor(m_filePath);
+                if (path.empty()) continue;
+            }
             size_t slash = path.rfind(L'/');
             std::wstring parent = (slash == std::wstring::npos) ? L"" : path.substr(0, slash + 1);
             if (!parent.empty()) EnsureSyntheticDir(m_allEntries, known, parent);
@@ -771,7 +806,8 @@ void C7zArchiveEngine::BuildEntryList()
             e.engineIndex        = (int64_t)i;
             e.fullPath           = path;
             e.name               = (slash == std::wstring::npos) ? path : path.substr(slash + 1);
-            e.uncompressedSize   = PropGetUInt64(m_archive.Get(), i, k7zPidSize, 0);
+            e.sizeKnown          = PropGetUInt64If(m_archive.Get(), i,
+                                        k7zPidSize, &e.uncompressedSize);
             e.compressedSize     = PropGetUInt64(m_archive.Get(), i, k7zPidPackSize, 0);
             e.hasCrc             = PropGetUInt32If(m_archive.Get(), i,
                                                    k7zPidCRC, &e.crc32);

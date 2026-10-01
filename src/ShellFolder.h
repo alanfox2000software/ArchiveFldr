@@ -29,6 +29,7 @@ struct NSE_ITEMID {
 #define NSE_FLAG_ENC    0x02  // encrypted
 #define NSE_FLAG_SOLID  0x04  // part of solid block
 #define NSE_FLAG_HASCRC 0x08  // crc32 below is a real checksum
+#define NSE_FLAG_NOSIZE 0x10  // uncompressed size is unknown
 
 // ─────────────────────────────────────────────────────────
 // PIDL factory & parser

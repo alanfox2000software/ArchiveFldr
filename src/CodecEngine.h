@@ -64,7 +64,12 @@ public:
 private:
     // Decompress the whole stream. `destFile` empty = test only (decode and
     // throw the bytes away). Returns false and fills m_lastError on failure.
-    bool Decode(const std::wstring& destFile, ProgressFn cb);
+    bool Decode(const std::wstring& destFile, ProgressFn cb,
+                uint64_t outputLimit = 0);
+
+    // Last resort for formats that do not record the original size: decode
+    // the stream and count. Bounded; leaves the size unknown if too costly.
+    void MeasureSize();
 
     std::wstring m_codecId;
     std::wstring m_formatName;

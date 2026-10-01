@@ -917,14 +917,24 @@ void CContextMenu::DoProperties()
 
     if (!e.isDirectory)
     {
+        // "Not recorded" rather than a made-up zero: several formats
+        // (bzip2, raw Brotli, lz4 without --content-size) simply do not
+        // store the original size.
+        const std::wstring sizeText =
+            e.sizeKnown ? fmt(e.uncompressedSize)
+                        : std::wstring(L"not recorded by this format");
+        const std::wstring ratioText =
+            e.sizeKnown ? ArchiveOps::FormatRatio(e.uncompressedSize,
+                                                  e.compressedSize)
+                        : std::wstring(L"\u2014");
+
         wchar_t buf[320];
         swprintf_s(buf, 320,
             L"\n\nSize: %s\nPacked: %s%s\nRatio: %s",
-            fmt(e.uncompressedSize).c_str(),
+            sizeText.c_str(),
             fmt(e.compressedSize).c_str(),
             e.packedIsShared ? L" (share of a solid block)" : L"",
-            ArchiveOps::FormatRatio(e.uncompressedSize,
-                                    e.compressedSize).c_str());
+            ratioText.c_str());
         msg += buf;
 
         // Only claim a checksum the format really stores. Tar has none at

@@ -6,3 +6,4 @@ bin/
 # Third-party 7-Zip engine DLLs — not ours to redistribute; see
 # thirdparty/7z/README.md for how to obtain and place them yourself.
 thirdparty/**/*.dll
+ShellNSE.vcxproj.user

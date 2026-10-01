@@ -244,9 +244,13 @@ HRESULT CRegistry::RegisterNamespaceFolder(const wchar_t* dllPath)
         (base + L"\\Implemented Categories\\" + kCatidBrowsableShellExt).c_str(),
         nullptr, L""));
 
-    // SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_BROWSABLE | SFGAO_DROPTARGET
+    // What a ZIP file reports, which is the shape the shell already knows
+    // how to handle: a folder whose backing store is a file. SFGAO_STREAM is
+    // the bit that says so — without it the junction describes a virtual
+    // folder that merely happens to live at a file's path.
     const DWORD kFolderAttributes =
-        SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_BROWSABLE | SFGAO_DROPTARGET;
+        SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_BROWSABLE |
+        SFGAO_DROPTARGET | SFGAO_STREAM;
 
     RETURN_IF_FAILED(SetRegDword(HKEY_LOCAL_MACHINE,
         (base + L"\\ShellFolder").c_str(), L"Attributes", kFolderAttributes));

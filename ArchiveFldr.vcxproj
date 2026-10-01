@@ -470,6 +470,7 @@ echo [ArchiveFldr] Registered Release x64: $(TargetFileName)</Command>
     <ClCompile Include="src\SysInfo.cpp" />
     <ClCompile Include="src\Formats.cpp" />
     <ClCompile Include="src\Settings.cpp" />
+    <ClCompile Include="src\BrowseTo.cpp" />
   </ItemGroup>
   <!-- ═══════════════════════════════════════════════════
        Header Files
@@ -497,6 +498,7 @@ echo [ArchiveFldr] Registered Release x64: $(TargetFileName)</Command>
     <ClInclude Include="src\SysInfo.h" />
     <ClInclude Include="src\Formats.h" />
     <ClInclude Include="src\Settings.h" />
+    <ClInclude Include="src\BrowseTo.h" />
     <ClInclude Include="res\resource.h" />
   </ItemGroup>
   <!-- ═══════════════════════════════════════════════════

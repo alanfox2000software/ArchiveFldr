@@ -448,6 +448,7 @@
     <ClCompile Include="src\Registry.cpp" />
     <ClCompile Include="src\Formats.cpp" />
     <ClCompile Include="src\SysInfo.cpp" />
+    <ClCompile Include="src\BrowseTo.cpp" />
   </ItemGroup>
   <!-- ═══════════════════════════════════════════════════
        Header Files
@@ -459,6 +460,7 @@
     <ClInclude Include="src\Registry.h" />
     <ClInclude Include="src\Formats.h" />
     <ClInclude Include="src\SysInfo.h" />
+    <ClInclude Include="src\BrowseTo.h" />
     <ClInclude Include="src\GUIDs.h" />
     <ClInclude Include="res\resource.h" />
   </ItemGroup>

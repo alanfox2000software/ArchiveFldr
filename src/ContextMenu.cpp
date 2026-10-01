@@ -1,6 +1,7 @@
 // ContextMenu.cpp
 #include "stdafx.h"
 #include "ContextMenu.h"
+#include "BrowseTo.h"
 #include "ShellFolder.h"
 #include "DataObject.h"
 #include "ArchiveEngine.h"
@@ -607,9 +608,9 @@ static bool BrowseAbsoluteInPlace(IUnknown* site, HWND hwnd,
 }
 
 // Navigate the window the user is looking at into `pidlRel`, a child of this
-// folder. SHOpenFolderAndSelectItems is the last resort on purpose: it has to
+// folder. Opening a separate window is the last resort on purpose: it has to
 // re-resolve our PIDL from the desktop down, which only works when the
-// archive's file association junction is live, and it opens a second window.
+// archive's file association junction is live.
 bool CContextMenu::BrowseTo(LPCITEMIDLIST pidlRel)
 {
     if (!m_pFolder || !pidlRel) return false;
@@ -636,7 +637,7 @@ bool CContextMenu::BrowseTo(LPCITEMIDLIST pidlRel)
 
     // 4. Give up on navigating in place and open a window on the item.
     if (!ok && abs)
-        ok = SUCCEEDED(SHOpenFolderAndSelectItems(abs, 0, nullptr, 0));
+        ok = ShellBrowseToFolder(m_hwnd, abs);
 
     if (abs) ILFree(abs);
     return ok;
@@ -1195,9 +1196,9 @@ void CContextMenu::DoOpenShell()
         return;
     }
 
-    const HRESULT hr = SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
+    const bool opened = ShellBrowseToFolder(m_hwnd, pidl);
     ILFree(pidl);
-    if (SUCCEEDED(hr)) return;
+    if (opened) return;
 
     MessageBoxW(m_hwnd,
         L"ArchiveFldr could not open a view of this archive.\n\n"

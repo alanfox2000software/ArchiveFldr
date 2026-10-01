@@ -28,6 +28,7 @@
 #include "GUIDs.h"      // does for the shell extension
 #include "SettingsDialog.h"
 #include "Settings.h"
+#include "BrowseTo.h"
 
 // The shell extension gets these from DllMain; a plain program has to
 // supply its own. Common controls must be up before the tree view and
@@ -158,9 +159,9 @@ int OpenArchiveWindow(const std::wstring& raw)
         return 1;
     }
 
-    const HRESULT hr = SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
+    const bool opened = ShellBrowseToFolder(nullptr, pidl);
     ILFree(pidl);
-    if (SUCCEEDED(hr)) return 0;
+    if (opened) return 0;
 
     MessageBoxW(nullptr,
         L"ArchiveFldr could not open a view of this archive.\n\n"

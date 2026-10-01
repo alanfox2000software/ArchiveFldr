@@ -8,6 +8,12 @@ public:
     static HRESULT RegisterAll  (const wchar_t* dllPath);
     static HRESULT UnregisterAll();
 
+    // Driven by the "list in Default apps" checkbox in the settings
+    // program, which applies it immediately rather than waiting for
+    // the next registration.
+    static HRESULT RegisterCapabilities  (const wchar_t* dllPath);
+    static HRESULT UnregisterCapabilities();
+
 private:
     static HRESULT RegisterCOMServer   (const CLSID&, const wchar_t* name,
                                         const wchar_t* dllPath,
@@ -20,8 +26,6 @@ private:
     // under HKLM\SOFTWARE\RegisteredApplications is what puts ArchiveFldr
     // in the Default apps list, so the user can hand it a file type that
     // Windows' own archive handler currently owns.
-    static HRESULT RegisterCapabilities  (const wchar_t* dllPath);
-    static HRESULT UnregisterCapabilities();
 
     static HRESULT RegisterApproved    (const CLSID&, const wchar_t* name);
     static HRESULT UnregisterApproved  (const CLSID&);
@@ -30,6 +34,13 @@ private:
     // NEW
     static HRESULT RegisterShellExOnBase  (const std::wstring& base);
     static void    UnregisterShellExOnBase(const std::wstring& base);
+
+    // Context menu only — no drop handler, no thumbnail, no preview.
+    // Used for the "*" and "Directory" keys, where ArchiveFldr has a
+    // compress command to offer but nothing to say about the file's
+    // contents.
+    static HRESULT RegisterContextMenuOnBase  (const std::wstring& base);
+    static void    UnregisterContextMenuOnBase(const std::wstring& base);
 
     // Namespace-extension (browsable folder object) registration:
     // ShellFolder\Attributes + CATID_BrowsableShellExt + DefaultIcon.

@@ -4,6 +4,9 @@
 //
 //   ModeArchiveFile  right-click on an archive FILE in a normal Explorer
 //                    folder (entered through IShellExtInit)
+//   ModePlainFile    right-click on anything else in a normal Explorer
+//                    folder — ordinary files, folders, mixed selections.
+//                    Only the compress commands make sense there.
 //   ModeItem         right-click on one or more items INSIDE an archive
 //                    (CShellFolder::GetUIObjectOf)
 //   ModeBackground   right-click on empty space in an archive's view
@@ -65,7 +68,8 @@ private:
         CMD_OPEN_ITEM = 0,     // default verb for an item inside an archive
         CMD_EXTRACT,           // Extract... (whole archive, or the selection)
         CMD_EXTRACTHERE,
-        CMD_ADD,
+        CMD_ADD,               // "Add to archive..." — asks for name/format
+        CMD_COMPRESS_HERE,     // one-click compress using the saved defaults
         CMD_COMPRESS_EMAIL,
         CMD_OPEN_SHELL,        // browse the archive in Explorer
         CMD_TEST,
@@ -78,12 +82,12 @@ private:
         CMD_COUNT
     };
 
-    enum Mode { ModeArchiveFile, ModeItem, ModeBackground };
+    enum Mode { ModeArchiveFile, ModePlainFile, ModeItem, ModeBackground };
 
     // ── Command implementations ──────────────────────────
     void DoOpenItem    ();
     void DoExtract     (bool here);
-    void DoAdd         ();
+    void DoCompress    (bool here);
     void DoCompressEmail();
     void DoOpenShell   ();
     void DoTest        ();
@@ -118,4 +122,12 @@ private:
 
     std::vector<LPITEMIDLIST> m_pidls;   // selected items (owned copies)
     std::wstring              m_archivePath;
+
+    // Every path the shell handed us through IShellExtInit. m_archivePath
+    // is the first of these; compression works on all of them.
+    std::vector<std::wstring> m_paths;
+
+    // Label for the one-click compress item, e.g. Compress to "docs.zip".
+    // Built in QueryContextMenu and owned until the menu goes away.
+    std::wstring              m_quickName;
 };

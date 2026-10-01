@@ -88,6 +88,12 @@
 #define IDC_EDIT_SUBMENU_TITLE      1210
 #define IDC_BTN_REGISTER            1211
 #define IDC_BTN_UNREGISTER          1212
+// Master switch for everything this extension adds to a context menu.
+#define IDC_CHK_CONTEXT_MENU_MASTER 1213
+// Publish in HKLM\SOFTWARE\RegisteredApplications so the extension can
+// be chosen per file type in Settings > Default apps.
+#define IDC_CHK_DEFAULT_APP         1214
+#define IDC_BTN_OPEN_DEFAULTAPPS    1215
 #define IDC_LBL_STATUS_REG          1213
 
 // Appearance Page Controls

@@ -1,6 +1,7 @@
 // Settings.cpp
 #include "stdafx.h"
 #include "Settings.h"
+#include "Formats.h"
 #include "GUIDs.h"
 
 Settings::Settings()
@@ -61,25 +62,39 @@ void Settings::Load()
     defaultCompLevel    = (CompLevel)ReadDword(hk, L"CompLevel", (DWORD)defaultCompLevel);
     createSolidArchive  = ReadBool(hk, L"SolidArchive",    createSolidArchive);
     encryptFileNames    = ReadBool(hk, L"EncryptNames",     encryptFileNames);
-    autoCloseAfterOp    = ReadBool(hk, L"AutoClose",        autoCloseAfterOp);
 
     // Formats
-    handleZip    = ReadBool(hk, L"FmtZip",    handleZip);
-    handle7z     = ReadBool(hk, L"Fmt7z",     handle7z);
-    handleRar    = ReadBool(hk, L"FmtRar",    handleRar);
-    handleTar    = ReadBool(hk, L"FmtTar",    handleTar);
-    handleGz     = ReadBool(hk, L"FmtGz",     handleGz);
-    handleBz2    = ReadBool(hk, L"FmtBz2",    handleBz2);
-    handleXz     = ReadBool(hk, L"FmtXz",     handleXz);
-    handleLzma   = ReadBool(hk, L"FmtLzma",   handleLzma);
-    handleZst    = ReadBool(hk, L"FmtZst",    handleZst);
-    handleIso    = ReadBool(hk, L"FmtIso",    handleIso);
-    handleCab    = ReadBool(hk, L"FmtCab",    handleCab);
-    handleLzh    = ReadBool(hk, L"FmtLzh",    handleLzh);
-    handleArj    = ReadBool(hk, L"FmtArj",    handleArj);
-    handleWim    = ReadBool(hk, L"FmtWim",    handleWim);
-    handleMsi    = ReadBool(hk, L"FmtMsi",    handleMsi);
-    handleOffice = ReadBool(hk, L"FmtOffice", handleOffice);
+    // Associations: one REG_SZ holding ";"-separated extensions. The
+    // default, when the value has never been written, is every
+    // registrable format -- the same list registration uses.
+    {
+        const std::wstring packed = ReadStr(hk, L"Associations", L"\x01");
+        associatedExts.clear();
+        if (packed == L"\x01")
+        {
+            for (const auto* f : Formats::Registrable())
+                associatedExts.insert(f->ext);
+        }
+        else
+        {
+            size_t at = 0;
+            while (at <= packed.size())
+            {
+                size_t sep = packed.find(L';', at);
+                if (sep == std::wstring::npos) sep = packed.size();
+                if (sep > at)
+                {
+                    std::wstring e = packed.substr(at, sep - at);
+                    if (!e.empty() && e[0] != L'.') e = L"." + e;
+                    for (auto& ch : e) ch = (wchar_t)towlower(ch);
+                    associatedExts.insert(e);
+                }
+                if (sep == packed.size()) break;
+                at = sep + 1;
+            }
+        }
+    }
+    registerAsDefaultApp = ReadBool(hk, L"RegisterAsDefaultApp", registerAsDefaultApp);
 
     // Context menu
     ctxExtract       = ReadBool(hk, L"CtxExtract",      ctxExtract);
@@ -94,8 +109,6 @@ void Settings::Load()
     ctxSubMenuTitle  = ReadStr (hk, L"CtxSubmenuTitle", ctxSubMenuTitle.c_str());
 
     // Appearance
-    darkMode          = ReadBool (hk, L"DarkMode",        darkMode);
-    useCustomIcons    = ReadBool (hk, L"CustomIcons",     useCustomIcons);
     showSizeColumn    = ReadBool (hk, L"ColSize",         showSizeColumn);
     showDateColumn    = ReadBool (hk, L"ColDate",         showDateColumn);
     showRatioColumn   = ReadBool (hk, L"ColRatio",        showRatioColumn);
@@ -113,11 +126,6 @@ void Settings::Load()
     tempDirPath     = ReadStr  (hk, L"TempDir",        tempDirPath.c_str());
     logErrors       = ReadBool (hk, L"LogErrors",      logErrors);
     logFilePath     = ReadStr  (hk, L"LogFile",        logFilePath.c_str());
-    checkForUpdates = ReadBool (hk, L"CheckUpdates",   checkForUpdates);
-    sendUsageData   = ReadBool (hk, L"SendUsage",      sendUsageData);
-    maxMemoryMB     = (int)ReadDword(hk, L"MaxMemMB",  (DWORD)maxMemoryMB);
-    cacheThumbnails = ReadBool (hk, L"CacheThumbs",    cacheThumbnails);
-    cacheSizeMB     = (int)ReadDword(hk, L"CacheMB",   (DWORD)cacheSizeMB);
 
     RegCloseKey(hk);
 }
@@ -142,25 +150,20 @@ void Settings::Save() const
     WriteDword(hk, L"CompLevel",       (DWORD)defaultCompLevel);
     WriteBool (hk, L"SolidArchive",    createSolidArchive);
     WriteBool (hk, L"EncryptNames",    encryptFileNames);
-    WriteBool (hk, L"AutoClose",       autoCloseAfterOp);
 
     // Formats
-    WriteBool(hk, L"FmtZip",    handleZip);
-    WriteBool(hk, L"Fmt7z",     handle7z);
-    WriteBool(hk, L"FmtRar",    handleRar);
-    WriteBool(hk, L"FmtTar",    handleTar);
-    WriteBool(hk, L"FmtGz",     handleGz);
-    WriteBool(hk, L"FmtBz2",    handleBz2);
-    WriteBool(hk, L"FmtXz",     handleXz);
-    WriteBool(hk, L"FmtLzma",   handleLzma);
-    WriteBool(hk, L"FmtZst",    handleZst);
-    WriteBool(hk, L"FmtIso",    handleIso);
-    WriteBool(hk, L"FmtCab",    handleCab);
-    WriteBool(hk, L"FmtLzh",    handleLzh);
-    WriteBool(hk, L"FmtArj",    handleArj);
-    WriteBool(hk, L"FmtWim",    handleWim);
-    WriteBool(hk, L"FmtMsi",    handleMsi);
-    WriteBool(hk, L"FmtOffice", handleOffice);
+    {
+        std::wstring packed;
+        for (const auto& e : associatedExts)
+        {
+            if (!packed.empty()) packed += L';';
+            packed += e;
+        }
+        RegSetValueExW(hk, L"Associations", 0, REG_SZ,
+                       (const BYTE*)packed.c_str(),
+                       (DWORD)((packed.size() + 1) * sizeof(wchar_t)));
+    }
+    WriteBool(hk, L"RegisterAsDefaultApp", registerAsDefaultApp);
 
     // Context menu
     WriteBool(hk, L"CtxExtract",      ctxExtract);
@@ -175,8 +178,6 @@ void Settings::Save() const
     WriteStr (hk, L"CtxSubmenuTitle", ctxSubMenuTitle);
 
     // Appearance
-    WriteBool (hk, L"DarkMode",    darkMode);
-    WriteBool (hk, L"CustomIcons", useCustomIcons);
     WriteBool (hk, L"ColSize",     showSizeColumn);
     WriteBool (hk, L"ColDate",     showDateColumn);
     WriteBool (hk, L"ColRatio",    showRatioColumn);
@@ -194,11 +195,6 @@ void Settings::Save() const
     WriteStr  (hk, L"TempDir",     tempDirPath);
     WriteBool (hk, L"LogErrors",   logErrors);
     WriteStr  (hk, L"LogFile",     logFilePath);
-    WriteBool (hk, L"CheckUpdates",checkForUpdates);
-    WriteBool (hk, L"SendUsage",   sendUsageData);
-    WriteDword(hk, L"MaxMemMB",    (DWORD)maxMemoryMB);
-    WriteBool (hk, L"CacheThumbs", cacheThumbnails);
-    WriteDword(hk, L"CacheMB",     (DWORD)cacheSizeMB);
 
     RegCloseKey(hk);
 }
@@ -217,25 +213,12 @@ void Settings::Reset()
     defaultCompLevel     = CompLevel::Normal;
     createSolidArchive   = false;
     encryptFileNames     = false;
-    autoCloseAfterOp     = false;
 
     // ── Formats ───────────────────────────────────────────
-    handleZip    = true;
-    handle7z     = true;
-    handleRar    = true;
-    handleTar    = true;
-    handleGz     = true;
-    handleBz2    = true;
-    handleXz     = true;
-    handleLzma   = true;
-    handleZst    = true;
-    handleIso    = true;
-    handleCab    = true;
-    handleLzh    = true;
-    handleArj    = true;
-    handleWim    = true;
-    handleMsi    = false;
-    handleOffice = true;
+    associatedExts.clear();
+    for (const auto* f : Formats::Registrable())
+        associatedExts.insert(f->ext);
+    registerAsDefaultApp = false;
 
     // ── Context menu ──────────────────────────────────────
     ctxExtract       = true;
@@ -250,8 +233,6 @@ void Settings::Reset()
     ctxSubMenuTitle  = L"ArchiveFldr";
 
     // ── Appearance ────────────────────────────────────────
-    darkMode          = false;
-    useCustomIcons    = true;
     showSizeColumn    = true;
     showDateColumn    = true;
     showRatioColumn   = true;
@@ -267,11 +248,6 @@ void Settings::Reset()
     threadCount      = 0;
     useTempDir       = false;
     logErrors        = true;
-    checkForUpdates  = true;
-    sendUsageData    = false;
-    maxMemoryMB      = 256;
-    cacheThumbnails  = true;
-    cacheSizeMB      = 128;
 
     // Restore runtime-computed paths
     wchar_t buf[MAX_PATH] = {};

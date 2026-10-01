@@ -1,6 +1,7 @@
 // ArchiveOps.cpp — see ArchiveOps.h
 #include "stdafx.h"
 #include "ArchiveOps.h"
+#include "Settings.h"
 
 namespace ArchiveOps {
 
@@ -55,8 +56,32 @@ void Flatten(const EnginePtr& eng, const ArchiveEntry& e,
 // ─────────────────────────────────────────────────────────
 std::wstring MakeTempDir(const std::wstring& tag)
 {
+    // The configured folder wins, when there is one and it is usable;
+    // otherwise the system temp folder, as before. A custom path that
+    // cannot be created is not worth failing an extraction over.
+    std::wstring root;
+    {
+        const Settings& cfg = Settings::Get();
+        if (cfg.useTempDir && !cfg.tempDirPath.empty())
+        {
+            if (GetFileAttributesW(cfg.tempDirPath.c_str()) != INVALID_FILE_ATTRIBUTES ||
+                SHCreateDirectoryExW(nullptr, cfg.tempDirPath.c_str(), nullptr) == ERROR_SUCCESS)
+            {
+                root = cfg.tempDirPath;
+                if (!root.empty() && root.back() != L'\\') root += L'\\';
+            }
+        }
+    }
+
     wchar_t tmp[MAX_PATH] = {};
-    if (!GetTempPathW(MAX_PATH, tmp)) return L"";
+    if (root.empty())
+    {
+        if (!GetTempPathW(MAX_PATH, tmp)) return L"";
+    }
+    else
+    {
+        wcsncpy_s(tmp, root.c_str(), _TRUNCATE);
+    }
 
     std::wstring clean;
     for (wchar_t ch : tag)

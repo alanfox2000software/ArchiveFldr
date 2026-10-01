@@ -45,7 +45,7 @@ public:
 private:
     static INT_PTR CALLBACK DlgProc(HWND,UINT,WPARAM,LPARAM);
     HWND m_hwnd=nullptr; bool m_dirty=false;
-    struct FmtRow { const wchar_t* ext; const wchar_t* desc; bool* setting; };
+    struct FmtRow { const wchar_t* ext; const wchar_t* desc; };
     std::vector<FmtRow> m_rows;
     void BuildRows();
 };

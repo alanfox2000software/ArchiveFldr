@@ -6,6 +6,7 @@
 #include "stdafx.h"
 #include "Registry.h"
 #include "Formats.h"
+#include "Settings.h"
 #include "SysInfo.h"
 #include "GUIDs.h"
 
@@ -260,6 +261,12 @@ HRESULT CRegistry::RegisterNamespaceFolder(const wchar_t* dllPath)
 
 // Register ContextMenu / Drop / Thumbnail / Preview under a
 // Software\Classes\... base path (extension, ProgID, or SystemFileAssociations).
+// Where the compress commands are offered: every file, every folder.
+// "Directory" covers folders themselves; "Directory\\Background" is
+// deliberately absent, since right-clicking empty space selects nothing
+// to compress.
+static const wchar_t* const kAllFilesBases[] = { L"*", L"Directory" };
+
 HRESULT CRegistry::RegisterShellExOnBase(const std::wstring& base)
 {
     const std::wstring ctx  = ClsidToStr(CLSID_ArchiveFldrContextMenu);
@@ -295,6 +302,29 @@ HRESULT CRegistry::RegisterShellExOnBase(const std::wstring& base)
         (base + L"\\shellex\\PropertySheetHandlers\\ArchiveFldr").c_str());
 
     return S_OK;
+}
+
+// ─────────────────────────────────────────────────────────
+// RegisterContextMenuOnBase — the compress commands, everywhere
+//
+// Registered on "*" (every file) and "Directory" (every folder) so that
+// "Add to Archive..." is reachable from any selection, the way every
+// other archiver on Windows behaves. Deliberately only the context menu:
+// a drop handler on every file would make ArchiveFldr the drop target
+// for the entire shell, and a thumbnail or preview handler on "*" would
+// claim files it has nothing to say about.
+// ─────────────────────────────────────────────────────────
+HRESULT CRegistry::RegisterContextMenuOnBase(const std::wstring& base)
+{
+    return SetRegStr(HKEY_LOCAL_MACHINE,
+        (base + L"\\shellex\\ContextMenuHandlers\\ArchiveFldr").c_str(),
+        nullptr, ClsidToStr(CLSID_ArchiveFldrContextMenu).c_str());
+}
+
+void CRegistry::UnregisterContextMenuOnBase(const std::wstring& base)
+{
+    DelRegKey(HKEY_LOCAL_MACHINE,
+        (base + L"\\shellex\\ContextMenuHandlers\\ArchiveFldr").c_str());
 }
 
 void CRegistry::UnregisterShellExOnBase(const std::wstring& base)
@@ -517,10 +547,24 @@ HRESULT CRegistry::RegisterCapabilities(const wchar_t* /*dllPath*/)
                       L"ApplicationIcon", icon.c_str());
     }
 
+    // Only the extensions the user left ticked on the Formats page.
+    // Windows reads this key to build the per-type list in Settings >
+    // Default apps, so an unticked type simply never appears there.
     const std::wstring assoc = std::wstring(kCapabilitiesKey) + L"\\FileAssociations";
+    const std::set<std::wstring>& wanted = Settings::Get().associatedExts;
+
+    // Clear first: an extension that was ticked last time and is not now
+    // has to lose its value, not keep it.
+    DelRegKey(HKEY_LOCAL_MACHINE, assoc.c_str());
+
     for (const auto* f : Formats::Registrable())
+    {
+        std::wstring ext = f->ext;
+        for (auto& ch : ext) ch = (wchar_t)towlower(ch);
+        if (wanted.find(ext) == wanted.end()) continue;
         RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, assoc.c_str(),
                                    f->ext, f->progId));
+    }
 
     // The pointer that makes Windows actually look at the key above.
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, kRegisteredApps,
@@ -613,7 +657,21 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
     //    (.zip through CompressedFolder, and on Windows 11 .bz2, .gz, .tar
     //    and .7z through its newer one), and it leaves the choice to the
     //    user instead of grabbing the type during registration.
-    RETURN_IF_FAILED(RegisterCapabilities(dllPath));
+    //    The user controls this from the settings program; registration
+    //    only honours the stored answer. Withdrawing is explicit, so a
+    //    re-register after unticking really does remove the entry.
+    if (Settings::Get().registerAsDefaultApp)
+        RETURN_IF_FAILED(RegisterCapabilities(dllPath));
+    else
+        UnregisterCapabilities();
+
+    // 7. The compress commands apply to any file or folder, not just to
+    //    the types ArchiveFldr can open, so the context menu handler goes
+    //    on "*" and "Directory" as well. Only the menu: see
+    //    RegisterContextMenuOnBase for why the other handlers do not.
+    for (const wchar_t* base : kAllFilesBases)
+        RETURN_IF_FAILED(RegisterContextMenuOnBase(
+            std::wstring(L"Software\\Classes\\") + base));
 
     return S_OK;
 }
@@ -626,6 +684,10 @@ HRESULT CRegistry::UnregisterAll()
     // Stop advertising in Settings > Default apps first, so the entry does
     // not linger pointing at file types we are about to release.
     UnregisterCapabilities();
+
+    // The all-files / all-folders context menu.
+    for (const wchar_t* base : kAllFilesBases)
+        UnregisterContextMenuOnBase(std::wstring(L"Software\\Classes\\") + base);
 
     // Everything we ever registered, plus a few progIds from older builds
     // that are no longer in the table, so an upgrade cleans up after

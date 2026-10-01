@@ -65,26 +65,24 @@ public:
     CompLevel     defaultCompLevel     = CompLevel::Normal;
     bool          createSolidArchive   = false;
     bool          encryptFileNames     = false;
-    bool          autoCloseAfterOp     = false;
 
     // ── Formats (which extensions to handle) ─────────────
     std::unordered_set<std::wstring> enabledFormats;
-    bool          handleZip    = true;
-    bool          handle7z     = true;
-    bool          handleRar    = true;   // extract only
-    bool          handleTar    = true;
-    bool          handleGz     = true;
-    bool          handleBz2    = true;
-    bool          handleXz     = true;
-    bool          handleLzma   = true;
-    bool          handleZst    = true;
-    bool          handleIso    = true;
-    bool          handleCab    = true;
-    bool          handleLzh    = true;
-    bool          handleArj    = true;   // extract only
-    bool          handleWim    = true;
-    bool          handleMsi    = false;
-    bool          handleOffice = true;   // .docx .xlsx etc
+    // Which extensions ArchiveFldr offers to handle, as a set of
+    // lower-case extensions with the dot (".zip"). This drives the
+    // Capabilities\FileAssociations key, which is what makes ArchiveFldr
+    // selectable per type in Settings > Default apps.
+    //
+    // It replaces sixteen hard-coded handleXxx booleans that nothing ever
+    // read: the format table in Formats.cpp is the real list, and it has
+    // 21 registrable entries, not 16.
+    std::set<std::wstring> associatedExts;
+
+    // Listed in HKLM\SOFTWARE\RegisteredApplications, so Windows shows
+    // ArchiveFldr in Settings > Default apps. Writing it needs admin, so
+    // the settings program reports failure rather than silently not doing
+    // it.
+    bool          registerAsDefaultApp = false;
 
     // ── Context Menu Items ────────────────────────────────
     bool          ctxExtract          = true;
@@ -99,8 +97,6 @@ public:
     std::wstring  ctxSubMenuTitle     = L"ArchiveFldr";
 
     // ── Appearance ────────────────────────────────────────
-    bool          darkMode            = false;
-    bool          useCustomIcons      = true;
     bool          showSizeColumn      = true;
     bool          showDateColumn      = true;
     bool          showRatioColumn     = true;
@@ -118,11 +114,6 @@ public:
     std::wstring  tempDirPath;
     bool          logErrors           = true;
     std::wstring  logFilePath;
-    bool          checkForUpdates     = true;
-    bool          sendUsageData       = false;
-    int           maxMemoryMB         = 256;
-    bool          cacheThumbnails     = true;
-    int           cacheSizeMB         = 128;
 
 private:
     Settings();

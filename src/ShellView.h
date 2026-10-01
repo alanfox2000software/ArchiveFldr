@@ -57,6 +57,13 @@ private:
     HWND              m_hwnd    = nullptr;
     HWND              m_hwndOwner = nullptr;
     HWND              m_hwndList  = nullptr;
+
+    // Visible list-view column -> the folder column it shows. Hiding a
+    // column must not shift the data under the remaining headings.
+    std::vector<int>  m_colMap;
+
+    // Owned while the view lives: a list view does not copy its font.
+    HFONT             m_hListFont = nullptr;
     IShellBrowser*    m_pBrowser  = nullptr;
     CShellFolder*     m_pFolder   = nullptr;
     FOLDERSETTINGS    m_fs        = {};

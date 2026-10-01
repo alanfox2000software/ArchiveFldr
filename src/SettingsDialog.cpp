@@ -2,6 +2,7 @@
 #include "stdafx.h"
 #include "SettingsDialog.h"
 #include "Registry.h"
+#include "Formats.h"
 #include "GUIDs.h"
 #include "../res/resource.h"
 
@@ -88,12 +89,14 @@ void CPageGeneral::Load()
     SetChk(m_hwnd, IDC_CHK_SHOW_PREVIEW,       s.showPreviewPane);
     SetChk(m_hwnd, IDC_CHK_SHOW_THUMBNAILS,     s.showThumbnails);
     SetChk(m_hwnd, IDC_CHK_CONTEXT_MENU,        s.showContextMenu);
-    SetChk(m_hwnd, IDC_CHK_OPEN_ON_DBLCLICK,    s.openArchiveOnDblClk);
+    CheckRadioButton(m_hwnd, IDC_CHK_OPEN_ON_DBLCLICK,
+                     IDC_CHK_EXTRACT_ON_DBLCLICK,
+                     s.openArchiveOnDblClk ? IDC_CHK_OPEN_ON_DBLCLICK
+                                           : IDC_CHK_EXTRACT_ON_DBLCLICK);
     SetChk(m_hwnd, IDC_CHK_PROMPT_PATH,         s.promptForPath);
     SetChk(m_hwnd, IDC_CHK_REMEMBER_PATH,       s.rememberLastPath);
     SetChk(m_hwnd, IDC_CHK_SOLID_ARCHIVE,       s.createSolidArchive);
     SetChk(m_hwnd, IDC_CHK_ENCRYPT_NAMES,       s.encryptFileNames);
-    SetChk(m_hwnd, IDC_CHK_AUTO_CLOSE,          s.autoCloseAfterOp);
     SetDlgItemTextW(m_hwnd, IDC_EDIT_DEFAULT_PATH,
         s.defaultExtractPath.c_str());
     // Compression level combo
@@ -128,7 +131,6 @@ void CPageGeneral::Save()
     s.rememberLastPath   = GetChk(m_hwnd, IDC_CHK_REMEMBER_PATH);
     s.createSolidArchive = GetChk(m_hwnd, IDC_CHK_SOLID_ARCHIVE);
     s.encryptFileNames   = GetChk(m_hwnd, IDC_CHK_ENCRYPT_NAMES);
-    s.autoCloseAfterOp   = GetChk(m_hwnd, IDC_CHK_AUTO_CLOSE);
     wchar_t buf[MAX_PATH]={};
     GetDlgItemTextW(m_hwnd,IDC_EDIT_DEFAULT_PATH,buf,MAX_PATH);
     s.defaultExtractPath = buf;
@@ -189,23 +191,13 @@ void CPageFormats::Resize(const RECT& rc) {
 }
 
 void CPageFormats::BuildRows() {
-    auto& s = Settings::Get();
-    m_rows = {
-        {L"ZIP / ZIPX / JAR / APK",  L"ZIP Archives",        &s.handleZip    },
-        {L"7Z / 7ZIP",               L"7-Zip Archives",       &s.handle7z     },
-        {L"RAR / R00",               L"RAR Archives",         &s.handleRar    },
-        {L"TAR / TGZ / TBZ2 / TXZ", L"TAR Archives",         &s.handleTar    },
-        {L"GZ / GZIP",               L"GZip Archives",        &s.handleGz     },
-        {L"BZ2 / BZIP2",             L"BZip2 Archives",       &s.handleBz2    },
-        {L"XZ / LZMA",               L"XZ/LZMA Archives",     &s.handleXz     },
-        {L"ZST / ZSTD",              L"Zstandard Archives",   &s.handleZst    },
-        {L"ISO / IMG",               L"Disk Images",          &s.handleIso    },
-        {L"CAB",                     L"Cabinet Archives",     &s.handleCab    },
-        {L"LZH / LHA",               L"LZH Archives",         &s.handleLzh    },
-        {L"WIM / SWM / ESD",         L"Windows Imaging",      &s.handleWim    },
-        {L"MSI / MSM / MSP",         L"MSI Packages",         &s.handleMsi    },
-        {L"DOCX / XLSX / PPTX / ODT",L"Office Documents",     &s.handleOffice },
-    };
+    // One row per registrable format, taken from Formats.cpp -- the same
+    // table registration walks. The old hand-written list of sixteen was
+    // both shorter than the real one (21) and wired to booleans nothing
+    // ever read.
+    m_rows.clear();
+    for (const auto* f : Formats::Registrable())
+        m_rows.push_back({ f->ext, f->name });
 }
 
 void CPageFormats::Load() {
@@ -222,19 +214,28 @@ void CPageFormats::Load() {
         ListView_SetExtendedListViewStyle(hList,
             LVS_EX_CHECKBOXES|LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER);
     }
+    const auto& assoc = Settings::Get().associatedExts;
     for (int i=0;i<(int)m_rows.size();i++) {
         LVITEMW item{LVIF_TEXT,(int)i,0,0,0,(LPWSTR)m_rows[i].ext};
         ListView_InsertItem(hList,&item);
         ListView_SetItemText(hList,i,1,(LPWSTR)m_rows[i].desc);
-        ListView_SetCheckState(hList,i,*m_rows[i].setting?TRUE:FALSE);
+        std::wstring e = m_rows[i].ext;
+        for (auto& ch : e) ch = (wchar_t)towlower(ch);
+        ListView_SetCheckState(hList,i, assoc.count(e) ? TRUE : FALSE);
     }
 }
 
 void CPageFormats::Save() {
     if (!m_hwnd) return;
     HWND hList = GetDlgItem(m_hwnd, IDC_LIST_FORMATS);
-    for (int i=0;i<(int)m_rows.size();i++)
-        *m_rows[i].setting = ListView_GetCheckState(hList,i)!=0;
+    auto& assoc = Settings::Get().associatedExts;
+    assoc.clear();
+    for (int i=0;i<(int)m_rows.size();i++) {
+        if (!ListView_GetCheckState(hList,i)) continue;
+        std::wstring e = m_rows[i].ext;
+        for (auto& ch : e) ch = (wchar_t)towlower(ch);
+        assoc.insert(e);
+    }
     m_dirty = false;
 }
 
@@ -288,7 +289,8 @@ void CPageIntegration::Resize(const RECT& rc) {
 void CPageIntegration::Load() {
     if (!m_hwnd) return;
     auto& s = Settings::Get();
-    SetChk(m_hwnd, IDC_CHK_INTEGRATE_EXPLORER, true);
+    SetChk(m_hwnd, IDC_CHK_CONTEXT_MENU_MASTER, s.showContextMenu);
+    SetChk(m_hwnd, IDC_CHK_DEFAULT_APP,         s.registerAsDefaultApp);
     SetChk(m_hwnd, IDC_CHK_CTX_EXTRACT,        s.ctxExtract);
     SetChk(m_hwnd, IDC_CHK_CTX_EXTRACTHERE,    s.ctxExtractHere);
     SetChk(m_hwnd, IDC_CHK_CTX_ADDTOARCH,      s.ctxAddToArchive);
@@ -310,13 +312,33 @@ void CPageIntegration::Load() {
             if(hk) RegCloseKey(hk);
             return ok;
         }();
-    SetDlgItemTextW(m_hwnd, IDC_LBL_STATUS_REG,
-        registered ? L"✓ Registered and active"
-                   : L"✗ Not registered");
+    // What the registry actually says, which is not necessarily what the
+    // checkboxes were left at: writing needs admin and can have failed.
+    const bool advertised = []{
+        HKEY hk = nullptr;
+        bool ok = false;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                          L"Software\\RegisteredApplications", 0,
+                          KEY_QUERY_VALUE, &hk) == ERROR_SUCCESS)
+        {
+            ok = RegQueryValueExW(hk, L"ArchiveFldr", nullptr, nullptr,
+                                  nullptr, nullptr) == ERROR_SUCCESS;
+            RegCloseKey(hk);
+        }
+        return ok;
+    }();
+
+    std::wstring status = registered ? L"\u2713 Registered"
+                                     : L"\u2717 Not registered";
+    status += advertised ? L"  \u2022  listed in Default apps"
+                         : L"  \u2022  not listed in Default apps";
+    SetDlgItemTextW(m_hwnd, IDC_LBL_STATUS_REG, status.c_str());
 }
 void CPageIntegration::Save() {
     if (!m_hwnd) return;
     auto& s = Settings::Get();
+    s.showContextMenu     = GetChk(m_hwnd, IDC_CHK_CONTEXT_MENU_MASTER);
+    s.registerAsDefaultApp= GetChk(m_hwnd, IDC_CHK_DEFAULT_APP);
     s.ctxExtract      = GetChk(m_hwnd, IDC_CHK_CTX_EXTRACT);
     s.ctxExtractHere  = GetChk(m_hwnd, IDC_CHK_CTX_EXTRACTHERE);
     s.ctxAddToArchive = GetChk(m_hwnd, IDC_CHK_CTX_ADDTOARCH);
@@ -357,8 +379,43 @@ INT_PTR CALLBACK CPageIntegration::DlgProc(
         if (ctrl==IDC_BTN_UNREGISTER) {
             HRESULT hr = CRegistry::UnregisterAll();
             SetDlgItemTextW(hDlg, IDC_LBL_STATUS_REG,
-                SUCCEEDED(hr) ? L"✗ Unregistered"
-                              : L"✗ Unregister failed (run as admin)");
+                SUCCEEDED(hr) ? L"\u2717 Unregistered"
+                              : L"\u2717 Unregister failed (run as admin)");
+        }
+        // Ticking the box takes effect immediately: the point of it is
+        // to appear in Default apps, and waiting for the next
+        // registration would make it look broken.
+        if (ctrl==IDC_CHK_DEFAULT_APP) {
+            p->Save();
+            const bool want = Settings::Get().registerAsDefaultApp;
+            const std::wstring dll = ShellExtensionPath();
+            HRESULT hr = want ? CRegistry::RegisterCapabilities(dll.c_str())
+                              : CRegistry::UnregisterCapabilities();
+            if (FAILED(hr))
+            {
+                MessageBoxW(hDlg,
+                    L"That setting is stored in HKEY_LOCAL_MACHINE, which "
+                    L"needs administrator rights.\n\nYour choice has been "
+                    L"saved and will be applied the next time ArchiveFldr "
+                    L"is registered from an elevated prompt.",
+                    L"ArchiveFldr", MB_ICONINFORMATION | MB_OK);
+            }
+            p->Load();
+        }
+        if (ctrl==IDC_BTN_OPEN_DEFAULTAPPS) {
+            // Windows 10/11 settings page; older releases get the
+            // control-panel applet that does the same job.
+            SHELLEXECUTEINFOW sei{ sizeof(sei) };
+            sei.fMask  = SEE_MASK_FLAG_NO_UI;
+            sei.hwnd   = hDlg;
+            sei.lpVerb = L"open";
+            sei.lpFile = L"ms-settings:defaultapps";
+            sei.nShow  = SW_SHOWNORMAL;
+            if (!ShellExecuteExW(&sei))
+                ShellExecuteW(hDlg, L"open", L"control.exe",
+                              L"/name Microsoft.DefaultPrograms "
+                              L"/page pageDefaultProgram",
+                              nullptr, SW_SHOWNORMAL);
         }
         if (HIWORD(wp)==BN_CLICKED||HIWORD(wp)==EN_CHANGE)
             p->m_dirty=true;
@@ -384,8 +441,6 @@ void CPageAppearance::Resize(const RECT& rc) {
 void CPageAppearance::Load() {
     if (!m_hwnd) return;
     auto& s = Settings::Get();
-    SetChk(m_hwnd, IDC_CHK_DARK_MODE,        s.darkMode);
-    SetChk(m_hwnd, IDC_CHK_CUSTOM_ICONS,     s.useCustomIcons);
     SetChk(m_hwnd, IDC_CHK_SHOW_SIZE_COL,    s.showSizeColumn);
     SetChk(m_hwnd, IDC_CHK_SHOW_DATE_COL,    s.showDateColumn);
     SetChk(m_hwnd, IDC_CHK_SHOW_RATIO_COL,   s.showRatioColumn);
@@ -408,8 +463,6 @@ void CPageAppearance::Load() {
 void CPageAppearance::Save() {
     if (!m_hwnd) return;
     auto& s = Settings::Get();
-    s.darkMode         = GetChk(m_hwnd, IDC_CHK_DARK_MODE);
-    s.useCustomIcons   = GetChk(m_hwnd, IDC_CHK_CUSTOM_ICONS);
     s.showSizeColumn   = GetChk(m_hwnd, IDC_CHK_SHOW_SIZE_COL);
     s.showDateColumn   = GetChk(m_hwnd, IDC_CHK_SHOW_DATE_COL);
     s.showRatioColumn  = GetChk(m_hwnd, IDC_CHK_SHOW_RATIO_COL);
@@ -475,22 +528,15 @@ void CPageAdvanced::Load() {
     SetChk(m_hwnd, IDC_CHK_MULTITHREADED, s.multiThreaded);
     SetChk(m_hwnd, IDC_CHK_USE_TEMP_DIR,  s.useTempDir);
     SetChk(m_hwnd, IDC_CHK_LOG_ERRORS,    s.logErrors);
-    SetChk(m_hwnd, IDC_CHK_CHECK_UPDATES, s.checkForUpdates);
-    SetChk(m_hwnd, IDC_CHK_SEND_USAGE,    s.sendUsageData);
-    SetChk(m_hwnd, IDC_CHK_CACHE_THUMBS,  s.cacheThumbnails);
     SetDlgItemInt (m_hwnd, IDC_EDIT_THREAD_COUNT, s.threadCount, FALSE);
     SetDlgItemTextW(m_hwnd, IDC_EDIT_TEMP_DIR,  s.tempDirPath.c_str());
     SetDlgItemTextW(m_hwnd, IDC_EDIT_LOG_PATH,  s.logFilePath.c_str());
-    SetDlgItemInt  (m_hwnd, IDC_EDIT_MAX_MEM,   s.maxMemoryMB,  FALSE);
-    SetDlgItemInt  (m_hwnd, IDC_EDIT_CACHE_SIZE,s.cacheSizeMB,  FALSE);
 
-    // Spin controls
-    SendDlgItemMessageW(m_hwnd,IDC_SPIN_THREAD_COUNT,
+    // Spin control: 0 means "let 7-Zip decide", so the range starts there.
+    SendDlgItemMessageW(m_hwnd, IDC_SPIN_THREAD_COUNT,
         UDM_SETRANGE32, 0, 64);
-    SendDlgItemMessageW(m_hwnd,IDC_SPIN_MAX_MEM,
-        UDM_SETRANGE32, 64, 32768);
-    SendDlgItemMessageW(m_hwnd,IDC_SPIN_MAX_MEM,
-        UDM_SETPOS32, 0, s.maxMemoryMB);
+    SendDlgItemMessageW(m_hwnd, IDC_SPIN_THREAD_COUNT,
+        UDM_SETPOS32, 0, s.threadCount);
 }
 void CPageAdvanced::Save() {
     if (!m_hwnd) return;
@@ -498,12 +544,7 @@ void CPageAdvanced::Save() {
     s.multiThreaded  = GetChk(m_hwnd, IDC_CHK_MULTITHREADED);
     s.useTempDir     = GetChk(m_hwnd, IDC_CHK_USE_TEMP_DIR);
     s.logErrors      = GetChk(m_hwnd, IDC_CHK_LOG_ERRORS);
-    s.checkForUpdates= GetChk(m_hwnd, IDC_CHK_CHECK_UPDATES);
-    s.sendUsageData  = GetChk(m_hwnd, IDC_CHK_SEND_USAGE);
-    s.cacheThumbnails= GetChk(m_hwnd, IDC_CHK_CACHE_THUMBS);
     s.threadCount    = GetDlgItemInt(m_hwnd,IDC_EDIT_THREAD_COUNT,nullptr,FALSE);
-    s.maxMemoryMB    = GetDlgItemInt(m_hwnd,IDC_EDIT_MAX_MEM,nullptr,FALSE);
-    s.cacheSizeMB    = GetDlgItemInt(m_hwnd,IDC_EDIT_CACHE_SIZE,nullptr,FALSE);
     wchar_t buf[MAX_PATH]={};
     GetDlgItemTextW(m_hwnd,IDC_EDIT_TEMP_DIR,buf,MAX_PATH);
     s.tempDirPath=buf;
@@ -539,19 +580,6 @@ INT_PTR CALLBACK CPageAdvanced::DlgProc(
         WORD ctrl=LOWORD(wp);
         if (ctrl==IDC_BTN_BROWSE_TEMP) browsePath(IDC_EDIT_TEMP_DIR);
         if (ctrl==IDC_BTN_BROWSE_LOG)  browsePath(IDC_EDIT_LOG_PATH);
-        if (ctrl==IDC_BTN_CLEAR_CACHE) {
-            wchar_t tmp[MAX_PATH]={};
-            wcscpy_s(tmp, OwnFolder().c_str());
-            wcscat_s(tmp,L"\\ThumbCache");
-            SHFILEOPSTRUCTW fo = {};
-            fo.hwnd   = hDlg;
-            fo.wFunc  = FO_DELETE;
-            fo.pFrom  = tmp;    // must be double-null terminated
-            fo.fFlags = FOF_NO_UI | FOF_NOCONFIRMATION | FOF_SILENT;
-            SHFileOperationW(&fo);
-            MessageBoxW(hDlg,L"Thumbnail cache cleared.",
-                L"Cache",MB_ICONINFORMATION);
-        }
         if (HIWORD(wp)==BN_CLICKED||HIWORD(wp)==EN_CHANGE)
             p->m_dirty=true;
     }
@@ -599,7 +627,6 @@ INT_PTR CALLBACK CPageAbout::DlgProc(
         if (LOWORD(wp)==IDC_LINK_WEBSITE)
             ShellExecuteW(hDlg,L"open",
                 L"https://github.com/ArchiveFldr",nullptr,nullptr,SW_SHOW);
-        if (LOWORD(wp)==IDC_BTN_CHECK_UPDATE)
             MessageBoxW(hDlg,L"ArchiveFldr v1.0.0 is up to date.",
                 L"Check for Updates",MB_ICONINFORMATION);
     }

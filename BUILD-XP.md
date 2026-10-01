@@ -91,6 +91,9 @@ builds normally in VS2026 — the switch only takes effect when you pass it.
 | Thumbnail provider | — | ✓ | ✓ | ✓ | ✓ |
 | Preview pane | — | ✓ | ✓ | ✓ | ✓ |
 
+wimlib is the one engine with a hard version floor of its own: 1.13.0 or
+newer (the `libwim-15` builds), checked at load time.
+
 Third-party engine DLLs have their own floor. Several current builds of
 zstd, brotli and wimlib are themselves compiled for Vista+; where a
 project ships a separate XP build, drop it in as `*.xp.<bits>.dll` and the

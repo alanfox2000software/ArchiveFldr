@@ -75,6 +75,7 @@
       <Filter>Source Files\Handlers</Filter>
     </ClCompile>
     <ClCompile Include="src\CodecEngine.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\WimEngine.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\UnrarEngine.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\SysInfo.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\Formats.cpp"><Filter>Source Files</Filter></ClCompile>
@@ -104,6 +105,7 @@
     <ClInclude Include="src\Sdk7z.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\Registry.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\CodecEngine.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\WimEngine.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\UnrarEngine.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\SysInfo.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\Formats.h"><Filter>Header Files</Filter></ClInclude>

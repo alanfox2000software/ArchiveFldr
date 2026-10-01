@@ -465,6 +465,7 @@ echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
     <ClCompile Include="src\SevenZipEngine.cpp" />
     <!-- Settings & GUI -->
     <ClCompile Include="src\CodecEngine.cpp" />
+    <ClCompile Include="src\WimEngine.cpp" />
     <ClCompile Include="src\UnrarEngine.cpp" />
     <ClCompile Include="src\SysInfo.cpp" />
     <ClCompile Include="src\Formats.cpp" />
@@ -492,6 +493,7 @@ echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
     <ClInclude Include="src\Sdk7z.h" />
     <ClInclude Include="src\Registry.h" />
     <ClInclude Include="src\CodecEngine.h" />
+    <ClInclude Include="src\WimEngine.h" />
     <ClInclude Include="src\UnrarEngine.h" />
     <ClInclude Include="src\SysInfo.h" />
     <ClInclude Include="src\Formats.h" />

@@ -113,7 +113,7 @@ drop the DLL at any one of them and retry.
 | `lz4` | `thirdparty\lz4\` | `liblz4.<bits>.dll` | `.lz4` `.tlz4` | extract + test |
 | `lz5` | `thirdparty\lz5\` | `liblz5.<bits>.dll` | `.lz5` | extract + test |
 | `lizard` | `thirdparty\lizard\` | `liblizard.<bits>.dll` | `.liz` | extract + test |
-| `WimLib` | `thirdparty\WimLib\` | `libwim-15.<bits>.dll` | `.wim` `.swm` `.esd` | resolved, engine pending — 7z.dll reads these today |
+| `WimLib` | `thirdparty\WimLib\` | `libwim-15.<bits>.dll` | `.wim` `.swm` `.esd` | extract + verify |
 
 Registry hints: `7z` → `HKLM\SOFTWARE\7-Zip\Path`, `Unrar` →
 `HKLM\SOFTWARE\WinRAR\exe64`.
@@ -148,11 +148,24 @@ exactly what your copy of 7-Zip reads — including formats added after
 this was written. When a file's extension does not match its contents,
 every other handler is tried as well.
 
-**WimLib**'s DLL is resolved and diagnosed, but the engine that drives it
-is not written yet: `wimlib_dir_entry` has to be transcribed exactly or it
-corrupts memory inside Explorer, and that is not worth guessing at. `.wim`,
-`.swm` and `.esd` are not unsupported in the meantime — they are handled
-by `7z.dll`.
+**WimLib** needs version **1.13.0 or newer** — in other words the
+`libwim-15` builds. `struct wimlib_dir_entry` grew fields in 1.9.1 and
+again later, and wimlib hands that struct straight to the caller, so an
+older DLL would lay out memory differently from what ShellNSE expects.
+The version is checked when the DLL loads and anything older is refused
+with an explanation rather than read incorrectly.
+
+A WIM holds one or more *images*, each a full directory tree. A
+single-image file shows its root directly; a multi-image file shows one
+folder per image (`1 - Windows Setup`, `2 - …`), the way DISM and 7-Zip
+present them. Extracting such a file writes each image into its own
+subfolder so they cannot collide.
+
+For a split WIM, keep every `.swm` part in one folder. Opening part 1 is
+enough to browse, but the file data lives across all the parts, so
+ShellNSE finds the siblings and references them before extracting.
+
+If libwim is absent, `.wim` falls back to `7z.dll`, which reads WIM too.
 
 ## Adding another engine
 

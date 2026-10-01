@@ -5,6 +5,7 @@
 #include "SevenZipEngine.h"
 #include "CodecEngine.h"
 #include "UnrarEngine.h"
+#include "WimEngine.h"
 #include "Formats.h"
 
 // ─────────────────────────────────────────────────────────
@@ -263,10 +264,17 @@ std::shared_ptr<IArchiveEngine> CreateArchiveEngine(const std::wstring& path)
         return std::make_shared<CUnrarEngine>();
 
     case Formats::EngineKind::Wim:
+        // wimlib understands WIM properly: multiple images, split parts,
+        // reparse points. Fall back to 7z.dll, which also reads WIM, and
+        // only then to wimlib's own "here is what I looked for" report.
+        if (IsWimLibAvailable())  return std::make_shared<CWimEngine>();
+        if (Is7zEngineAvailable())return std::make_shared<C7zArchiveEngine>();
+        return std::make_shared<CWimEngine>();
+
     case Formats::EngineKind::SevenZip:
-        // Everything 7z.dll can read: .7z, .zip, .tar, .wim, .iso, .cab,
-        // .gz, .xz, … The engine asks 7z.dll which handler fits rather
-        // than assuming the .7z one, so these all open properly.
+        // Everything 7z.dll can read: .7z, .zip, .tar, .iso, .cab, .gz,
+        // .xz, … The engine asks 7z.dll which handler fits rather than
+        // assuming the .7z one, so these all open properly.
         return std::make_shared<C7zArchiveEngine>();
     }
 

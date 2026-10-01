@@ -35,8 +35,16 @@ enum class DateFmt : int {
 class Settings
 {
 public:
+    // Loaded on first use. This used to be driven from DllMain, which is
+    // not allowed to touch the registry (loader lock), and meant every
+    // short-lived shell host paid for it whether it read a setting or not.
     static Settings& Get() noexcept {
         static Settings s_instance;
+        static const bool s_loaded = [] {
+            s_instance.Load();
+            return true;
+        }();
+        (void)s_loaded;
         return s_instance;
     }
 

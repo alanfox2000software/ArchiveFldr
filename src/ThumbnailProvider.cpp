@@ -3,6 +3,7 @@
 #include "ThumbnailProvider.h"
 #include "ArchiveEngine.h"
 #include "GUIDs.h"
+#include "Settings.h"
 
 CThumbnailProvider::CThumbnailProvider()
     { InterlockedIncrement(&g_cDllRefCount); }
@@ -17,8 +18,6 @@ STDMETHODIMP CThumbnailProvider::QueryInterface(REFIID riid, void** ppv)
     { *ppv=static_cast<IThumbnailProvider*>(this); AddRef(); return S_OK; }
     if (IsEqualIID(riid,IID_IInitializeWithFile))
     { *ppv=static_cast<IInitializeWithFile*>(this); AddRef(); return S_OK; }
-    if (IsEqualIID(riid,IID_IInitializeWithStream))
-    { *ppv=static_cast<IInitializeWithStream*>(this); AddRef(); return S_OK; }
     return E_NOINTERFACE;
 }
 STDMETHODIMP_(ULONG) CThumbnailProvider::AddRef()
@@ -31,12 +30,6 @@ STDMETHODIMP CThumbnailProvider::Initialize(LPCWSTR pszFilePath, DWORD /*grfMode
     if (!pszFilePath) return E_POINTER;
     m_filePath = pszFilePath; return S_OK;
 }
-STDMETHODIMP CThumbnailProvider::Initialize(IStream* /*pstream*/, DWORD /*grfMode*/)
-{
-    // Stream init: would read from stream; simplified here
-    return E_NOTIMPL;
-}
-
 STDMETHODIMP CThumbnailProvider::GetThumbnail(
     UINT cx, HBITMAP* phbmp, WTS_ALPHATYPE* pdwAlpha)
 {
@@ -45,28 +38,58 @@ STDMETHODIMP CThumbnailProvider::GetThumbnail(
 
     if (m_filePath.empty()) return E_FAIL;
 
+    // Honour the user's choice, and never draw without GDI+. Returning a
+    // failure here is harmless: the shell falls back to the file type icon.
+    if (!Settings::Get().showThumbnails) return E_NOTIMPL;
+    if (!EnsureGdiPlus())                return E_FAIL;
+
     *phbmp    = CreateArchiveThumbnail(cx);
     *pdwAlpha = WTSAT_ARGB;
     return *phbmp ? S_OK : E_FAIL;
 }
 
 // ── GDI+ thumbnail rendering ──────────────────────────────
+static std::wstring HumanSize(uint64_t bytes)
+{
+    const wchar_t* kUnits[] = { L"bytes", L"KB", L"MB", L"GB", L"TB" };
+    double v = (double)bytes;
+    int    u = 0;
+    while (v >= 1024.0 && u < 4) { v /= 1024.0; ++u; }
+    wchar_t buf[64];
+    swprintf_s(buf, 64, (u == 0) ? L"%.0f %s" : L"%.1f %s", v, kUnits[u]);
+    return buf;
+}
+
 HBITMAP CThumbnailProvider::CreateArchiveThumbnail(UINT cx)
 {
-    auto engine = CreateArchiveEngine(m_filePath);
-    UINT fileCount = 0;
-    std::wstring formatName = L"Archive";
-    if (engine && engine->Open(m_filePath)) {
-        fileCount  = (UINT)engine->GetFileCount();
-        formatName = engine->GetFormatName();
-    }
+    // This deliberately does NOT open the archive.
+    //
+    // Thumbnails are produced inside the shell's surrogate host for every
+    // archive in every folder the user merely looks at. Opening each one
+    // loaded the 7-Zip backend and parsed the whole index just to print a
+    // file count — an expensive, blocking operation in a process the user
+    // never asked for, and the reason archive-heavy folders left a trail
+    // of busy DllHost.exe instances behind.
+    //
+    // Everything drawn below comes from the directory entry instead.
     std::wstring archName = PathFindFileNameW(m_filePath.c_str());
-    return RenderThumbnailGDI(cx, archName, formatName, fileCount);
+
+    std::wstring label = PathFindExtensionW(m_filePath.c_str());
+    if (!label.empty() && label.front() == L'.') label.erase(0, 1);
+    for (auto& ch : label) ch = (wchar_t)towupper(ch);
+    if (label.empty()) label = L"ARCHIVE";
+
+    uint64_t bytes = 0;
+    WIN32_FILE_ATTRIBUTE_DATA fad{};
+    if (GetFileAttributesExW(m_filePath.c_str(), GetFileExInfoStandard, &fad))
+        bytes = ((uint64_t)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
+
+    return RenderThumbnailGDI(cx, archName, label, bytes);
 }
 
 HBITMAP CThumbnailProvider::RenderThumbnailGDI(
     UINT cx, const std::wstring& archiveName,
-    const std::wstring& formatName, UINT fileCount)
+    const std::wstring& formatName, uint64_t fileBytes)
 {
     // Create a 32bpp DIB section
     BITMAPINFO bmi{};
@@ -86,7 +109,10 @@ HBITMAP CThumbnailProvider::RenderThumbnailGDI(
     HDC hdcMem = CreateCompatibleDC(nullptr);
     HBITMAP hOld = (HBITMAP)SelectObject(hdcMem, hBmp);
 
-    // GDI+ rendering
+    // Scoped: a Gdiplus::Graphics must be destroyed, which is what flushes
+    // its drawing, while the DC it was built on is still alive and still
+    // has the bitmap selected into it.
+    {
     Gdiplus::Graphics g(hdcMem);
     g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
@@ -139,10 +165,11 @@ HBITMAP CThumbnailProvider::RenderThumbnailGDI(
     Gdiplus::RectF rcName(boxPad, boxPad+boxH+H*0.04f, boxW, H*0.18f);
     g.DrawString(archiveName.c_str(), -1, &fontSmall, rcName, &sf, &white);
 
-    // File count
-    wchar_t cnt[32]; swprintf_s(cnt,32,L"%u files", fileCount);
+    // Size on disk — free, unlike the entry count it replaced.
+    std::wstring size = HumanSize(fileBytes);
     Gdiplus::RectF rcCnt(boxPad, boxPad+boxH+H*0.24f, boxW, H*0.14f);
-    g.DrawString(cnt, -1, &fontSmall, rcCnt, &sf, &gray);
+    g.DrawString(size.c_str(), -1, &fontSmall, rcCnt, &sf, &gray);
+    }
 
     SelectObject(hdcMem, hOld);
     DeleteDC(hdcMem);

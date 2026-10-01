@@ -584,6 +584,7 @@ CSettingsDialog::~CSettingsDialog() = default;
 
 bool CSettingsDialog::Show(HWND hwndParent)
 {
+    EnsureCommonControls();
     INT_PTR r = DialogBoxParamW(g_hDllInstance,
         MAKEINTRESOURCEW(IDD_SETTINGS_MAIN),
         hwndParent, DlgProc, (LPARAM)this);

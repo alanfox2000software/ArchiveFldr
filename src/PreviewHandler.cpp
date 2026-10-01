@@ -150,6 +150,7 @@ void CPreviewHandler::LoadEntries()
 void CPreviewHandler::CreatePreviewWindow()
 {
     if (m_hwnd) return;
+    EnsureCommonControls();
     m_hwnd = CreateWindowExW(0, kPreviewClass, L"",
         WS_CHILD|WS_VISIBLE|WS_VSCROLL|WS_CLIPCHILDREN,
         m_rc.left, m_rc.top,
@@ -167,6 +168,12 @@ void CPreviewHandler::PaintPreview(HDC hdc, const RECT& rc)
 {
     float W = (float)(rc.right-rc.left);
     float H = (float)(rc.bottom-rc.top);
+
+    // GDI+ is started here, on first paint, not by the loader.
+    if (!EnsureGdiPlus()) {
+        FillRect(hdc, &rc, (HBRUSH)(COLOR_WINDOW + 1));
+        return;
+    }
 
     Gdiplus::Graphics g(hdc);
     g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);

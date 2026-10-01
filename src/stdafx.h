@@ -195,3 +195,10 @@ namespace chr = std::chrono;
 extern HINSTANCE g_hDllInstance;
 extern long      g_cDllRefCount;
 extern long      g_cLockCount;
+
+// Lazy, on-demand subsystem start-up. NEVER call these from DllMain: both
+// GdiplusStartup and InitCommonControlsEx run code that needs the loader
+// lock DllMain already holds. Call them from the method that actually
+// draws or creates a window.
+bool EnsureGdiPlus();          // true when GDI+ is usable
+void EnsureCommonControls();

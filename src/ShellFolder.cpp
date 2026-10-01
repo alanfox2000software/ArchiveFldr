@@ -859,11 +859,18 @@ STDMETHODIMP CShellFolder::GetDetailsOf(
         return SHStrDupW(item->name, &psd->str.pOleStr);
     case 1: // Size
         if (item->flags & NSE_FLAG_DIR) wcscpy_s(buf,L"<DIR>");
-        else StrFormatByteSizeW(item->fileSize, buf, 64);
+        else wcsncpy_s(buf, ArchiveOps::FormatSizeKB(item->fileSize).c_str(),
+                       _TRUNCATE);
         psd->fmt = LVCFMT_RIGHT; break;
     case 2: // Packed
         if (item->flags & NSE_FLAG_DIR) wcscpy_s(buf,L"");
-        else StrFormatByteSizeW(item->packedSize, buf, 64);
+        else if (item->packedSize == 0 && item->fileSize > 0)
+            // Not reported by this format (WIM shares and deduplicates its
+            // resources, solid blocks hand the whole figure to one member).
+            // An em dash says "unknown"; "0 bytes" would say "empty".
+            wcscpy_s(buf, L"\u2014");
+        else wcsncpy_s(buf, ArchiveOps::FormatSizeKB(item->packedSize).c_str(),
+                       _TRUNCATE);
         psd->fmt = LVCFMT_RIGHT; break;
     case 3: { // Ratio
         if (item->flags & NSE_FLAG_DIR) { psd->fmt = LVCFMT_RIGHT; break; }

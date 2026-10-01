@@ -328,10 +328,11 @@ int IterateCallback(const wimlib_dir_entry* d, void* userCtx)
     {
         // streams[0] is always present and is the unnamed data stream.
         e.uncompressedSize = d->streams[0].resource.uncompressed_size;
-        // WIM deduplicates and compresses in shared resources, so there is
-        // no meaningful per-file packed size. Leaving it zero makes the
-        // ratio column blank rather than wrong.
-        e.compressedSize   = 0;
+        // wimlib fills in compressed_size for blobs held in an ordinary
+        // (non-solid) resource. For solid resources — which is what an
+        // .esd uses — it stays 0, and the view shows that as "unknown"
+        // rather than inventing a figure.
+        e.compressedSize   = d->streams[0].resource.compressed_size;
         ctx->bytes        += e.uncompressedSize;
     }
 

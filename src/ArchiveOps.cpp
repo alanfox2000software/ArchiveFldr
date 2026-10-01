@@ -283,12 +283,48 @@ std::wstring FormatRatio(uint64_t uncompressed, uint64_t packed)
     if (uncompressed == 0) return L"";        // folders, empty files
     if (packed == 0)       return L"\u2014";  // not reported for this item
 
-    const double r = 100.0 * (1.0 - (double)packed / (double)uncompressed);
+    double r = 100.0 * (1.0 - (double)packed / (double)uncompressed);
     if (r < -999.0 || r > 100.0) return L"\u2014";   // not a usable figure
+
+    // Containers that do not compress — tar, stored zip entries — report a
+    // packed size a shade larger than the file, because it includes the
+    // format's own padding (tar rounds every member up to 512 bytes). That
+    // lands just below zero and "%.0f" renders it as "-0%", which reads
+    // like a bug. Anything inside a percent of zero is zero.
+    if (r > -1.0 && r < 0.0) r = 0.0;
 
     wchar_t buf[32];
     swprintf_s(buf, 32, L"%.0f%%", r);
     return buf;
+}
+
+std::wstring FormatSizeKB(uint64_t bytes)
+{
+    // Explorer rounds up, so a 1-byte file is "1 KB" rather than "0 KB".
+    const unsigned long long kb = (bytes + 1023ULL) / 1024ULL;
+
+    wchar_t raw[32];
+    swprintf_s(raw, 32, L"%llu", kb);
+
+    // Locale separators, read the XP-compatible way (GetLocaleInfoEx is
+    // Vista+). Defaults cover the case where the query fails.
+    wchar_t thousand[8] = L",";
+    wchar_t decimal[8]  = L".";
+    GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_STHOUSAND, thousand, 8);
+    GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_SDECIMAL,  decimal,  8);
+
+    NUMBERFMTW nf{};
+    nf.NumDigits     = 0;          // whole kilobytes, no decimals
+    nf.LeadingZero   = 0;
+    nf.Grouping      = 3;
+    nf.lpDecimalSep  = decimal;
+    nf.lpThousandSep = thousand;
+    nf.NegativeOrder = 1;
+
+    wchar_t out[48];
+    if (GetNumberFormatW(LOCALE_USER_DEFAULT, 0, raw, &nf, out, 48) > 0)
+        return std::wstring(out) + L" KB";
+    return std::wstring(raw) + L" KB";
 }
 
 std::wstring TargetDirFor(const std::wstring& baseDir, const AddItem& item)

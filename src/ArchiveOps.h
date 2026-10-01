@@ -57,6 +57,12 @@ std::wstring TargetDirFor(const std::wstring& baseDir, const AddItem& item);
 // properties text can never disagree.
 std::wstring FormatRatio(uint64_t uncompressed, uint64_t packed);
 
+// Size as Explorer itself writes it in a details column: whole kilobytes,
+// rounded up, grouped for the user's locale ("1,744 KB"). Explorer formats
+// the standard Size column this way from PKEY_Size, so any column we draw
+// ourselves has to match or the two sit side by side in different units.
+std::wstring FormatSizeKB(uint64_t bytes);
+
 // True when the clipboard currently holds something ExpandForAdd can use.
 bool ClipboardHasFiles();
 

@@ -757,8 +757,17 @@ void C7zArchiveEngine::BuildEntryList()
             // Older engines leave it empty for some archives, hence the
             // fallback — the details view shows this verbatim.
             e.compressionMethod  = PropGetString(m_archive.Get(), i, k7zPidMethod);
-            if (e.compressionMethod.empty())
-                e.compressionMethod = e.isEncrypted ? L"7z (encrypted)" : L"7z";
+            // Only .7z used to reach this engine, so an unreported method
+            // was labelled "7z". Now that tar, zip, iso and the rest come
+            // through here that would be a plain lie — a tar member is
+            // stored, not 7z-compressed. Leave it empty and let the view
+            // show "Store", which is what an unreported method means.
+            if (e.isEncrypted)
+            {
+                e.compressionMethod = e.compressionMethod.empty()
+                    ? std::wstring(L"Encrypted")
+                    : e.compressionMethod + L" (encrypted)";
+            }
             const uint64_t block = PropGetUInt64(m_archive.Get(), i,
                                                  k7zPidBlock, UINT64_MAX);
             m_allEntries.push_back(std::move(e));

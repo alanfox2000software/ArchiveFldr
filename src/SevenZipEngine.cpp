@@ -170,7 +170,14 @@ FILETIME PropGetFileTime(IInArchive7z* arc, UINT32 idx, PROPID pid)
 class CInFileStream final : public IInStream7z
 {
 public:
-    ~CInFileStream() override { CloseFile(); }
+    // NOTE: no `override` here — COM interfaces (IUnknown and therefore
+    // every 7-Zip "COM-lite" interface) deliberately have no virtual
+    // destructor, so there is nothing to override (MSVC: error C3668).
+    // The class is `final` and only ever destroyed through `delete this`
+    // in Release() below, where the static type is exact, so a plain
+    // non-virtual destructor is correct and keeps the vtable layout
+    // byte-for-byte identical to the interface the engine DLL expects.
+    ~CInFileStream() { CloseFile(); }
 
     bool OpenFile(const std::wstring& path)
     {
@@ -230,7 +237,10 @@ private:
 class COutFileStream final : public ISequentialOutStream7z
 {
 public:
-    ~COutFileStream() override { CloseFile(); }
+    // No `override` — see the note on CInFileStream above: COM interfaces
+    // have no virtual destructor to override (MSVC: error C3668), and this
+    // object is only ever deleted through its exact type in Release().
+    ~COutFileStream() { CloseFile(); }
 
     bool CreateOutputFile(const std::wstring& path)
     {

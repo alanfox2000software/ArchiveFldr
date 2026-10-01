@@ -3,36 +3,16 @@
 #include "ArchiveEngine.h"
 #include "GUIDs.h"
 #include "SevenZipEngine.h"
+#include "CodecEngine.h"
+#include "UnrarEngine.h"
+#include "Formats.h"
 
 // ─────────────────────────────────────────────────────────
 // CStubArchiveEngine
 // ─────────────────────────────────────────────────────────
 std::wstring CStubArchiveEngine::ExtToFormatName(const wchar_t* ext)
 {
-    if (!ext) return L"Archive";
-    struct { const wchar_t* e; const wchar_t* n; } tbl[] = {
-        {L".zip",  L"ZIP"},   {L".zipx", L"ZIPX"},
-        {L".jar",  L"JAR"},   {L".apk",  L"APK"},
-        {L".war",  L"WAR"},   {L".docx", L"DOCX"},
-        {L".xlsx", L"XLSX"},  {L".pptx", L"PPTX"},
-        {L".7z",   L"7-Zip"}, {L".7zip", L"7-Zip"},
-        {L".rar",  L"RAR"},   {L".r00",  L"RAR"},
-        {L".tar",  L"TAR"},   {L".tgz",  L"TAR+GZ"},
-        {L".tbz2", L"TAR+BZ2"},{L".txz", L"TAR+XZ"},
-        {L".gz",   L"GZip"},  {L".gzip", L"GZip"},
-        {L".bz2",  L"BZip2"}, {L".xz",  L"XZ"},
-        {L".zst",  L"Zstd"},  {L".lz",  L"Lzip"},
-        {L".lzma", L"LZMA"},  {L".lzh", L"LZH"},
-        {L".lha",  L"LZH"},   {L".arj", L"ARJ"},
-        {L".cab",  L"CAB"},   {L".iso", L"ISO"},
-        {L".img",  L"ISO"},   {L".wim", L"WIM"},
-        {L".swm",  L"WIM"},   {L".esd", L"WIM"},
-        {L".msi",  L"MSI"},   {L".deb", L"DEB"},
-        {L".rpm",  L"RPM"},   {nullptr,  nullptr}
-    };
-    for (int i=0; tbl[i].e; i++)
-        if (_wcsicmp(ext, tbl[i].e)==0) return tbl[i].n;
-    return L"Archive";
+    return Formats::NameFor(ext);
 }
 
 bool CStubArchiveEngine::Open(const std::wstring& path)
@@ -303,21 +283,35 @@ uint64_t CStubArchiveEngine::GetPackedSize() const {
 std::shared_ptr<IArchiveEngine> CreateArchiveEngine(const std::wstring& path)
 {
     LPCWSTR ext = PathFindExtensionW(path.c_str());
-    if (!IsArchiveExtension(ext)) return nullptr;
+    const Formats::Format* f = Formats::Find(ext);
+    if (!f) return nullptr;
 
-    // .7z / .7zip → real 7-Zip engine (thirdparty\7z\7z.64.dll / 7z.32.dll).
-    // Open() returns false honestly (no fake/demo data) if the engine DLL
-    // is missing, unloadable, or the file isn't a valid 7z archive — the
-    // caller (ShellFolder/ContextMenu) is expected to handle that failure
-    // the same way it would any other unreadable archive.
-    if (_wcsicmp(ext, L".7z") == 0 || _wcsicmp(ext, L".7zip") == 0)
-        return std::make_shared<C7zArchiveEngine>();
+    // Note that the engine is chosen even when its DLL is missing. Each one
+    // reports that honestly through GetCaps().unavailableReason — naming the
+    // DLL and every path it was looked for — which is far more use than
+    // quietly handing back a stub full of invented entries.
+    switch (f->engine)
+    {
+    case Formats::EngineKind::Codec:
+        // Brotli / LZ4 / LZ5 / Lizard / Zstandard: one stream, one file.
+        return std::make_shared<CCodecEngine>(f->codec);
 
-    // In production, dispatch remaining formats here:
-    // if zip format  → CZipEngine (minizip / zlibwapi)
-    // if rar format  → CRarEngine (UnRAR DLL)
-    // if iso format  → CIsoEngine (libisofs / custom)
-    // etc.
+    case Formats::EngineKind::Unrar:
+        return std::make_shared<CUnrarEngine>();
+
+    case Formats::EngineKind::SevenZip:
+        // The 7-Zip engine currently binds the .7z format class only, so
+        // the other container types it could handle still fall through to
+        // the placeholder below.
+        if (_wcsicmp(ext, L".7z") == 0 || _wcsicmp(ext, L".7zip") == 0)
+            return std::make_shared<C7zArchiveEngine>();
+        break;
+
+    case Formats::EngineKind::Wim:
+        // wimlib is resolved and diagnosed, but the engine that drives it
+        // is not written yet.
+        break;
+    }
 
     return std::make_shared<CStubArchiveEngine>();
 }

@@ -1,6 +1,7 @@
 // ThirdParty.cpp — see ThirdParty.h for the layout contract.
 #include "stdafx.h"
 #include "ThirdParty.h"
+#include "SysInfo.h"
 
 namespace ThirdParty {
 
@@ -12,6 +13,7 @@ namespace ThirdParty {
 //   { L"unrar",                      // thirdparty\unrar\
 //     L"UnRAR engine",               // shown in error messages
 //     L"unrar.dll",                  // ';'-separated candidates, best first
+//     nullptr,                       // companion DLLs, if it is split up
 //     L"SOFTWARE\\WinRAR", L"exe64", L"unrar.dll" },   // optional reg hint
 //
 // Nothing else in the resolver needs to change: naming, bitness suffixes,
@@ -19,8 +21,34 @@ namespace ThirdParty {
 // ─────────────────────────────────────────────────────────────────────────
 static const Component kComponents[] =
 {
-    { L"7z", L"7-Zip engine", L"7z.dll;7za.dll",
+    { L"7z", L"7-Zip engine", L"7z.dll;7za.dll", nullptr,
       L"SOFTWARE\\7-Zip", L"Path", L"7z.dll" },
+
+    // Brotli ships as three DLLs. libbrotlidec is the one we call; it needs
+    // libbrotlicommon beside it, and libbrotlienc only for compression.
+    { L"brotli", L"Brotli codec", L"libbrotlidec.dll;brotlidec.dll",
+      L"libbrotlicommon.dll;libbrotlienc.dll", nullptr, nullptr, nullptr },
+
+    { L"lizard", L"Lizard codec", L"liblizard.dll;lizard.dll",
+      nullptr, nullptr, nullptr, nullptr },
+
+    { L"lz4", L"LZ4 codec", L"liblz4.dll;lz4.dll",
+      nullptr, nullptr, nullptr, nullptr },
+
+    { L"lz5", L"LZ5 codec", L"liblz5.dll;lz5.dll",
+      nullptr, nullptr, nullptr, nullptr },
+
+    // zstd also ships a separate XP-compatible build (libzstd.xp.<bits>.dll);
+    // NameVariants() prefers it automatically when we are on XP.
+    { L"zstd", L"Zstandard codec", L"libzstd.dll;zstd.dll",
+      nullptr, nullptr, nullptr, nullptr },
+
+    // wimlib's SONAME carries its ABI number, hence the -15.
+    { L"WimLib", L"WimLib engine", L"libwim-15.dll;libwim.dll;wim.dll",
+      nullptr, nullptr, nullptr, nullptr },
+
+    { L"Unrar", L"UnRAR engine", L"unrar.dll",
+      nullptr, L"SOFTWARE\\WinRAR", L"exe64", L"unrar.dll" },
 };
 
 const Component* Find(const wchar_t* id)
@@ -80,7 +108,8 @@ static std::vector<std::wstring> SplitNames(const wchar_t* list)
     return out;
 }
 
-// "7z.dll" → "7z.64.dll", "7z64.dll", "7z.dll"
+// "7z.dll" → "7z.64.dll", "7z64.dll", "7z.dll" (+ the .xp. build, whose
+// position in the list depends on the Windows we are running on).
 static std::vector<std::wstring> NameVariants(const std::wstring& base)
 {
     std::wstring stem = base, ext;
@@ -88,9 +117,20 @@ static std::vector<std::wstring> NameVariants(const std::wstring& base)
     if (dot != std::wstring::npos) { stem = base.substr(0, dot); ext = base.substr(dot); }
 
     const std::wstring bits = BitnessTag();
-    return { stem + L"." + bits + ext,     // 7z.64.dll
-             stem + bits + ext,            // unrar64.dll
-             base };                       // 7z.dll
+    const std::wstring xp   = stem + L".xp." + bits + ext;   // libzstd.xp.64.dll
+
+    std::vector<std::wstring> v;
+    // On XP the XP build is the only one likely to load at all, so it goes
+    // first. Everywhere else it is a last resort: it works fine on modern
+    // Windows, so a user who only shipped that file should still be served.
+    if (SysInfo::IsXP()) v.push_back(xp);
+
+    v.push_back(stem + L"." + bits + ext);   // liblz4.64.dll
+    v.push_back(stem + bits + ext);          // unrar64.dll
+    v.push_back(base);                       // 7z.dll
+
+    if (!SysInfo::IsXP()) v.push_back(xp);
+    return v;
 }
 
 std::vector<std::wstring> ProbePaths(const Component& c)
@@ -99,11 +139,19 @@ std::vector<std::wstring> ProbePaths(const Component& c)
     const std::wstring dir = ModuleDir();
     if (dir.empty()) return out;
 
-    // Search directories, most specific first.
+    // Search directories, most specific first. The <bits> subdirectory
+    // comes first because that is how brotli is laid out
+    // (thirdparty\brotli\64\libbrotlidec.dll) and a 64-bit DLL found in a
+    // "64" folder is a stronger match than a bare one further out.
+    const std::wstring id   = c.id;
+    const std::wstring bits = BitnessTag();
     const std::wstring subDirs[] = {
-        L"\\thirdparty\\" + std::wstring(c.id) + L"\\",
+        L"\\thirdparty\\" + id + L"\\" + bits + L"\\",
+        L"\\thirdparty\\" + id + L"\\",
+        L"\\thirdparty\\" + bits + L"\\",
         L"\\thirdparty\\",
-        L"\\" + std::wstring(c.id) + L"\\",
+        L"\\" + id + L"\\" + bits + L"\\",
+        L"\\" + id + L"\\",
         L"\\",
     };
 
@@ -189,6 +237,40 @@ HMODULE Load(const std::wstring& fullPath)
     if (fullPath.empty()) return nullptr;
     return LoadLibraryExW(fullPath.c_str(), nullptr,
                           LOAD_WITH_ALTERED_SEARCH_PATH);
+}
+
+HMODULE LoadComponent(const wchar_t* id, std::wstring* resolvedPath)
+{
+    if (resolvedPath) resolvedPath->clear();
+
+    const Component* c = Find(id);
+    if (!c) return nullptr;
+
+    const std::wstring primary = Resolve(id);
+    if (primary.empty()) return nullptr;
+    if (resolvedPath) *resolvedPath = primary;
+
+    // Pull in the companions from the same folder first. Brotli needs this:
+    // libbrotlidec.dll imports libbrotlicommon.dll, and although
+    // LOAD_WITH_ALTERED_SEARCH_PATH would normally find it next door, doing
+    // it explicitly also copes with the companion carrying a bitness suffix
+    // the import table does not mention.
+    if (c->companions)
+    {
+        std::wstring folder = primary;
+        PathRemoveFileSpecW(&folder[0]);
+        folder.resize(wcslen(folder.c_str()));
+        if (!folder.empty() && folder.back() != L'\\') folder += L'\\';
+
+        for (const auto& base : SplitNames(c->companions))
+            for (const auto& name : NameVariants(base))
+            {
+                const std::wstring cand = folder + name;
+                if (FileExists(cand)) { Load(cand); break; }
+            }
+    }
+
+    return Load(primary);
 }
 
 } // namespace ThirdParty

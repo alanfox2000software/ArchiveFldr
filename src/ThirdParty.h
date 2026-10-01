@@ -8,16 +8,26 @@
 // single row in kComponents[] plus the code that talks to it — never a new
 // ad-hoc search routine:
 //
-//   <ShellNSE dir>\thirdparty\<id>\<base>.<bits>.dll     preferred
-//   <ShellNSE dir>\thirdparty\<id>\<base><bits>.dll      (unrar64.dll style)
-//   <ShellNSE dir>\thirdparty\<id>\<base>.dll            plain copy
+//   <ShellNSE dir>\thirdparty\<id>\<bits>\<base…>        brotli layout
+//   <ShellNSE dir>\thirdparty\<id>\<base…>               most engines
+//   <ShellNSE dir>\thirdparty\<bits>\<base…>
 //   <ShellNSE dir>\thirdparty\<base…>                    flat thirdparty dir
 //   <ShellNSE dir>\<id>\<base…>                          short layout
 //   <ShellNSE dir>\<base…>                               next to ShellNSE
 //   …then the component's optional registry install hint.
 //
+// and within each of those directories, for each base name:
+//
+//   <base>.xp.<bits>.dll   only preferred when running on XP / 2003
+//   <base>.<bits>.dll      liblz4.64.dll, libzstd.32.dll
+//   <base><bits>.dll       unrar64.dll
+//   <base>.dll             plain copy
+//
 // <bits> is 64 for ShellNSE.64.dll and 32 for ShellNSE.32.dll: the engine
-// DLL must always match the bitness of the host process.
+// DLL must always match the bitness of the host process. The .xp. variant
+// exists because some projects ship a separate XP-compatible build (zstd
+// does); it is tried last elsewhere, since an XP build still runs happily
+// on Windows 11.
 // ─────────────────────────────────────────────────────────────────────────
 #pragma once
 #include "stdafx.h"
@@ -31,6 +41,10 @@ struct Component
     const wchar_t* displayName;  // shown in UI/diagnostics  e.g. L"7-Zip engine"
     const wchar_t* baseNames;    // ';'-separated file names, best first:
                                  //   L"7z.dll;7za.dll"
+    const wchar_t* companions;   // ';'-separated DLLs that must be loaded
+                                 // from the same folder first (brotli splits
+                                 // itself across libbrotlicommon/dec/enc);
+                                 // nullptr when the DLL stands alone
     const wchar_t* regKey;       // optional install hint, may be nullptr:
     const wchar_t* regValue;     //   HKLM/HKCU\<regKey>\<regValue> = folder
     const wchar_t* regFileName;  //   + this file name
@@ -58,5 +72,12 @@ std::wstring DescribeSearch(const wchar_t* id);
 // LoadLibraryEx with LOAD_WITH_ALTERED_SEARCH_PATH so the engine can pull in
 // its own neighbouring dependencies.
 HMODULE Load(const std::wstring& fullPath);
+
+// Resolve a component, load any companions sitting beside it, then load the
+// DLL itself. This is what engines should call: it is the only path that
+// gets split libraries like brotli loaded in the right order.
+// Returns nullptr if the component cannot be found or fails to load;
+// `resolvedPath` (optional) receives the full path that was tried.
+HMODULE LoadComponent(const wchar_t* id, std::wstring* resolvedPath = nullptr);
 
 } // namespace ThirdParty

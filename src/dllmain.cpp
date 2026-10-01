@@ -98,8 +98,10 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
         { &CLSID_ShellNSEFolder,      CClassFactory::CreateShellFolder      },
         { &CLSID_ShellNSEContextMenu, CClassFactory::CreateContextMenu      },
         { &CLSID_ShellNSEDropTarget,  CClassFactory::CreateDropTarget       },
+#ifndef SHELLNSE_NO_VISTA_HANDLERS
         { &CLSID_ShellNSEThumbnail,   CClassFactory::CreateThumbnailProvider},
         { &CLSID_ShellNSEPreview,     CClassFactory::CreatePreviewHandler   },
+#endif // SHELLNSE_NO_VISTA_HANDLERS
     };
 
     for (auto& e : kEntries) {

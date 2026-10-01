@@ -1,6 +1,7 @@
 // ShellFolder.cpp
 #include "stdafx.h"
 #include "ShellFolder.h"
+#include "SysInfo.h"
 #include "ShellView.h"
 #include "ContextMenu.h"
 #include "DropTarget.h"
@@ -295,7 +296,8 @@ STDMETHODIMP CShellFolder::Initialize(LPCITEMIDLIST pidl)
         // SHGetPathFromIDList is limited to MAX_PATH and to "simple" file
         // system PIDLs; fall back to the modern name API before giving up.
         PWSTR psz = nullptr;
-        if (SUCCEEDED(SHGetNameFromIDList(pidl, SIGDN_FILESYSPATH, &psz)) && psz)
+        if (SUCCEEDED(SysInfo::GetNameFromIDList(
+                pidl, SysInfo::kSigdnFileSysPath, &psz)) && psz)
         {
             wcsncpy_s(path, psz, _TRUNCATE);
             CoTaskMemFree(psz);
@@ -310,7 +312,8 @@ STDMETHODIMP CShellFolder::Initialize(LPCITEMIDLIST pidl)
         // parsing name still carries the archive path, so dig it back out
         // instead of coming up empty and showing a blank window.
         PWSTR psz = nullptr;
-        if (SUCCEEDED(SHGetNameFromIDList(pidl, SIGDN_DESKTOPABSOLUTEPARSING, &psz)) && psz)
+        if (SUCCEEDED(SysInfo::GetNameFromIDList(
+                pidl, SysInfo::kSigdnDesktopAbsoluteParsing, &psz)) && psz)
         {
             std::wstring s = psz;
             CoTaskMemFree(psz);

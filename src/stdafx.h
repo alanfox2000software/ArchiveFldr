@@ -44,12 +44,28 @@
 #  define VC_EXTRA_LEAN
 #endif
 
-#ifndef _WIN32_WINNT
-#  define _WIN32_WINNT   0x0A00
-#endif
-
-#ifndef WINVER
-#  define WINVER         0x0A00
+// SHELLNSE_XP is set by the project when building with the XP toolset
+// (see BUILD-XP.md). It pins the headers to XP so the STL picks the
+// XP-compatible synchronisation primitives — with _WIN32_WINNT at 0x0A00
+// std::mutex compiles down to SRW locks, which XP's kernel32 does not
+// export, and the DLL would not load at all.
+#ifdef SHELLNSE_XP
+#  ifndef _WIN32_WINNT
+#    define _WIN32_WINNT 0x0501
+#  endif
+#  ifndef WINVER
+#    define WINVER       0x0501
+#  endif
+#  ifndef SHELLNSE_NO_VISTA_HANDLERS
+#    define SHELLNSE_NO_VISTA_HANDLERS   // no thumbnail/preview pane on XP
+#  endif
+#else
+#  ifndef _WIN32_WINNT
+#    define _WIN32_WINNT 0x0A00
+#  endif
+#  ifndef WINVER
+#    define WINVER       0x0A00
+#  endif
 #endif
 
 #ifndef _WIN32_IE
@@ -57,7 +73,11 @@
 #endif
 
 #ifndef NTDDI_VERSION
-#  define NTDDI_VERSION  0x0A000006
+#  ifdef SHELLNSE_XP
+#    define NTDDI_VERSION 0x05010300   // XP SP3
+#  else
+#    define NTDDI_VERSION 0x0A000006
+#  endif
 #endif
 
 // ═════════════════════════════════════════════════════════
@@ -106,6 +126,9 @@ using ComPtr = Microsoft::WRL::ComPtr<T>;
 #include <commdlg.h>
 #include <uxtheme.h>
 #include <vssym32.h>
+// dwmapi.h is fine to include, but dwmapi.lib must NOT be linked: there
+// is no dwmapi.dll on XP, and one unresolvable import stops the whole
+// extension loading. Anything from DWM has to be late bound via SysInfo.
 #include <dwmapi.h>
 
 // GDI+ — must come after windows.h
@@ -163,7 +186,6 @@ using ComPtr = Microsoft::WRL::ComPtr<T>;
 #pragma comment(lib, "gdi32.lib")       // lib exists, header does not
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "uxtheme.lib")
-#pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(linker,                                          \
     "\"/manifestdependency:type='win32' "                        \

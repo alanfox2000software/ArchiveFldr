@@ -5,6 +5,8 @@
 
 #include "stdafx.h"
 #include "Registry.h"
+#include "Formats.h"
+#include "SysInfo.h"
 #include "GUIDs.h"
 
 // ShellEx handler category GUIDs
@@ -106,7 +108,9 @@ HRESULT CRegistry::SetRegDword(HKEY root, const wchar_t* path,
 
 HRESULT CRegistry::DelRegKey(HKEY root, const wchar_t* path)
 {
-    LONG rc = RegDeleteTreeW(root, path);
+    // Late bound: RegDeleteTreeW is Vista+, and a static import of it
+    // would stop the whole DLL loading on XP.
+    LONG rc = SysInfo::DeleteRegTree(root, path);
     if (rc == ERROR_FILE_NOT_FOUND || rc == ERROR_PATH_NOT_FOUND)
         return S_OK;
     return HRESULT_FROM_WIN32(rc);
@@ -254,13 +258,19 @@ HRESULT CRegistry::RegisterShellExOnBase(const std::wstring& base)
         (base + L"\\shellex\\DropHandler").c_str(),
         nullptr, drop.c_str()));
 
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
-        (base + L"\\shellex\\" + kIThumbnailProvider).c_str(),
-        nullptr, th.c_str()));
+    // Thumbnail providers and preview handlers are Vista-era shell
+    // features. On XP nothing reads these keys and the DLL does not even
+    // build the handlers, so leave the registry clean instead.
+    if (SysInfo::IsVistaOrLater())
+    {
+        RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
+            (base + L"\\shellex\\" + kIThumbnailProvider).c_str(),
+            nullptr, th.c_str()));
 
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
-        (base + L"\\shellex\\" + kIPreviewHandler).c_str(),
-        nullptr, pv.c_str()));
+        RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
+            (base + L"\\shellex\\" + kIPreviewHandler).c_str(),
+            nullptr, pv.c_str()));
+    }
 
     // No property-sheet handler: there is no "Archive" tab any more.
     // Delete the key so re-registering an older install drops the tab.
@@ -500,29 +510,13 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
     UnregisterApproved(CLSID_ShellNSEPropSheet);
     UnregisterCOMServer(CLSID_ShellNSEPropSheet);
 
-    // 5. Extensions
-    // NOTE: .docx / .xlsx / .pptx intentionally OMITTED so Office is not hijacked.
-    // Add them back only if you really want archive handling on Office packs.
-    struct ExtDef { const wchar_t* ext; const wchar_t* progId; } exts[] = {
-        { L".zip",  L"ShellNSE.ZipFile"  },
-        { L".7z",   L"ShellNSE.7zFile"   },
-        { L".rar",  L"ShellNSE.RarFile"  },
-        { L".tar",  L"ShellNSE.TarFile"  },
-        { L".gz",   L"ShellNSE.GzFile"   },
-        { L".tgz",  L"ShellNSE.TgzFile"  },
-        { L".bz2",  L"ShellNSE.Bz2File"  },
-        { L".xz",   L"ShellNSE.XzFile"   },
-        { L".zst",  L"ShellNSE.ZstFile"  },
-        { L".iso",  L"ShellNSE.IsoFile"  },
-        { L".cab",  L"ShellNSE.CabFile"  },
-        { L".lzh",  L"ShellNSE.LzhFile"  },
-        { L".wim",  L"ShellNSE.WimFile"  },
-        { L".jar",  L"ShellNSE.JarFile"  },
-        { L".apk",  L"ShellNSE.ApkFile"  },
-    };
-
-    for (const auto& e : exts)
-        RETURN_IF_FAILED(RegisterExtension(e.ext, e.progId, dllPath));
+    // 5. Extensions — every row in the Formats table that carries a
+    //    progId. Registering and unregistering now read the same list, so
+    //    they cannot drift apart the way two hand-written copies did.
+    //    Office containers deliberately have no progId: .docx really is a
+    //    zip, but taking Word's file association is hostile.
+    for (const auto* f : Formats::Registrable())
+        RETURN_IF_FAILED(RegisterExtension(f->ext, f->progId, dllPath));
 
     return S_OK;
 }
@@ -532,27 +526,20 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
 // ─────────────────────────────────────────────────────────
 HRESULT CRegistry::UnregisterAll()
 {
-    struct ExtDef { const wchar_t* ext; const wchar_t* progId; } exts[] = {
-        { L".zip",  L"ShellNSE.ZipFile"  },
-        { L".7z",   L"ShellNSE.7zFile"   },
-        { L".rar",  L"ShellNSE.RarFile"  },
-        { L".tar",  L"ShellNSE.TarFile"  },
-        { L".gz",   L"ShellNSE.GzFile"   },
-        { L".tgz",  L"ShellNSE.TgzFile"  },
-        { L".bz2",  L"ShellNSE.Bz2File"  },
-        { L".xz",   L"ShellNSE.XzFile"   },
-        { L".zst",  L"ShellNSE.ZstFile"  },
-        { L".iso",  L"ShellNSE.IsoFile"  },
-        { L".cab",  L"ShellNSE.CabFile"  },
-        { L".lzh",  L"ShellNSE.LzhFile"  },
-        { L".wim",  L"ShellNSE.WimFile"  },
-        { L".jar",  L"ShellNSE.JarFile"  },
-        { L".apk",  L"ShellNSE.ApkFile"  },
-        // Clean up older installs that registered Office types
+    // Everything we ever registered, plus a few progIds from older builds
+    // that are no longer in the table, so an upgrade cleans up after
+    // itself rather than leaving orphans behind.
+    struct ExtDef { const wchar_t* ext; const wchar_t* progId; };
+    std::vector<ExtDef> exts;
+    for (const auto* f : Formats::Registrable())
+        exts.push_back({ f->ext, f->progId });
+
+    const ExtDef legacy[] = {
         { L".docx", L"ShellNSE.DocxFile" },
         { L".xlsx", L"ShellNSE.XlsxFile" },
         { L".pptx", L"ShellNSE.PptxFile" },
     };
+    for (const auto& e : legacy) exts.push_back(e);
 
     for (const auto& e : exts)
     {

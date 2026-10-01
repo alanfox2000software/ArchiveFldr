@@ -28,7 +28,25 @@
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
     <RootNamespace>ShellNSE</RootNamespace>
     <Keyword>Win32Proj</Keyword>
-    <WindowsTargetPlatformVersion>10.0.28000.0</WindowsTargetPlatformVersion>
+    <!-- The XP toolset brings its own (Windows 7.1A) SDK, so only pin the
+         modern SDK version when we are not building for XP. -->
+    <WindowsTargetPlatformVersion Condition="!$(ShellNSEToolset.EndsWith('_xp'))">10.0.28000.0</WindowsTargetPlatformVersion>
+    <!-- Toolset override. Defaults to v145 (VS2026) for a normal build:
+           msbuild ShellNSE.sln /p:Configuration=Release /p:Platform=x64
+         To produce a binary whose CRT actually runs on Windows XP, build
+         with the XP-capable toolset instead (needs the VS2017 build tools
+         and the "Windows XP support for C++" component installed):
+           msbuild ShellNSE.sln /p:ShellNSEToolset=v141_xp
+         See BUILD-XP.md. -->
+    <ShellNSEToolset Condition="'$(ShellNSEToolset)'==''">v145</ShellNSEToolset>
+    <!-- Targeting macros follow the toolset. They have to: with
+         _WIN32_WINNT at 0x0A00 the STL compiles std::mutex down to SRW
+         locks, which XP's kernel32 does not export, and the extension
+         would not load no matter which toolset built it. SHELLNSE_XP also
+         compiles out the thumbnail provider and preview handler, neither
+         of which exists before Vista. -->
+    <ShellNSETargetDefines Condition="$(ShellNSEToolset.EndsWith('_xp'))">SHELLNSE_XP;_WIN32_WINNT=0x0501;WINVER=0x0501;NTDDI_VERSION=0x05010300;</ShellNSETargetDefines>
+    <ShellNSETargetDefines Condition="!$(ShellNSEToolset.EndsWith('_xp'))">_WIN32_WINNT=0x0A00;WINVER=0x0A00;NTDDI_VERSION=0x0A000006;</ShellNSETargetDefines>
     <ProjectName>ShellNSE</ProjectName>
     <VCProjectVersion>18.0</VCProjectVersion>
     <!-- Force UTF-8 for all source files project-wide -->
@@ -42,14 +60,14 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v145</PlatformToolset>
+    <PlatformToolset>$(ShellNSEToolset)</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <!-- RELEASE | Win32 -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v145</PlatformToolset>
+    <PlatformToolset>$(ShellNSEToolset)</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -57,14 +75,14 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v145</PlatformToolset>
+    <PlatformToolset>$(ShellNSEToolset)</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <!-- RELEASE | x64 -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v145</PlatformToolset>
+    <PlatformToolset>$(ShellNSEToolset)</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -123,9 +141,7 @@
       _WINDOWS;
       _USRDLL;
       SHELLNSE_EXPORTS;
-      _WIN32_WINNT=0x0A00;
-      WINVER=0x0A00;
-      NTDDI_VERSION=0x0A000006;
+      $(ShellNSETargetDefines)
       WIN32_LEAN_AND_MEAN;
       NOMINMAX;
       STRICT;
@@ -187,6 +203,12 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
+      <!-- Lowest Windows the loader will accept this binary on: 5.01 is
+           Windows XP (x86) and 5.02 is XP x64 / Server 2003, which is the
+           floor for any 64-bit build. Without this the linker stamps a
+           6.00+ subsystem version and XP refuses the DLL outright. -->
+      <MinimumRequiredVersion Condition="'$(Platform)'=='Win32'">5.01</MinimumRequiredVersion>
+      <MinimumRequiredVersion Condition="'$(Platform)'=='x64'">5.02</MinimumRequiredVersion>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ModuleDefinitionFile>src\ShellExt.def</ModuleDefinitionFile>
       <AdditionalDependencies>
@@ -200,7 +222,6 @@
         gdi32.lib;
         advapi32.lib;
         uxtheme.lib;
-        dwmapi.lib;
         comdlg32.lib;
         %(AdditionalDependencies)
       </AdditionalDependencies>
@@ -249,6 +270,12 @@ echo [ShellNSE] Registered Debug x86: $(TargetFileName)</Command>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
+      <!-- Lowest Windows the loader will accept this binary on: 5.01 is
+           Windows XP (x86) and 5.02 is XP x64 / Server 2003, which is the
+           floor for any 64-bit build. Without this the linker stamps a
+           6.00+ subsystem version and XP refuses the DLL outright. -->
+      <MinimumRequiredVersion Condition="'$(Platform)'=='Win32'">5.01</MinimumRequiredVersion>
+      <MinimumRequiredVersion Condition="'$(Platform)'=='x64'">5.02</MinimumRequiredVersion>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
@@ -264,7 +291,6 @@ echo [ShellNSE] Registered Debug x86: $(TargetFileName)</Command>
         gdi32.lib;
         advapi32.lib;
         uxtheme.lib;
-        dwmapi.lib;
         comdlg32.lib;
         %(AdditionalDependencies)
       </AdditionalDependencies>
@@ -310,6 +336,12 @@ echo [ShellNSE] Registered Release x86: $(TargetFileName)</Command>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
+      <!-- Lowest Windows the loader will accept this binary on: 5.01 is
+           Windows XP (x86) and 5.02 is XP x64 / Server 2003, which is the
+           floor for any 64-bit build. Without this the linker stamps a
+           6.00+ subsystem version and XP refuses the DLL outright. -->
+      <MinimumRequiredVersion Condition="'$(Platform)'=='Win32'">5.01</MinimumRequiredVersion>
+      <MinimumRequiredVersion Condition="'$(Platform)'=='x64'">5.02</MinimumRequiredVersion>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ModuleDefinitionFile>src\ShellExt.def</ModuleDefinitionFile>
       <AdditionalDependencies>
@@ -323,7 +355,6 @@ echo [ShellNSE] Registered Release x86: $(TargetFileName)</Command>
         gdi32.lib;
         advapi32.lib;
         uxtheme.lib;
-        dwmapi.lib;
         comdlg32.lib;
         %(AdditionalDependencies)
       </AdditionalDependencies>
@@ -371,6 +402,12 @@ echo [ShellNSE] Registered Debug x64: $(TargetFileName)</Command>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
+      <!-- Lowest Windows the loader will accept this binary on: 5.01 is
+           Windows XP (x86) and 5.02 is XP x64 / Server 2003, which is the
+           floor for any 64-bit build. Without this the linker stamps a
+           6.00+ subsystem version and XP refuses the DLL outright. -->
+      <MinimumRequiredVersion Condition="'$(Platform)'=='Win32'">5.01</MinimumRequiredVersion>
+      <MinimumRequiredVersion Condition="'$(Platform)'=='x64'">5.02</MinimumRequiredVersion>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
@@ -386,7 +423,6 @@ echo [ShellNSE] Registered Debug x64: $(TargetFileName)</Command>
         gdi32.lib;
         advapi32.lib;
         uxtheme.lib;
-        dwmapi.lib;
         comdlg32.lib;
         %(AdditionalDependencies)
       </AdditionalDependencies>
@@ -428,6 +464,10 @@ echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
     <ClCompile Include="src\ThirdParty.cpp" />
     <ClCompile Include="src\SevenZipEngine.cpp" />
     <!-- Settings & GUI -->
+    <ClCompile Include="src\CodecEngine.cpp" />
+    <ClCompile Include="src\UnrarEngine.cpp" />
+    <ClCompile Include="src\SysInfo.cpp" />
+    <ClCompile Include="src\Formats.cpp" />
     <ClCompile Include="src\Settings.cpp" />
     <ClCompile Include="src\SettingsDialog.cpp" />
   </ItemGroup>
@@ -451,6 +491,10 @@ echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
     <ClInclude Include="src\SevenZipEngine.h" />
     <ClInclude Include="src\Sdk7z.h" />
     <ClInclude Include="src\Registry.h" />
+    <ClInclude Include="src\CodecEngine.h" />
+    <ClInclude Include="src\UnrarEngine.h" />
+    <ClInclude Include="src\SysInfo.h" />
+    <ClInclude Include="src\Formats.h" />
     <ClInclude Include="src\Settings.h" />
     <ClInclude Include="src\SettingsDialog.h" />
     <ClInclude Include="res\resource.h" />

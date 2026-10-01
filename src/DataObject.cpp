@@ -1,6 +1,7 @@
 // DataObject.cpp — see DataObject.h
 #include "stdafx.h"
 #include "DataObject.h"
+#include "SysInfo.h"
 #include "ShellFolder.h"
 #include "ArchiveOps.h"
 
@@ -315,9 +316,9 @@ HRESULT CArchiveDataObject::RenderContents(LONG index, STGMEDIUM* pmed)
     if (!EnsureStaged(it)) return E_FAIL;
 
     IStream* pStm = nullptr;
-    HRESULT hr = SHCreateStreamOnFileEx(it.staged.c_str(),
-        STGM_READ | STGM_SHARE_DENY_WRITE, FILE_ATTRIBUTE_NORMAL,
-        FALSE, nullptr, &pStm);
+    // Late bound: SHCreateStreamOnFileEx only arrived in XP SP2, and the
+    // helper falls back to SHCreateStreamOnFileW below that.
+    HRESULT hr = SysInfo::OpenFileStreamRead(it.staged.c_str(), &pStm);
     if (FAILED(hr)) return hr;
 
     pmed->tymed          = TYMED_ISTREAM;

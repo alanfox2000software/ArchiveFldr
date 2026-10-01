@@ -56,35 +56,12 @@ DEFINE_GUID(CLSID_ShellNSEPropSheet,
     0xAB, 0xCD, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77);
 
 // ── Supported Archive Extensions ─────────────────────────
-static constexpr const wchar_t* kSupportedExtensions[] = {
-    L".zip", L".zipx", L".jar", L".war", L".ear", L".apk", L".ipa",
-    L".docx",L".xlsx", L".pptx",L".odt", L".ods", L".odp",
-    L".7z",  L".7zip",
-    L".rar", L".r00", L".r01", L".r02",
-    L".tar", L".tgz", L".tbz2",L".txz", L".tlz",
-    L".gz",  L".gzip",
-    L".bz2", L".bzip2",
-    L".xz",
-    L".lz",  L".lzma",
-    L".zst", L".zstd",
-    L".lzh", L".lha",
-    L".arj",
-    L".cab",
-    L".iso", L".img", L".nrg", L".mdf",
-    L".wim", L".swm", L".esd",
-    L".msi", L".msm", L".msp",
-    L".rpm", L".deb",
-    L".cpio",
-    L".dmg",
-    L".vhd", L".vhdx",
-    nullptr
-};
+// The list itself lives in Formats.cpp — one table that also carries the
+// display name, the engine and the third-party DLL each format needs.
+#include "Formats.h"
 
 static inline bool IsArchiveExtension(const wchar_t* ext) {
-    if (!ext) return false;
-    for (int i = 0; kSupportedExtensions[i]; i++)
-        if (_wcsicmp(ext, kSupportedExtensions[i]) == 0) return true;
-    return false;
+    return Formats::IsArchiveExtension(ext);
 }
 
 // ── Registry Key Paths ────────────────────────────────────

@@ -4,8 +4,10 @@
 #include "ShellFolder.h"
 #include "ContextMenu.h"
 #include "DropTarget.h"
+#ifndef SHELLNSE_NO_VISTA_HANDLERS
 #include "ThumbnailProvider.h"
 #include "PreviewHandler.h"
+#endif // SHELLNSE_NO_VISTA_HANDLERS
 
 // ── IUnknown ─────────────────────────────────────────────
 STDMETHODIMP CClassFactory::QueryInterface(REFIID riid, void** ppv)
@@ -66,6 +68,7 @@ HRESULT CClassFactory::CreateDropTarget(REFIID riid, LPVOID* ppv)
     HRESULT hr = p->QueryInterface(riid, ppv);
     p->Release(); return hr;
 }
+#ifndef SHELLNSE_NO_VISTA_HANDLERS
 HRESULT CClassFactory::CreateThumbnailProvider(REFIID riid, LPVOID* ppv)
 {
     auto* p = new(std::nothrow) CThumbnailProvider();
@@ -80,3 +83,4 @@ HRESULT CClassFactory::CreatePreviewHandler(REFIID riid, LPVOID* ppv)
     HRESULT hr = p->QueryInterface(riid, ppv);
     p->Release(); return hr;
 }
+#endif // SHELLNSE_NO_VISTA_HANDLERS

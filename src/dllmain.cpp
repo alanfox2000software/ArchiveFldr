@@ -1,5 +1,6 @@
 // dllmain.cpp — DLL Entry Point & COM Export Functions
 #include "stdafx.h"
+#include <initguid.h>
 #include "GUIDs.h"
 #include "ClassFactory.h"
 #include "Registry.h"

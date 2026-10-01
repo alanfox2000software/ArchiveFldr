@@ -140,6 +140,7 @@
 #define IDC_LINK_WEBSITE            1505
 #define IDC_LINK_LICENSE            1506
 #define IDC_BTN_CHECK_UPDATE        1507
+#define IDC_STATIC_DLL_PATH        1508
 
 // Settings Main Dialog
 #define IDC_TREE_PAGES              1600

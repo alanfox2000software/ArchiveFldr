@@ -63,6 +63,9 @@ private:
     bool ExtractIndices(const std::vector<UINT32>& indices,
                         const std::wstring& destDir, ProgressFn cb);
     void BuildEntryList();
+    // Split each solid block's packed size across the files sharing it.
+    void SpreadSolidBlockPackSizes(
+        const std::vector<std::pair<size_t, uint64_t>>& blockOf);
 
     ComPtr<IInArchive7z>      m_archive;
     std::vector<ArchiveEntry> m_allEntries; // flat list, directories synthesized

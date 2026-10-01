@@ -864,9 +864,9 @@ STDMETHODIMP CShellFolder::GetDetailsOf(
         psd->fmt = LVCFMT_RIGHT; break;
     case 3: { // Ratio
         if (item->flags & NSE_FLAG_DIR) { psd->fmt = LVCFMT_RIGHT; break; }
-        double r = item->fileSize > 0 ?
-            100.0*(1.0-(double)item->packedSize/item->fileSize) : 0.0;
-        swprintf_s(buf,128,L"%.0f%%", r);
+        std::wstring r = ArchiveOps::FormatRatio(item->fileSize,
+                                                 item->packedSize);
+        wcsncpy_s(buf, r.c_str(), _TRUNCATE);
         psd->fmt = LVCFMT_RIGHT; break; }
     case 4: { // Method — carried in the item ID (see NSE_ITEMID::method)
         std::wstring m = CPidlMgr::GetMethod(pidl);

@@ -49,6 +49,8 @@ DEFINE_GUID(CLSID_ShellNSEPreview,
 
 // ── Property Sheet ───────────────────────────────────────
 // CLSID_PropSheet    {B1A2C3D4-E5F6-7890-ABCD-777777777777}
+// The "Archive" property page was removed; this id is kept only so
+// registration can delete what older builds left in the registry.
 DEFINE_GUID(CLSID_ShellNSEPropSheet,
     0xB1A2C3D4, 0xE5F6, 0x7890,
     0xAB, 0xCD, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77);

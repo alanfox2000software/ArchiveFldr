@@ -52,6 +52,11 @@ void ExpandForAdd(const std::vector<std::wstring>& roots,
 // "src/" targets "src/docs/a/".
 std::wstring TargetDirFor(const std::wstring& baseDir, const AddItem& item);
 
+// Compression ratio for one entry, or an em dash when the archive does not
+// give us the numbers to work it out. Shared so the view column and the
+// properties text can never disagree.
+std::wstring FormatRatio(uint64_t uncompressed, uint64_t packed);
+
 // True when the clipboard currently holds something ExpandForAdd can use.
 bool ClipboardHasFiles();
 

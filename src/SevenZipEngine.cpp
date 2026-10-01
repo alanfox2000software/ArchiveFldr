@@ -554,6 +554,8 @@ void C7zArchiveEngine::BuildEntryList()
     m_archive->GetNumberOfItems(&numItems);
 
     std::unordered_map<std::wstring, bool> known;
+    // index into m_allEntries -> solid block it belongs to
+    std::vector<std::pair<size_t, uint64_t>> blockOf;
 
     for (UINT32 i = 0; i < numItems; i++)
     {
@@ -605,7 +607,69 @@ void C7zArchiveEngine::BuildEntryList()
             e.compressionMethod  = PropGetString(m_archive.Get(), i, k7zPidMethod);
             if (e.compressionMethod.empty())
                 e.compressionMethod = e.isEncrypted ? L"7z (encrypted)" : L"7z";
+            const uint64_t block = PropGetUInt64(m_archive.Get(), i,
+                                                 k7zPidBlock, UINT64_MAX);
             m_allEntries.push_back(std::move(e));
+            blockOf.emplace_back(m_allEntries.size() - 1, block);
+        }
+    }
+
+    SpreadSolidBlockPackSizes(blockOf);
+}
+
+// Share each solid block's packed size out among the files inside it.
+//
+// In a solid archive 7-Zip reports kpidPackSize for a whole block against a
+// single member and zero against all the others. Taken literally that says a
+// small file at the head of a block compressed to many times its own size:
+// bin\7zdex.exe came out at -1402% and bin\installer\config.exe at -21235%,
+// while every file behind them claimed to pack down to nothing.
+//
+// The archive does not record how much of the block each file really costs,
+// so split it in proportion to the unpacked sizes. Every row then shows a
+// believable figure, the archive total stays correct to the byte (the last
+// member absorbs the rounding), and entries touched here are flagged so the
+// properties text can say the number is a share rather than a measurement.
+void C7zArchiveEngine::SpreadSolidBlockPackSizes(
+    const std::vector<std::pair<size_t, uint64_t>>& blockOf)
+{
+    std::unordered_map<uint64_t, std::vector<size_t>> blocks;
+    for (const auto& [idx, blk] : blockOf)
+    {
+        if (blk == UINT64_MAX) continue;      // archive reports no blocks
+        blocks[blk].push_back(idx);
+    }
+
+    for (auto& [blk, members] : blocks)
+    {
+        (void)blk;
+        if (members.size() < 2) continue;     // nothing solid about it
+
+        uint64_t packed = 0, total = 0;
+        for (size_t i : members)
+        {
+            packed += m_allEntries[i].compressedSize;
+            total  += m_allEntries[i].uncompressedSize;
+        }
+        if (packed == 0 || total == 0) continue;
+
+        uint64_t handed = 0;
+        for (size_t n = 0; n < members.size(); ++n)
+        {
+            ArchiveEntry& e = m_allEntries[members[n]];
+            e.packedIsShared = true;
+
+            if (n + 1 == members.size())      // last member takes the rest
+            {
+                e.compressedSize = packed - handed;
+                break;
+            }
+            const long double share = (long double)packed *
+                (long double)e.uncompressedSize / (long double)total;
+            uint64_t v = (uint64_t)(share + 0.5L);
+            if (handed + v > packed) v = packed - handed;
+            e.compressedSize = v;
+            handed += v;
         }
     }
 }

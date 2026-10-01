@@ -11,6 +11,9 @@ struct ArchiveEntry {
     bool         isDirectory       = false;
     uint64_t     uncompressedSize  = 0;
     uint64_t     compressedSize    = 0;
+    // True when compressedSize is this item's share of a solid block
+    // rather than a figure the archive stores for it alone.
+    bool         packedIsShared    = false;
     uint32_t     crc32             = 0;
     std::wstring compressionMethod;
     FILETIME     modifiedTime      = {};

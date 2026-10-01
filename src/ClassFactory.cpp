@@ -6,7 +6,6 @@
 #include "DropTarget.h"
 #include "ThumbnailProvider.h"
 #include "PreviewHandler.h"
-#include "PropertySheet.h"
 
 // ── IUnknown ─────────────────────────────────────────────
 STDMETHODIMP CClassFactory::QueryInterface(REFIID riid, void** ppv)
@@ -77,13 +76,6 @@ HRESULT CClassFactory::CreateThumbnailProvider(REFIID riid, LPVOID* ppv)
 HRESULT CClassFactory::CreatePreviewHandler(REFIID riid, LPVOID* ppv)
 {
     auto* p = new(std::nothrow) CPreviewHandler();
-    if (!p) return E_OUTOFMEMORY;
-    HRESULT hr = p->QueryInterface(riid, ppv);
-    p->Release(); return hr;
-}
-HRESULT CClassFactory::CreatePropertySheet(REFIID riid, LPVOID* ppv)
-{
-    auto* p = new(std::nothrow) CPropertySheet();
     if (!p) return E_OUTOFMEMORY;
     HRESULT hr = p->QueryInterface(riid, ppv);
     p->Release(); return hr;

@@ -59,9 +59,6 @@
     <ClCompile Include="src\PreviewHandler.cpp">
       <Filter>Source Files\Handlers</Filter>
     </ClCompile>
-    <ClCompile Include="src\PropertySheet.cpp">
-      <Filter>Source Files\Handlers</Filter>
-    </ClCompile>
     <ClCompile Include="src\ArchiveEngine.cpp">
       <Filter>Source Files\Handlers</Filter>
     </ClCompile>
@@ -95,7 +92,6 @@
     <ClInclude Include="src\DropTarget.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\ThumbnailProvider.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\PreviewHandler.h"><Filter>Header Files</Filter></ClInclude>
-    <ClInclude Include="src\PropertySheet.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\ArchiveEngine.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\ArchiveOps.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\DataObject.h"><Filter>Header Files</Filter></ClInclude>

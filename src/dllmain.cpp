@@ -100,7 +100,6 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
         { &CLSID_ShellNSEDropTarget,  CClassFactory::CreateDropTarget       },
         { &CLSID_ShellNSEThumbnail,   CClassFactory::CreateThumbnailProvider},
         { &CLSID_ShellNSEPreview,     CClassFactory::CreatePreviewHandler   },
-        { &CLSID_ShellNSEPropSheet,   CClassFactory::CreatePropertySheet    },
     };
 
     for (auto& e : kEntries) {

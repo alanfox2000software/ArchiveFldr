@@ -36,7 +36,6 @@ public:
     static HRESULT CreateDropTarget       (REFIID, LPVOID*);
     static HRESULT CreateThumbnailProvider(REFIID, LPVOID*);
     static HRESULT CreatePreviewHandler   (REFIID, LPVOID*);
-    static HRESULT CreatePropertySheet    (REFIID, LPVOID*);
 
 private:
     ~CClassFactory() { InterlockedDecrement(&g_cDllRefCount); }

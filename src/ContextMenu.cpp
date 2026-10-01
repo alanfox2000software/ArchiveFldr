@@ -917,14 +917,15 @@ void CContextMenu::DoProperties()
 
     if (!e.isDirectory)
     {
-        wchar_t buf[256];
-        double ratio = e.uncompressedSize
-            ? 100.0 * (1.0 - (double)e.compressedSize / (double)e.uncompressedSize)
-            : 0.0;
-        swprintf_s(buf, 256,
-            L"\n\nSize: %s\nPacked: %s\nRatio: %.0f%%\nCRC-32: %08X",
-            fmt(e.uncompressedSize).c_str(), fmt(e.compressedSize).c_str(),
-            ratio, e.crc32);
+        wchar_t buf[320];
+        swprintf_s(buf, 320,
+            L"\n\nSize: %s\nPacked: %s%s\nRatio: %s\nCRC-32: %08X",
+            fmt(e.uncompressedSize).c_str(),
+            fmt(e.compressedSize).c_str(),
+            e.packedIsShared ? L" (share of a solid block)" : L"",
+            ArchiveOps::FormatRatio(e.uncompressedSize,
+                                    e.compressedSize).c_str(),
+            e.crc32);
         msg += buf;
         if (!e.compressionMethod.empty())
             msg += L"\nMethod: " + e.compressionMethod;

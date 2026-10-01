@@ -237,7 +237,7 @@ HRESULT CRegistry::RegisterNamespaceFolder(const wchar_t* dllPath)
     return S_OK;
 }
 
-// Register ContextMenu / Drop / Thumbnail / Preview / PropertySheet under a
+// Register ContextMenu / Drop / Thumbnail / Preview under a
 // Software\Classes\... base path (extension, ProgID, or SystemFileAssociations).
 HRESULT CRegistry::RegisterShellExOnBase(const std::wstring& base)
 {
@@ -245,7 +245,6 @@ HRESULT CRegistry::RegisterShellExOnBase(const std::wstring& base)
     const std::wstring drop = ClsidToStr(CLSID_ShellNSEDropTarget);
     const std::wstring th   = ClsidToStr(CLSID_ShellNSEThumbnail);
     const std::wstring pv   = ClsidToStr(CLSID_ShellNSEPreview);
-    const std::wstring ps   = ClsidToStr(CLSID_ShellNSEPropSheet);
 
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
         (base + L"\\shellex\\ContextMenuHandlers\\ShellNSE").c_str(),
@@ -263,9 +262,10 @@ HRESULT CRegistry::RegisterShellExOnBase(const std::wstring& base)
         (base + L"\\shellex\\" + kIPreviewHandler).c_str(),
         nullptr, pv.c_str()));
 
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
-        (base + L"\\shellex\\PropertySheetHandlers\\ShellNSE").c_str(),
-        nullptr, ps.c_str()));
+    // No property-sheet handler: there is no "Archive" tab any more.
+    // Delete the key so re-registering an older install drops the tab.
+    DelRegKey(HKEY_LOCAL_MACHINE,
+        (base + L"\\shellex\\PropertySheetHandlers\\ShellNSE").c_str());
 
     return S_OK;
 }
@@ -456,8 +456,6 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
         L"ShellNSE Thumbnail Provider", dllPath));
     RETURN_IF_FAILED(RegisterCOMServer(CLSID_ShellNSEPreview,
         L"ShellNSE Preview Handler", dllPath));
-    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ShellNSEPropSheet,
-        L"ShellNSE Property Sheet", dllPath));
 
     // 1b. Namespace-extension specifics for the folder object
     //     (ShellFolder\Attributes, CATID_BrowsableShellExt, icon).
@@ -475,8 +473,6 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
         L"ShellNSE Thumbnail Provider"));
     RETURN_IF_FAILED(RegisterApproved(CLSID_ShellNSEPreview,
         L"ShellNSE Preview Handler"));
-    RETURN_IF_FAILED(RegisterApproved(CLSID_ShellNSEPropSheet,
-        L"ShellNSE Property Sheet"));
 
     // 3. PreviewHandlers global list (needed for preview pane)
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, kRegKeyPreviewHandlers,
@@ -494,6 +490,15 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
     UnregisterOverlay(CLSID_ShellNSEIconOverlay, L"ShellNSE_Archive");
     UnregisterApproved(CLSID_ShellNSEIconOverlay);
     UnregisterCOMServer(CLSID_ShellNSEIconOverlay);
+
+    // 4b. Property sheet — removed.
+    //
+    // Earlier builds added an "Archive" tab to the file Properties dialog.
+    // Nothing registers it now; strip its COM registration as well so the
+    // tab disappears from installs that already have it. The per-extension
+    // PropertySheetHandlers keys are deleted in RegisterShellExOnBase.
+    UnregisterApproved(CLSID_ShellNSEPropSheet);
+    UnregisterCOMServer(CLSID_ShellNSEPropSheet);
 
     // 5. Extensions
     // NOTE: .docx / .xlsx / .pptx intentionally OMITTED so Office is not hijacked.

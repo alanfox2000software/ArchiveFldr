@@ -278,6 +278,19 @@ void ExpandForAdd(const std::vector<std::wstring>& roots,
     }
 }
 
+std::wstring FormatRatio(uint64_t uncompressed, uint64_t packed)
+{
+    if (uncompressed == 0) return L"";        // folders, empty files
+    if (packed == 0)       return L"\u2014";  // not reported for this item
+
+    const double r = 100.0 * (1.0 - (double)packed / (double)uncompressed);
+    if (r < -999.0 || r > 100.0) return L"\u2014";   // not a usable figure
+
+    wchar_t buf[32];
+    swprintf_s(buf, 32, L"%.0f%%", r);
+    return buf;
+}
+
 std::wstring TargetDirFor(const std::wstring& baseDir, const AddItem& item)
 {
     std::wstring dir = baseDir;

@@ -34,6 +34,7 @@ enum Sdk7zPropID : PROPID
     k7zPidEncrypted = 15,
     k7zPidCRC       = 19,
     k7zPidMethod    = 22,
+    k7zPidBlock     = 27,   // solid-block (folder) index
 };
 
 // ─────────────────────────────────────────────────────────

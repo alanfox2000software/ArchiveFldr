@@ -421,7 +421,6 @@ echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
     <ClCompile Include="src\DropTarget.cpp" />
     <ClCompile Include="src\ThumbnailProvider.cpp" />
     <ClCompile Include="src\PreviewHandler.cpp" />
-    <ClCompile Include="src\PropertySheet.cpp" />
     <!-- Archive Engine -->
     <ClCompile Include="src\ArchiveEngine.cpp" />
     <ClCompile Include="src\ArchiveOps.cpp" />
@@ -445,7 +444,6 @@ echo [ShellNSE] Registered Release x64: $(TargetFileName)</Command>
     <ClInclude Include="src\DropTarget.h" />
     <ClInclude Include="src\ThumbnailProvider.h" />
     <ClInclude Include="src\PreviewHandler.h" />
-    <ClInclude Include="src\PropertySheet.h" />
     <ClInclude Include="src\ArchiveEngine.h" />
     <ClInclude Include="src\ArchiveOps.h" />
     <ClInclude Include="src\DataObject.h" />

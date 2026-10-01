@@ -333,6 +333,20 @@ int IterateCallback(const wimlib_dir_entry* d, void* userCtx)
         // .esd uses — it stays 0, and the view shows that as "unknown"
         // rather than inventing a figure.
         e.compressedSize   = d->streams[0].resource.compressed_size;
+
+        // WIM identifies blobs by SHA-1, not CRC-32. Leaving hasCrc false
+        // keeps the CRC column honest; the digest itself is worth showing
+        // in Properties, where there is room for it.
+        const uint8_t* h = d->streams[0].resource.sha1_hash;
+        bool anySet = false;
+        for (int b = 0; b < 20 && !anySet; ++b) anySet = (h[b] != 0);
+        if (anySet)
+        {
+            wchar_t hex[41];
+            for (int b = 0; b < 20; ++b)
+                swprintf_s(hex + b * 2, 3, L"%02x", h[b]);
+            e.sha1.assign(hex, 40);
+        }
         ctx->bytes        += e.uncompressedSize;
     }
 

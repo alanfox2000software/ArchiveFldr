@@ -177,6 +177,29 @@ bool PropGetBool(IInArchive7z* arc, UINT32 idx, PROPID pid, bool defVal = false)
     return res;
 }
 
+// Like PropGetUInt64, but says whether the archive actually carried the
+// property. GetProperty succeeds with VT_EMPTY for anything a format does
+// not record, so a plain "returned 0" cannot be trusted.
+bool PropGetUInt32If(IInArchive7z* arc, UINT32 idx, PROPID pid, uint32_t* out)
+{
+    PROPVARIANT v; PropVariantInit(&v);
+    bool got = false;
+    if (SUCCEEDED(arc->GetProperty(idx, pid, &v)))
+    {
+        switch (v.vt)
+        {
+        case VT_UI1: *out = v.bVal;  got = true; break;
+        case VT_UI2: *out = v.uiVal; got = true; break;
+        case VT_UI4: *out = v.ulVal; got = true; break;
+        case VT_UI8: *out = (uint32_t)v.uhVal.QuadPart; got = true; break;
+        case VT_I4:  *out = (uint32_t)v.lVal; got = true; break;
+        default: break;        // VT_EMPTY / VT_NULL: not stored
+        }
+    }
+    PropVariantClear(&v);
+    return got;
+}
+
 uint64_t PropGetUInt64(IInArchive7z* arc, UINT32 idx, PROPID pid, uint64_t defVal = 0)
 {
     PROPVARIANT v; PropVariantInit(&v);
@@ -750,7 +773,8 @@ void C7zArchiveEngine::BuildEntryList()
             e.name               = (slash == std::wstring::npos) ? path : path.substr(slash + 1);
             e.uncompressedSize   = PropGetUInt64(m_archive.Get(), i, k7zPidSize, 0);
             e.compressedSize     = PropGetUInt64(m_archive.Get(), i, k7zPidPackSize, 0);
-            e.crc32              = (uint32_t)PropGetUInt64(m_archive.Get(), i, k7zPidCRC, 0);
+            e.hasCrc             = PropGetUInt32If(m_archive.Get(), i,
+                                                   k7zPidCRC, &e.crc32);
             e.modifiedTime       = PropGetFileTime(m_archive.Get(), i, k7zPidMTime);
             e.isEncrypted        = PropGetBool(m_archive.Get(), i, k7zPidEncrypted, false);
             // kpidMethod is the per-item coder chain ("LZMA2:24", "Copy", …).

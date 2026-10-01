@@ -919,14 +919,29 @@ void CContextMenu::DoProperties()
     {
         wchar_t buf[320];
         swprintf_s(buf, 320,
-            L"\n\nSize: %s\nPacked: %s%s\nRatio: %s\nCRC-32: %08X",
+            L"\n\nSize: %s\nPacked: %s%s\nRatio: %s",
             fmt(e.uncompressedSize).c_str(),
             fmt(e.compressedSize).c_str(),
             e.packedIsShared ? L" (share of a solid block)" : L"",
             ArchiveOps::FormatRatio(e.uncompressedSize,
-                                    e.compressedSize).c_str(),
-            e.crc32);
+                                    e.compressedSize).c_str());
         msg += buf;
+
+        // Only claim a checksum the format really stores. Tar has none at
+        // all; WIM uses SHA-1 instead, so show that when we have it.
+        if (e.hasCrc)
+        {
+            swprintf_s(buf, 320, L"\nCRC-32: %08X", e.crc32);
+            msg += buf;
+        }
+        else if (!e.sha1.empty())
+        {
+            msg += L"\nSHA-1: " + e.sha1;
+        }
+        else
+        {
+            msg += L"\nChecksum: not stored by this format";
+        }
         if (!e.compressionMethod.empty())
             msg += L"\nMethod: " + e.compressionMethod;
     }

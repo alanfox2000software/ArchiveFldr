@@ -398,6 +398,7 @@ bool CUnrarEngine::BuildEntryList()
                 e.uncompressedSize  = Combine(hd->UnpSize,  hd->UnpSizeHigh);
                 e.compressedSize    = Combine(hd->PackSize, hd->PackSizeHigh);
                 e.crc32             = hd->FileCRC;
+                e.hasCrc            = true;   // RAR always stores one
                 e.isEncrypted       = (hd->Flags & RHDF_ENCRYPTED) != 0;
                 e.engineIndex       = (int64_t)m_allEntries.size();
 

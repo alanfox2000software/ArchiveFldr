@@ -15,6 +15,13 @@ struct ArchiveEntry {
     // rather than a figure the archive stores for it alone.
     bool         packedIsShared    = false;
     uint32_t     crc32             = 0;
+    // Whether crc32 above means anything. Several formats store no
+    // per-file CRC at all — tar carries only a header checksum, WIM uses
+    // SHA-1 — and for those a zero must read as "not stored", not as a
+    // checksum that happens to be zero.
+    bool         hasCrc            = false;
+    // Hex digest for formats that use something other than CRC-32.
+    std::wstring sha1;
     std::wstring compressionMethod;
     FILETIME     modifiedTime      = {};
     bool         isEncrypted       = false;

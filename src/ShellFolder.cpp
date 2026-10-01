@@ -106,6 +106,7 @@ LPITEMIDLIST CPidlMgr::Create(const ArchiveEntry& e)
     item->packedSize= e.compressedSize;
     item->mtime     = e.modifiedTime;
     if (e.isEncrypted) item->flags |= NSE_FLAG_ENC;
+    if (e.hasCrc)      item->flags |= NSE_FLAG_HASCRC;
     wcsncpy_s(item->method, e.compressionMethod.c_str(), _TRUNCATE);
     memcpy(item->name, e.name.c_str(), nameBytes);
 
@@ -891,8 +892,16 @@ STDMETHODIMP CShellFolder::GetDetailsOf(
                 st.wYear,st.wMonth,st.wDay,st.wHour,st.wMinute);
         break; }
     case 6: // CRC
+        // Only print a checksum the archive actually stores. Tar keeps a
+        // header checksum but no data CRC, and WIM uses SHA-1, so those
+        // used to show a bogus "00000000".
         if (!(item->flags & NSE_FLAG_DIR))
-            swprintf_s(buf,128,L"%08X", item->crc32);
+        {
+            if (item->flags & NSE_FLAG_HASCRC)
+                swprintf_s(buf, 128, L"%08X", item->crc32);
+            else
+                wcscpy_s(buf, L"\u2014");
+        }
         break;
     }
     psd->str.uType = STRRET_WSTR;

@@ -1,9 +1,13 @@
 .vs/
-.vs/**/**
 obj/
 bin/
 
 # Third-party 7-Zip engine DLLs — not ours to redistribute; see
 # thirdparty/7z/README.md for how to obtain and place them yourself.
 thirdparty/**/*.dll
+.vs/ShellNSE/v18/.suo
+.vs/ShellNSE/v18/Browse.VC.db
+ShellNSE.vcxproj.user
+.vs/ShellNSE/v18/.suo
+.vs/ShellNSE/v18/Browse.VC.db
 ShellNSE.vcxproj.user

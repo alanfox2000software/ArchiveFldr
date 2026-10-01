@@ -53,6 +53,26 @@ HRESULT CRegistry::SetRegStr(HKEY root, const wchar_t* path,
     return HRESULT_FROM_WIN32(rc);
 }
 
+// Read a DWORD, honouring both registry views so a 32-bit regsvr32 and a
+// 64-bit one see the same opt-in flag.
+static DWORD ReadRegDword(HKEY root, const wchar_t* path,
+                          const wchar_t* name, DWORD fallback)
+{
+    for (REGSAM view : { (REGSAM)KEY_WOW64_64KEY, (REGSAM)KEY_WOW64_32KEY })
+    {
+        HKEY hk = nullptr;
+        if (RegOpenKeyExW(root, path, 0, KEY_QUERY_VALUE | view, &hk)
+                != ERROR_SUCCESS)
+            continue;
+        DWORD value = 0, cb = sizeof(value), type = 0;
+        LONG rc = RegQueryValueExW(hk, name, nullptr, &type,
+                                   reinterpret_cast<BYTE*>(&value), &cb);
+        RegCloseKey(hk);
+        if (rc == ERROR_SUCCESS && type == REG_DWORD) return value;
+    }
+    return fallback;
+}
+
 HRESULT CRegistry::SetRegDword(HKEY root, const wchar_t* path,
                                 const wchar_t* name, DWORD value)
 {
@@ -170,9 +190,12 @@ HRESULT CRegistry::RegisterNamespaceFolder(const wchar_t* dllPath)
     const std::wstring sid  = ClsidToStr(CLSID_ShellNSEFolder);
     const std::wstring base = std::wstring(L"Software\\Classes\\CLSID\\") + sid;
 
+    // Index 2 = IDI_FOLDER_ARCHIVE. These indices only became real when
+    // res/resource.rc gained its ICON statements; before that every one of
+    // them resolved to nothing and the shell drew a blank page.
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
         (base + L"\\DefaultIcon").c_str(), nullptr,
-        (std::wstring(dllPath) + L",0").c_str()));
+        (std::wstring(dllPath) + L",2").c_str()));
 
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
         (base + L"\\Implemented Categories\\" + kCatidBrowsableShellExt).c_str(),
@@ -281,7 +304,7 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
 
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
         (progBase + L"\\DefaultIcon").c_str(), nullptr,
-        (std::wstring(dllPath) + L",0").c_str()));
+        (std::wstring(dllPath) + L",1").c_str()));   // index 1 = IDI_ARCHIVE
 
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
         (progBase + L"\\FriendlyTypeName").c_str(),
@@ -386,7 +409,8 @@ HRESULT CRegistry::UnregisterApproved(const CLSID& clsid)
 // ── Icon Overlay ──────────────────────────────────────────
 HRESULT CRegistry::RegisterOverlay(const CLSID& clsid, const wchar_t* name)
 {
-    // Leading space = try higher overlay priority slot
+    // Pass a plain name. Prefixing spaces to sort ahead of other handlers
+    // only works by pushing someone else out of the 15 available slots.
     std::wstring path = std::wstring(kRegKeyOverlays) + L"\\" + name;
     return SetRegStr(HKEY_LOCAL_MACHINE, path.c_str(),
         nullptr, ClsidToStr(clsid).c_str());
@@ -445,9 +469,33 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
         ClsidToStr(CLSID_ShellNSEPreview).c_str(),
         L"ShellNSE Archive Preview Handler"));
 
-    // 4. Icon overlay
-    RETURN_IF_FAILED(RegisterOverlay(CLSID_ShellNSEIconOverlay,
-        L" ShellNSE_Archive"));
+    // 4. Icon overlay — opt-in only.
+    //
+    // Windows honours just 15 overlay handlers machine-wide, sorted by key
+    // name, and the ones that lose are silently dropped. A badge saying
+    // "this archive is an archive" is not worth evicting someone's cloud
+    // sync overlay, so the key is written only when an administrator has
+    // asked for it:
+    //
+    //     HKLM\Software\ShellNSE\IconOverlay = 1   (DWORD)
+    //
+    // HKLM, not HKCU, because registration runs elevated and HKCU would be
+    // the administrator's hive rather than the user's. The per-user
+    // ShowOverlay setting still switches it off without unregistering.
+    if (ReadRegDword(HKEY_LOCAL_MACHINE, L"Software\\ShellNSE",
+                     L"IconOverlay", 0) != 0)
+    {
+        RETURN_IF_FAILED(RegisterOverlay(CLSID_ShellNSEIconOverlay,
+            L"ShellNSE_Archive"));
+    }
+    else
+    {
+        // Clear anything an earlier build left behind, including the
+        // leading-space name it used to queue-jump with.
+        UnregisterOverlay(CLSID_ShellNSEIconOverlay, L" ShellNSE_Archive");
+    UnregisterOverlay(CLSID_ShellNSEIconOverlay, L"ShellNSE_Archive");
+        UnregisterOverlay(CLSID_ShellNSEIconOverlay, L"ShellNSE_Archive");
+    }
 
     // 5. Extensions
     // NOTE: .docx / .xlsx / .pptx intentionally OMITTED so Office is not hijacked.
@@ -546,6 +594,7 @@ HRESULT CRegistry::UnregisterAll()
     }
 
     UnregisterOverlay(CLSID_ShellNSEIconOverlay, L" ShellNSE_Archive");
+    UnregisterOverlay(CLSID_ShellNSEIconOverlay, L"ShellNSE_Archive");
 
     UnregisterApproved(CLSID_ShellNSEFolder);
     UnregisterApproved(CLSID_ShellNSEContextMenu);

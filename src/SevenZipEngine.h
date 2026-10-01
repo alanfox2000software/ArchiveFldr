@@ -2,10 +2,10 @@
 // Real IArchiveEngine implementation for every container 7z.dll can read
 // — .7z, .zip, .tar, .wim, .iso, .cab, .gz, .xz and the rest — backed by
 // the external 7-Zip engine DLL dropped in by the user at:
-//   thirdparty\7z\7z.64.dll   (64-bit ShellNSE.64.dll)
-//   thirdparty\7z\7z.32.dll   (32-bit ShellNSE.32.dll)
+//   thirdparty\7z\7z.64.dll   (64-bit ArchiveFldr.64.dll)
+//   thirdparty\7z\7z.32.dll   (32-bit ArchiveFldr.32.dll)
 //
-// ShellNSE itself ships NO decoder code — it only talks to 7z.dll through
+// ArchiveFldr itself ships NO decoder code — it only talks to 7z.dll through
 // the small, stable "COM-lite" interface declared in Sdk7z.h, exactly the
 // way the 7-Zip SDK's own Client7z.cpp sample does.
 #pragma once
@@ -17,7 +17,7 @@
 // could be located and its CreateObject() entry point resolved.
 // The module is loaded once and kept for the lifetime of the process.
 bool   Is7zEngineAvailable();
-// Full path that ShellNSE looked for / loaded (for diagnostics & the
+// Full path that ArchiveFldr looked for / loaded (for diagnostics & the
 // Settings → Integration page "status" readout).
 std::wstring Get7zEnginePath();
 

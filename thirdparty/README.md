@@ -1,8 +1,8 @@
 # thirdparty\ — external engine DLLs
 
-ShellNSE ships **no** archive codec of its own. Every format it can really
+ArchiveFldr ships **no** archive codec of its own. Every format it can really
 read is powered by a third-party DLL that you drop into this tree, loaded at
-runtime and driven through that DLL's own public ABI. That keeps ShellNSE's
+runtime and driven through that DLL's own public ABI. That keeps ArchiveFldr's
 source free of other projects' licensed decoder code, and it means a new
 format is an added DLL, not a rebuild.
 
@@ -12,13 +12,13 @@ more engines are added.
 ## Layout
 
 ```
-<ShellNSE dir>\
-├─ ShellNSE.64.dll
-├─ ShellNSE.32.dll
+<ArchiveFldr dir>\
+├─ ArchiveFldr.64.dll
+├─ ArchiveFldr.32.dll
 └─ thirdparty\
    ├─ 7z\
-   │  ├─ 7z.64.dll                 ← used by ShellNSE.64.dll
-   │  └─ 7z.32.dll                 ← used by ShellNSE.32.dll
+   │  ├─ 7z.64.dll                 ← used by ArchiveFldr.64.dll
+   │  └─ 7z.32.dll                 ← used by ArchiveFldr.32.dll
    ├─ brotli\                      three DLLs, in a bitness subfolder
    │  ├─ 64\
    │  │  ├─ libbrotlidec.dll
@@ -43,12 +43,12 @@ more engines are added.
    │  ├─ libwim-15.64.dll
    │  └─ libwim-15.32.dll
    └─ Unrar\
-      ├─ unrar64.dll               ← used by ShellNSE.64.dll
-      └─ unrar.dll                 ← used by ShellNSE.32.dll
+      ├─ unrar64.dll               ← used by ArchiveFldr.64.dll
+      └─ unrar.dll                 ← used by ArchiveFldr.32.dll
 ```
 
 **Bitness must match the host process**, not your CPU: 64-bit Explorer loads
-`ShellNSE.64.dll`, which can only load a 64-bit engine. Keep both if 32-bit
+`ArchiveFldr.64.dll`, which can only load a 64-bit engine. Keep both if 32-bit
 applications also browse archives.
 
 Both naming styles work everywhere. `thirdparty\zstd\64\libzstd.dll` and
@@ -57,7 +57,7 @@ download already uses, and do not rename anything.
 
 ## Search order
 
-For a component `id` with candidate file name `name.dll`, ShellNSE tries
+For a component `id` with candidate file name `name.dll`, ArchiveFldr tries
 every folder below, and within each folder every name variant, taking the
 first file that exists. `<bits>` is `64` or `32`, following the running
 build.
@@ -66,13 +66,13 @@ Folders, in order:
 
 | # | Folder |
 |---|--------|
-| 1 | `<ShellNSE dir>\thirdparty\<id>\<bits>\` |
-| 2 | `<ShellNSE dir>\thirdparty\<id>\` |
-| 3 | `<ShellNSE dir>\thirdparty\<bits>\` |
-| 4 | `<ShellNSE dir>\thirdparty\` |
-| 5 | `<ShellNSE dir>\<id>\<bits>\` |
-| 6 | `<ShellNSE dir>\<id>\` |
-| 7 | `<ShellNSE dir>\` (next to ShellNSE) |
+| 1 | `<ArchiveFldr dir>\thirdparty\<id>\<bits>\` |
+| 2 | `<ArchiveFldr dir>\thirdparty\<id>\` |
+| 3 | `<ArchiveFldr dir>\thirdparty\<bits>\` |
+| 4 | `<ArchiveFldr dir>\thirdparty\` |
+| 5 | `<ArchiveFldr dir>\<id>\<bits>\` |
+| 6 | `<ArchiveFldr dir>\<id>\` |
+| 7 | `<ArchiveFldr dir>\` (next to ArchiveFldr) |
 
 Name variants, in order:
 
@@ -119,21 +119,21 @@ Registry hints: `7z` → `HKLM\SOFTWARE\7-Zip\Path`, `Unrar` →
 `HKLM\SOFTWARE\WinRAR\exe64`.
 
 None of these engines is required. A format whose DLL is absent reports
-which file it wanted and every path it looked in, and the rest of ShellNSE
+which file it wanted and every path it looked in, and the rest of ArchiveFldr
 keeps working.
 
 ### Notes per component
 
 **Brotli, LZ4, LZ5, Lizard, Zstandard** are single-stream codecs, not
 archive formats: the file holds one compressed stream and no file names.
-ShellNSE shows exactly one entry, named by removing the suffix —
+ArchiveFldr shows exactly one entry, named by removing the suffix —
 `notes.txt.zst` → `notes.txt`, `backup.tzst` → `backup.tar`. Only zstd
 records the original size in its header, so the other four show their size
 only after extraction. Writing is deliberately not offered.
 
 **LZ5 and Lizard** must export the *frame* API (`LZ5F_…` / `LizardF_…`).
 A build that exports only the raw block functions cannot read framed
-files, and ShellNSE says so rather than producing garbage.
+files, and ArchiveFldr says so rather than producing garbage.
 
 **UnRAR** needs version 4 or newer, for the Unicode entry points.
 `unrar.dll` decodes only — creating or modifying RAR archives requires a
@@ -142,7 +142,7 @@ because a modal password dialog on Explorer's UI thread would hang the
 window.
 
 **7-Zip** is the broadest engine by far, and the one to install first.
-ShellNSE asks `7z.dll` which formats it supports (`GetNumberOfFormats` /
+ArchiveFldr asks `7z.dll` which formats it supports (`GetNumberOfFormats` /
 `GetHandlerProperty2`) instead of carrying a hard-coded list, so it reads
 exactly what your copy of 7-Zip reads — including formats added after
 this was written. When a file's extension does not match its contents,
@@ -151,7 +151,7 @@ every other handler is tried as well.
 **WimLib** needs version **1.13.0 or newer** — in other words the
 `libwim-15` builds. `struct wimlib_dir_entry` grew fields in 1.9.1 and
 again later, and wimlib hands that struct straight to the caller, so an
-older DLL would lay out memory differently from what ShellNSE expects.
+older DLL would lay out memory differently from what ArchiveFldr expects.
 The version is checked when the DLL loads and anything older is refused
 with an explanation rather than read incorrectly.
 
@@ -163,7 +163,7 @@ subfolder so they cannot collide.
 
 For a split WIM, keep every `.swm` part in one folder. Opening part 1 is
 enough to browse, but the file data lives across all the parts, so
-ShellNSE finds the siblings and references them before extracting.
+ArchiveFldr finds the siblings and references them before extracting.
 
 If libwim is absent, `.wim` falls back to `7z.dll`, which reads WIM too.
 
@@ -196,7 +196,7 @@ If libwim is absent, `.wim` falls back to `7z.dll`, which reads WIM too.
 5. Dispatch to it in `CreateArchiveEngine()` (`src/ArchiveEngine.cpp`).
 
 6. Drop the DLL in `thirdparty\<id>\`; the post-build step copies the whole
-   `thirdparty\` tree next to the built ShellNSE DLLs.
+   `thirdparty\` tree next to the built ArchiveFldr DLLs.
 
 Nothing in this folder is redistributed by this repository — each engine
 comes from its own project under its own licence.

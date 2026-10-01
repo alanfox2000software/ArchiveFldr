@@ -71,7 +71,7 @@ std::wstring MakeTempDir(const std::wstring& tag)
                    (unsigned)(GetCurrentProcessId() & 0xFFFF),
                    (unsigned)((GetTickCount() + attempt * 7919) & 0xFFFF));
 
-        std::wstring dir = std::wstring(tmp) + L"ShellNSE\\" + clean + L"-" + suffix;
+        std::wstring dir = std::wstring(tmp) + L"ArchiveFldr\\" + clean + L"-" + suffix;
         if (GetFileAttributesW(dir.c_str()) != INVALID_FILE_ATTRIBUTES) continue;
         if (SHCreateDirectoryExW(nullptr, dir.c_str(), nullptr) == ERROR_SUCCESS)
             return dir;
@@ -122,7 +122,7 @@ static void Explain(HWND hwnd, const std::wstring& head, const std::wstring& why
 {
     std::wstring msg = head;
     if (!why.empty()) msg += L"\n\n" + why;
-    MessageBoxW(hwnd, msg.c_str(), L"ShellNSE", MB_ICONWARNING | MB_OK);
+    MessageBoxW(hwnd, msg.c_str(), L"ArchiveFldr", MB_ICONWARNING | MB_OK);
 }
 
 bool EnsureCanRead(HWND hwnd, const EnginePtr& eng)
@@ -135,7 +135,7 @@ bool EnsureCanRead(HWND hwnd, const EnginePtr& eng)
     EngineCaps caps = eng->GetCaps();
     if (caps.canExtract) return true;
 
-    Explain(hwnd, L"ShellNSE cannot read the contents of this archive.",
+    Explain(hwnd, L"ArchiveFldr cannot read the contents of this archive.",
             caps.unavailableReason);
     return false;
 }
@@ -155,7 +155,7 @@ bool EnsureCanAdd(HWND hwnd, const EnginePtr& eng)
         caps.isStub && !caps.unavailableReason.empty()
             ? caps.unavailableReason
             : std::wstring(
-                L"The " + caps.engineName + L" engine ShellNSE uses is "
+                L"The " + caps.engineName + L" engine ArchiveFldr uses is "
                 L"read-only: it can list, extract and test archives, but it "
                 L"has no compressor, so nothing can be written back.\n\n"
                 L"Extract the archive, add your files, and repack it with a "

@@ -242,7 +242,7 @@ WimLib& Lib()
     {
         wchar_t buf[192];
         swprintf_s(buf, 192,
-            L"That libwim reports version %u.%u, but ShellNSE needs 1.13.0 "
+            L"That libwim reports version %u.%u, but ArchiveFldr needs 1.13.0 "
             L"or newer — older builds lay out their directory entries "
             L"differently. Use the libwim-15 build.",
             major, minor);
@@ -286,7 +286,7 @@ FILETIME ToFileTime(const wimlib_timespec& ts, int32_t high)
     return ft;
 }
 
-// WIM paths use backslash; the rest of ShellNSE uses forward slash.
+// WIM paths use backslash; the rest of ArchiveFldr uses forward slash.
 std::wstring ToInternal(const wchar_t* wimPath)
 {
     std::wstring s = wimPath ? wimPath : L"";
@@ -600,7 +600,7 @@ bool CWimEngine::ExtractFile(const ArchiveEntry& e,
         {
             MessageBoxW(nullptr,
                 (L"wimlib could not extract the image.\n\n" +
-                 ErrText(rc)).c_str(), L"ShellNSE", MB_ICONWARNING | MB_OK);
+                 ErrText(rc)).c_str(), L"ArchiveFldr", MB_ICONWARNING | MB_OK);
             return false;
         }
         if (cb) cb(100, e.name);
@@ -622,7 +622,7 @@ bool CWimEngine::ExtractFile(const ArchiveEntry& e,
                 ? L"\n\nFor a split WIM, keep every .swm part in the same "
                   L"folder."
                 : L"")).c_str(),
-            L"ShellNSE", MB_ICONWARNING | MB_OK);
+            L"ArchiveFldr", MB_ICONWARNING | MB_OK);
         return false;
     }
     if (cb) cb(100, e.name);
@@ -664,7 +664,7 @@ bool CWimEngine::ExtractAll(const std::wstring& destDir, ProgressFn cb)
             MessageBoxW(nullptr,
                 (L"wimlib could not extract image " + std::to_wstring(image) +
                  L".\n\n" + ErrText(rc)).c_str(),
-                L"ShellNSE", MB_ICONWARNING | MB_OK);
+                L"ArchiveFldr", MB_ICONWARNING | MB_OK);
             break;
         }
         if (cb) cb(image * 100 / (m_imageCount ? m_imageCount : 1), L"");
@@ -684,7 +684,7 @@ bool CWimEngine::Test(ProgressFn cb)
             L"This build of libwim cannot verify file data.\n\n"
             L"The image metadata was read successfully, but the contents "
             L"were not checksummed.",
-            L"ShellNSE", MB_ICONINFORMATION | MB_OK);
+            L"ArchiveFldr", MB_ICONINFORMATION | MB_OK);
         return true;
     }
     if (cb) cb(0, m_filePath);
@@ -694,7 +694,7 @@ bool CWimEngine::Test(ProgressFn cb)
     {
         MessageBoxW(nullptr,
             (L"Verification failed.\n\n" + ErrText(rc)).c_str(),
-            L"ShellNSE", MB_ICONWARNING | MB_OK);
+            L"ArchiveFldr", MB_ICONWARNING | MB_OK);
         return false;
     }
     return true;

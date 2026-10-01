@@ -210,9 +210,9 @@ EngineCaps CStubArchiveEngine::GetCaps() const
     c.engineName = m_formatName;
     c.isStub     = true;
     c.unavailableReason =
-        L"ShellNSE has no engine for " + m_formatName +
+        L"ArchiveFldr has no engine for " + m_formatName +
         L" archives, so it cannot show what is inside this file.\n\n"
-        L"Engines are third-party DLLs placed under the ShellNSE "
+        L"Engines are third-party DLLs placed under the ArchiveFldr "
         L"\"thirdparty\" folder — see thirdparty\\README.md. Installing "
         L"7-Zip's 7z." + std::wstring((sizeof(void*) == 8) ? L"64" : L"32") +
         L".dll covers most container formats, including this one.";

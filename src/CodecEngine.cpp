@@ -736,7 +736,7 @@ bool CCodecEngine::ExtractFile(const ArchiveEntry& e,
     if (!Decode(dest, cb))
     {
         if (!m_lastError.empty())
-            MessageBoxW(nullptr, m_lastError.c_str(), L"ShellNSE",
+            MessageBoxW(nullptr, m_lastError.c_str(), L"ArchiveFldr",
                         MB_ICONWARNING | MB_OK);
         return false;
     }

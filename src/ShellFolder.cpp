@@ -280,7 +280,7 @@ STDMETHODIMP_(ULONG) CShellFolder::Release()
 STDMETHODIMP CShellFolder::GetClassID(CLSID* pclsid)
 {
     if (!pclsid) return E_POINTER;
-    *pclsid = CLSID_ShellNSEFolder; return S_OK;
+    *pclsid = CLSID_ArchiveFldrFolder; return S_OK;
 }
 STDMETHODIMP CShellFolder::Initialize(LPCITEMIDLIST pidl)
 {
@@ -564,7 +564,7 @@ STDMETHODIMP CShellFolder::CreateViewObject(HWND hwnd, REFIID riid, void** ppv)
             if (SUCCEEDED(hr)) return hr;
         }
 
-        // Fallback: ShellNSE's built-in view implementation.
+        // Fallback: ArchiveFldr's built-in view implementation.
         auto* pView = new(std::nothrow) CShellView(this, hwnd);
         if (!pView) return E_OUTOFMEMORY;
         hr = pView->QueryInterface(riid, ppv);
@@ -924,15 +924,15 @@ STDMETHODIMP CShellFolder::MapColumnToSCID(UINT col, SHCOLUMNID* pscid)
     // PKEY_PropList_* or a custom FMTID with our own PID.
     // We define a private FMTID for our extension columns.
 
-    // Our private FMTID for custom ShellNSE columns:
+    // Our private FMTID for custom ArchiveFldr columns:
     // {B1A2C3D4-0000-0000-ABCD-AABBCCDDEEFF}
-    static const GUID FMTID_ShellNSE = {
+    static const GUID FMTID_ArchiveFldr = {
         0xB1A2C3D4, 0x0000, 0x0000,
         { 0xAB, 0xCD, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF }
     };
 
     // PID values for our custom columns
-    enum ShellNSE_PID : ULONG {
+    enum ArchiveFldr_PID : ULONG {
         PID_NSE_PACKED  = 2,   // Packed size
         PID_NSE_RATIO   = 3,   // Compression ratio
         PID_NSE_METHOD  = 4,   // Compression method
@@ -948,22 +948,22 @@ STDMETHODIMP CShellFolder::MapColumnToSCID(UINT col, SHCOLUMNID* pscid)
         *pscid = PKEY_Size;
         break;
     case 2: // Packed size — custom
-        pscid->fmtid = FMTID_ShellNSE;
+        pscid->fmtid = FMTID_ArchiveFldr;
         pscid->pid   = PID_NSE_PACKED;
         break;
     case 3: // Ratio — custom
-        pscid->fmtid = FMTID_ShellNSE;
+        pscid->fmtid = FMTID_ArchiveFldr;
         pscid->pid   = PID_NSE_RATIO;
         break;
     case 4: // Method — custom
-        pscid->fmtid = FMTID_ShellNSE;
+        pscid->fmtid = FMTID_ArchiveFldr;
         pscid->pid   = PID_NSE_METHOD;
         break;
     case 5: // Modified — standard
         *pscid = PKEY_DateModified;
         break;
     case 6: // CRC-32 — custom
-        pscid->fmtid = FMTID_ShellNSE;
+        pscid->fmtid = FMTID_ArchiveFldr;
         pscid->pid   = PID_NSE_CRC;
         break;
     default:

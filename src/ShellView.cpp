@@ -6,7 +6,7 @@
 #include "GUIDs.h"
 #include "Settings.h"
 
-static const wchar_t kViewClass[] = L"ShellNSE_View";
+static const wchar_t kViewClass[] = L"ArchiveFldr_View";
 
 CShellView::CShellView(CShellFolder* pFolder, HWND hwndOwner)
     : m_pFolder(pFolder), m_hwndOwner(hwndOwner)

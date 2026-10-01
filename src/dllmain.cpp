@@ -95,13 +95,13 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
     };
 
     static const Entry kEntries[] = {
-        { &CLSID_ShellNSEFolder,      CClassFactory::CreateShellFolder      },
-        { &CLSID_ShellNSEContextMenu, CClassFactory::CreateContextMenu      },
-        { &CLSID_ShellNSEDropTarget,  CClassFactory::CreateDropTarget       },
-#ifndef SHELLNSE_NO_VISTA_HANDLERS
-        { &CLSID_ShellNSEThumbnail,   CClassFactory::CreateThumbnailProvider},
-        { &CLSID_ShellNSEPreview,     CClassFactory::CreatePreviewHandler   },
-#endif // SHELLNSE_NO_VISTA_HANDLERS
+        { &CLSID_ArchiveFldrFolder,      CClassFactory::CreateShellFolder      },
+        { &CLSID_ArchiveFldrContextMenu, CClassFactory::CreateContextMenu      },
+        { &CLSID_ArchiveFldrDropTarget,  CClassFactory::CreateDropTarget       },
+#ifndef ARCHIVEFLDR_NO_VISTA_HANDLERS
+        { &CLSID_ArchiveFldrThumbnail,   CClassFactory::CreateThumbnailProvider},
+        { &CLSID_ArchiveFldrPreview,     CClassFactory::CreatePreviewHandler   },
+#endif // ARCHIVEFLDR_NO_VISTA_HANDLERS
     };
 
     for (auto& e : kEntries) {

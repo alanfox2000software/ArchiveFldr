@@ -2,7 +2,7 @@
 // neither exists on XP, where the shell uses IExtractImage and has no
 // preview pane. The XP build compiles this file away entirely.
 #include "stdafx.h"
-#ifndef SHELLNSE_NO_VISTA_HANDLERS
+#ifndef ARCHIVEFLDR_NO_VISTA_HANDLERS
 // ThumbnailProvider.cpp
 #include "stdafx.h"
 #include "ThumbnailProvider.h"
@@ -180,4 +180,4 @@ HBITMAP CThumbnailProvider::RenderThumbnailGDI(
     DeleteDC(hdcMem);
     return hBmp;
 }
-#endif // SHELLNSE_NO_VISTA_HANDLERS
+#endif // ARCHIVEFLDR_NO_VISTA_HANDLERS

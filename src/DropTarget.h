@@ -10,7 +10,7 @@ class CShellFolder;
 namespace ArchiveDrop {
 
 // What the user may do with this payload over an archive folder. Always
-// DROPEFFECT_COPY or NONE: ShellNSE never asks the source to delete its
+// DROPEFFECT_COPY or NONE: ArchiveFldr never asks the source to delete its
 // originals, because it cannot guarantee the data landed in the archive.
 DWORD EffectFor(IDataObject* pdo);
 

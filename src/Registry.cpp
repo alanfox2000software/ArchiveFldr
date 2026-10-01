@@ -1,6 +1,6 @@
 // Registry.cpp
 // Fixed registration so ContextMenu (and other shellex handlers) work on Windows 11
-// when the extension default ProgID is ShellNSE.* (Explorer reads shellex from ProgID,
+// when the extension default ProgID is ArchiveFldr.* (Explorer reads shellex from ProgID,
 // not from .zip alone). Also registers under SystemFileAssociations.
 
 #include "stdafx.h"
@@ -27,7 +27,7 @@ static constexpr wchar_t kRegKeyPreviewHandlers[] =
 // Private value used to remember whoever owned a file-as-folder junction
 // before we took it over (e.g. Windows 11's built-in ArchiveFolder), so that
 // DllUnregisterServer can hand it back instead of leaving the type broken.
-static constexpr wchar_t kBackupValueName[] = L"ShellNSE.PreviousCLSID";
+static constexpr wchar_t kBackupValueName[] = L"ArchiveFldr.PreviousCLSID";
 
 // ── Low-level helpers ─────────────────────────────────────
 std::wstring CRegistry::ClsidToStr(const CLSID& clsid)
@@ -55,7 +55,7 @@ HRESULT CRegistry::SetRegStr(HKEY root, const wchar_t* path,
     return HRESULT_FROM_WIN32(rc);
 }
 
-// ShellNSE ships no icon resources, so every DefaultIcon points at a stock
+// ArchiveFldr ships no icon resources, so every DefaultIcon points at a stock
 // Windows icon rather than an index into this DLL. An index with nothing
 // behind it does not fall back to anything — the shell paints its empty
 // placeholder, which is how a blank page ended up badged onto archives.
@@ -134,7 +134,7 @@ HRESULT CRegistry::TakeOverJunction(const std::wstring& keyPath,
                          reinterpret_cast<LPBYTE>(cur), &cb) == ERROR_SUCCESS &&
         type == REG_SZ && cur[0] && _wcsicmp(cur, ourClsid.c_str()) != 0)
     {
-        // Only record the first (i.e. the genuine, non-ShellNSE) owner.
+        // Only record the first (i.e. the genuine, non-ArchiveFldr) owner.
         DWORD probe = 0, ptype = 0;
         if (RegQueryValueExW(hk, kBackupValueName, nullptr, &ptype,
                              nullptr, &probe) != ERROR_SUCCESS)
@@ -202,11 +202,11 @@ void CRegistry::ReleaseJunction(const std::wstring& keyPath,
 //   ShellFolder\WantsFORPARSING       ask us for a parsing name (address bar)
 //   Implemented Categories\{00021490} CATID_BrowsableShellExt
 //
-// Missing these is why "Open with ShellNSE" opened nothing.
+// Missing these is why "Open with ArchiveFldr" opened nothing.
 // ─────────────────────────────────────────────────────────
 HRESULT CRegistry::RegisterNamespaceFolder(const wchar_t* dllPath)
 {
-    const std::wstring sid  = ClsidToStr(CLSID_ShellNSEFolder);
+    const std::wstring sid  = ClsidToStr(CLSID_ArchiveFldrFolder);
     const std::wstring base = std::wstring(L"Software\\Classes\\CLSID\\") + sid;
 
     // zipfldr.dll,0 is the compressed-folder icon every Windows install
@@ -245,13 +245,13 @@ HRESULT CRegistry::RegisterNamespaceFolder(const wchar_t* dllPath)
 // Software\Classes\... base path (extension, ProgID, or SystemFileAssociations).
 HRESULT CRegistry::RegisterShellExOnBase(const std::wstring& base)
 {
-    const std::wstring ctx  = ClsidToStr(CLSID_ShellNSEContextMenu);
-    const std::wstring drop = ClsidToStr(CLSID_ShellNSEDropTarget);
-    const std::wstring th   = ClsidToStr(CLSID_ShellNSEThumbnail);
-    const std::wstring pv   = ClsidToStr(CLSID_ShellNSEPreview);
+    const std::wstring ctx  = ClsidToStr(CLSID_ArchiveFldrContextMenu);
+    const std::wstring drop = ClsidToStr(CLSID_ArchiveFldrDropTarget);
+    const std::wstring th   = ClsidToStr(CLSID_ArchiveFldrThumbnail);
+    const std::wstring pv   = ClsidToStr(CLSID_ArchiveFldrPreview);
 
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
-        (base + L"\\shellex\\ContextMenuHandlers\\ShellNSE").c_str(),
+        (base + L"\\shellex\\ContextMenuHandlers\\ArchiveFldr").c_str(),
         nullptr, ctx.c_str()));
 
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
@@ -275,7 +275,7 @@ HRESULT CRegistry::RegisterShellExOnBase(const std::wstring& base)
     // No property-sheet handler: there is no "Archive" tab any more.
     // Delete the key so re-registering an older install drops the tab.
     DelRegKey(HKEY_LOCAL_MACHINE,
-        (base + L"\\shellex\\PropertySheetHandlers\\ShellNSE").c_str());
+        (base + L"\\shellex\\PropertySheetHandlers\\ArchiveFldr").c_str());
 
     return S_OK;
 }
@@ -283,7 +283,7 @@ HRESULT CRegistry::RegisterShellExOnBase(const std::wstring& base)
 void CRegistry::UnregisterShellExOnBase(const std::wstring& base)
 {
     DelRegKey(HKEY_LOCAL_MACHINE,
-        (base + L"\\shellex\\ContextMenuHandlers\\ShellNSE").c_str());
+        (base + L"\\shellex\\ContextMenuHandlers\\ArchiveFldr").c_str());
     DelRegKey(HKEY_LOCAL_MACHINE,
         (base + L"\\shellex\\DropHandler").c_str());
     DelRegKey(HKEY_LOCAL_MACHINE,
@@ -291,7 +291,7 @@ void CRegistry::UnregisterShellExOnBase(const std::wstring& base)
     DelRegKey(HKEY_LOCAL_MACHINE,
         (base + L"\\shellex\\" + kIPreviewHandler).c_str());
     DelRegKey(HKEY_LOCAL_MACHINE,
-        (base + L"\\shellex\\PropertySheetHandlers\\ShellNSE").c_str());
+        (base + L"\\shellex\\PropertySheetHandlers\\ArchiveFldr").c_str());
 }
 
 // ── COM Server registration ───────────────────────────────
@@ -323,10 +323,10 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
                                       const wchar_t* progId,
                                       const wchar_t* dllPath)
 {
-    const std::wstring folder = ClsidToStr(CLSID_ShellNSEFolder);
+    const std::wstring folder = ClsidToStr(CLSID_ArchiveFldrFolder);
 
     // ── 1) ProgID ─────────────────────────────────────────
-    // When HKCR\.zip\(Default) = ShellNSE.ZipFile, Explorer loads shellex
+    // When HKCR\.zip\(Default) = ArchiveFldr.ZipFile, Explorer loads shellex
     // from the ProgID — NOT from .zip. This was the missing piece.
     std::wstring progBase = std::wstring(L"Software\\Classes\\") + progId;
 
@@ -371,7 +371,7 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
             (openKey + L"\\command").c_str(), nullptr, cmd.c_str()));
     }
 
-    // (No extra "open with ShellNSE" static verb here on purpose: the
+    // (No extra "open with ArchiveFldr" static verb here on purpose: the
     // IContextMenu handler registered above already supplies that command,
     // and a second registry verb would show up as a duplicate menu entry.)
 
@@ -384,7 +384,7 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, extBase.c_str(),
         L"PerceivedType", L"compressed"));
 
-    // Older ShellNSE builds wrote a bogus ".ext\ShellFolder = {CLSID}" key.
+    // Older ArchiveFldr builds wrote a bogus ".ext\ShellFolder = {CLSID}" key.
     // That is not a junction location the shell has ever read, so it did
     // nothing; drop it instead of leaving confusing leftovers behind.
     DelRegKey(HKEY_LOCAL_MACHINE, (extBase + L"\\ShellFolder").c_str());
@@ -407,7 +407,7 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
 
 HRESULT CRegistry::UnregisterExtension(const wchar_t* ext)
 {
-    const std::wstring folder = ClsidToStr(CLSID_ShellNSEFolder);
+    const std::wstring folder = ClsidToStr(CLSID_ArchiveFldrFolder);
 
     std::wstring extBase = std::wstring(L"Software\\Classes\\") + ext;
     UnregisterShellExOnBase(extBase);
@@ -456,16 +456,16 @@ HRESULT CRegistry::UnregisterOverlay(const CLSID& /*clsid*/, const wchar_t* name
 HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
 {
     // 1. COM servers
-    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ShellNSEFolder,
-        L"ShellNSE Shell Namespace Extension", dllPath));
-    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ShellNSEContextMenu,
-        L"ShellNSE Context Menu Handler", dllPath));
-    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ShellNSEDropTarget,
-        L"ShellNSE Drop Target Handler", dllPath));
-    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ShellNSEThumbnail,
-        L"ShellNSE Thumbnail Provider", dllPath));
-    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ShellNSEPreview,
-        L"ShellNSE Preview Handler", dllPath));
+    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrFolder,
+        L"ArchiveFldr Shell Namespace Extension", dllPath));
+    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrContextMenu,
+        L"ArchiveFldr Context Menu Handler", dllPath));
+    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrDropTarget,
+        L"ArchiveFldr Drop Target Handler", dllPath));
+    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrThumbnail,
+        L"ArchiveFldr Thumbnail Provider", dllPath));
+    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrPreview,
+        L"ArchiveFldr Preview Handler", dllPath));
 
     // 1b. Namespace-extension specifics for the folder object
     //     (ShellFolder\Attributes, CATID_BrowsableShellExt, icon).
@@ -473,33 +473,33 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
     RETURN_IF_FAILED(RegisterNamespaceFolder(dllPath));
 
     // 2. Approved list (Vista+)
-    RETURN_IF_FAILED(RegisterApproved(CLSID_ShellNSEFolder,
-        L"ShellNSE Shell Namespace Extension"));
-    RETURN_IF_FAILED(RegisterApproved(CLSID_ShellNSEContextMenu,
-        L"ShellNSE Context Menu Handler"));
-    RETURN_IF_FAILED(RegisterApproved(CLSID_ShellNSEDropTarget,
-        L"ShellNSE Drop Target Handler"));
-    RETURN_IF_FAILED(RegisterApproved(CLSID_ShellNSEThumbnail,
-        L"ShellNSE Thumbnail Provider"));
-    RETURN_IF_FAILED(RegisterApproved(CLSID_ShellNSEPreview,
-        L"ShellNSE Preview Handler"));
+    RETURN_IF_FAILED(RegisterApproved(CLSID_ArchiveFldrFolder,
+        L"ArchiveFldr Shell Namespace Extension"));
+    RETURN_IF_FAILED(RegisterApproved(CLSID_ArchiveFldrContextMenu,
+        L"ArchiveFldr Context Menu Handler"));
+    RETURN_IF_FAILED(RegisterApproved(CLSID_ArchiveFldrDropTarget,
+        L"ArchiveFldr Drop Target Handler"));
+    RETURN_IF_FAILED(RegisterApproved(CLSID_ArchiveFldrThumbnail,
+        L"ArchiveFldr Thumbnail Provider"));
+    RETURN_IF_FAILED(RegisterApproved(CLSID_ArchiveFldrPreview,
+        L"ArchiveFldr Preview Handler"));
 
     // 3. PreviewHandlers global list (needed for preview pane)
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, kRegKeyPreviewHandlers,
-        ClsidToStr(CLSID_ShellNSEPreview).c_str(),
-        L"ShellNSE Archive Preview Handler"));
+        ClsidToStr(CLSID_ArchiveFldrPreview).c_str(),
+        L"ArchiveFldr Archive Preview Handler"));
 
     // 4. Icon overlay — removed.
     //
     // There is no overlay handler any more, so nothing is registered here.
-    // Earlier builds did register one, under ' ShellNSE_Archive' with a
+    // Earlier builds did register one, under ' ArchiveFldr_Archive' with a
     // leading space to sort ahead of other handlers in the 15 slots Windows
     // allows. Clean up both spellings, plus its COM registration, so
     // re-registering an existing install drops the badge.
-    UnregisterOverlay(CLSID_ShellNSEIconOverlay, L" ShellNSE_Archive");
-    UnregisterOverlay(CLSID_ShellNSEIconOverlay, L"ShellNSE_Archive");
-    UnregisterApproved(CLSID_ShellNSEIconOverlay);
-    UnregisterCOMServer(CLSID_ShellNSEIconOverlay);
+    UnregisterOverlay(CLSID_ArchiveFldrIconOverlay, L" ArchiveFldr_Archive");
+    UnregisterOverlay(CLSID_ArchiveFldrIconOverlay, L"ArchiveFldr_Archive");
+    UnregisterApproved(CLSID_ArchiveFldrIconOverlay);
+    UnregisterCOMServer(CLSID_ArchiveFldrIconOverlay);
 
     // 4b. Property sheet — removed.
     //
@@ -507,8 +507,8 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
     // Nothing registers it now; strip its COM registration as well so the
     // tab disappears from installs that already have it. The per-extension
     // PropertySheetHandlers keys are deleted in RegisterShellExOnBase.
-    UnregisterApproved(CLSID_ShellNSEPropSheet);
-    UnregisterCOMServer(CLSID_ShellNSEPropSheet);
+    UnregisterApproved(CLSID_ArchiveFldrPropSheet);
+    UnregisterCOMServer(CLSID_ArchiveFldrPropSheet);
 
     // 5. Extensions — every row in the Formats table that carries a
     //    progId. Registering and unregistering now read the same list, so
@@ -535,9 +535,9 @@ HRESULT CRegistry::UnregisterAll()
         exts.push_back({ f->ext, f->progId });
 
     const ExtDef legacy[] = {
-        { L".docx", L"ShellNSE.DocxFile" },
-        { L".xlsx", L"ShellNSE.XlsxFile" },
-        { L".pptx", L"ShellNSE.PptxFile" },
+        { L".docx", L"ArchiveFldr.DocxFile" },
+        { L".xlsx", L"ArchiveFldr.XlsxFile" },
+        { L".pptx", L"ArchiveFldr.PptxFile" },
     };
     for (const auto& e : legacy) exts.push_back(e);
 
@@ -578,29 +578,29 @@ HRESULT CRegistry::UnregisterAll()
         if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, kRegKeyPreviewHandlers,
                 0, KEY_WRITE, &hk) == ERROR_SUCCESS)
         {
-            RegDeleteValueW(hk, ClsidToStr(CLSID_ShellNSEPreview).c_str());
+            RegDeleteValueW(hk, ClsidToStr(CLSID_ArchiveFldrPreview).c_str());
             RegCloseKey(hk);
         }
     }
 
-    UnregisterOverlay(CLSID_ShellNSEIconOverlay, L" ShellNSE_Archive");
-    UnregisterOverlay(CLSID_ShellNSEIconOverlay, L"ShellNSE_Archive");
+    UnregisterOverlay(CLSID_ArchiveFldrIconOverlay, L" ArchiveFldr_Archive");
+    UnregisterOverlay(CLSID_ArchiveFldrIconOverlay, L"ArchiveFldr_Archive");
 
-    UnregisterApproved(CLSID_ShellNSEFolder);
-    UnregisterApproved(CLSID_ShellNSEContextMenu);
-    UnregisterApproved(CLSID_ShellNSEIconOverlay);
-    UnregisterApproved(CLSID_ShellNSEDropTarget);
-    UnregisterApproved(CLSID_ShellNSEThumbnail);
-    UnregisterApproved(CLSID_ShellNSEPreview);
-    UnregisterApproved(CLSID_ShellNSEPropSheet);
+    UnregisterApproved(CLSID_ArchiveFldrFolder);
+    UnregisterApproved(CLSID_ArchiveFldrContextMenu);
+    UnregisterApproved(CLSID_ArchiveFldrIconOverlay);
+    UnregisterApproved(CLSID_ArchiveFldrDropTarget);
+    UnregisterApproved(CLSID_ArchiveFldrThumbnail);
+    UnregisterApproved(CLSID_ArchiveFldrPreview);
+    UnregisterApproved(CLSID_ArchiveFldrPropSheet);
 
-    UnregisterCOMServer(CLSID_ShellNSEFolder);
-    UnregisterCOMServer(CLSID_ShellNSEContextMenu);
-    UnregisterCOMServer(CLSID_ShellNSEIconOverlay);
-    UnregisterCOMServer(CLSID_ShellNSEDropTarget);
-    UnregisterCOMServer(CLSID_ShellNSEThumbnail);
-    UnregisterCOMServer(CLSID_ShellNSEPreview);
-    UnregisterCOMServer(CLSID_ShellNSEPropSheet);
+    UnregisterCOMServer(CLSID_ArchiveFldrFolder);
+    UnregisterCOMServer(CLSID_ArchiveFldrContextMenu);
+    UnregisterCOMServer(CLSID_ArchiveFldrIconOverlay);
+    UnregisterCOMServer(CLSID_ArchiveFldrDropTarget);
+    UnregisterCOMServer(CLSID_ArchiveFldrThumbnail);
+    UnregisterCOMServer(CLSID_ArchiveFldrPreview);
+    UnregisterCOMServer(CLSID_ArchiveFldrPropSheet);
 
     return S_OK;
 }

@@ -1,12 +1,12 @@
-# Building ShellNSE for Windows XP through Windows 11
+# Building ArchiveFldr for Windows XP through Windows 11
 
 One source tree, two build flavours. The default produces a modern binary;
 an opt-in switch produces one that loads on Windows XP.
 
 ```
-msbuild ShellNSE.sln /p:Configuration=Release /p:Platform=x64       modern (default)
-msbuild ShellNSE.sln /p:Configuration=Release /p:Platform=Win32 ^
-                     /p:ShellNSEToolset=v141_xp                      XP-capable
+msbuild ArchiveFldr.sln /p:Configuration=Release /p:Platform=x64       modern (default)
+msbuild ArchiveFldr.sln /p:Configuration=Release /p:Platform=Win32 ^
+                     /p:ArchiveFldrToolset=v141_xp                      XP-capable
 ```
 
 ## Why a switch is needed at all
@@ -33,23 +33,23 @@ The rule for new code: anything newer than XP goes through
 library that XP does not ship.
 
 You can check the result without a Windows machine by dumping the import
-table (`dumpbin /imports ShellNSE.64.dll`) and looking for anything
+table (`dumpbin /imports ArchiveFldr.64.dll`) and looking for anything
 Vista-only outside the CRT rows.
 
 **2. The C runtime.** This is the part the switch exists for. The VS2026
 toolset (`v145`) links against the UCRT, which imports SRW locks,
 condition variables, `Fls*` and `InitOnceExecuteOnce` — none of which XP
 has. No amount of care in our own code changes that, because the runtime
-pulls them in on its own behalf. `/p:ShellNSEToolset=v141_xp` switches to
+pulls them in on its own behalf. `/p:ArchiveFldrToolset=v141_xp` switches to
 the last toolset Microsoft shipped with XP-compatible CRT support.
 
 ## What the XP flavour changes
 
-Setting `ShellNSEToolset` to anything ending in `_xp` makes the project:
+Setting `ArchiveFldrToolset` to anything ending in `_xp` makes the project:
 
 * select that toolset and let it bring its own Windows 7.1A SDK
   (`WindowsTargetPlatformVersion` is left unset in that case);
-* define `SHELLNSE_XP`, `_WIN32_WINNT=0x0501`, `WINVER=0x0501`,
+* define `ARCHIVEFLDR_XP`, `_WIN32_WINNT=0x0501`, `WINVER=0x0501`,
   `NTDDI_VERSION=0x05010300`.
 
 The targeting macros matter as much as the toolset. With `_WIN32_WINNT`
@@ -58,7 +58,7 @@ SRW locks and `InitOnceExecuteOnce` even under the XP toolset, and you get
 a binary that still will not load. Pinned to `0x0501` they fall back to
 critical sections.
 
-`SHELLNSE_XP` also defines `SHELLNSE_NO_VISTA_HANDLERS`, which compiles
+`ARCHIVEFLDR_XP` also defines `ARCHIVEFLDR_NO_VISTA_HANDLERS`, which compiles
 out `CThumbnailProvider` and `CPreviewHandler`. `IThumbnailProvider` and
 `IPreviewHandler` are Vista-era interfaces; XP uses `IExtractImage` and
 has no preview pane, so on XP those two classes are dead weight that would

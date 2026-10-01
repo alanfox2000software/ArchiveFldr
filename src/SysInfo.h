@@ -3,7 +3,7 @@
 // Which Windows are we actually running on, and how to reach an API that
 // may not exist there.
 //
-// ShellNSE is built with a modern SDK (so Vista+ interfaces such as
+// ArchiveFldr is built with a modern SDK (so Vista+ interfaces such as
 // IThumbnailProvider compile) but must LOAD on everything from Windows XP
 // up to Windows 11. Those two requirements only coexist if no post-XP
 // export is ever bound statically: a single unresolved import in the PE

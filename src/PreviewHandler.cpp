@@ -2,14 +2,14 @@
 // neither exists on XP, where the shell uses IExtractImage and has no
 // preview pane. The XP build compiles this file away entirely.
 #include "stdafx.h"
-#ifndef SHELLNSE_NO_VISTA_HANDLERS
+#ifndef ARCHIVEFLDR_NO_VISTA_HANDLERS
 // PreviewHandler.cpp
 #include "stdafx.h"
 #include "PreviewHandler.h"
 #include "ArchiveEngine.h"
 #include "GUIDs.h"
 
-static const wchar_t kPreviewClass[] = L"ShellNSE_Preview";
+static const wchar_t kPreviewClass[] = L"ArchiveFldr_Preview";
 
 CPreviewHandler::CPreviewHandler()
 {
@@ -355,4 +355,4 @@ LRESULT CPreviewHandler::WndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp)
     }
     return DefWindowProcW(hwnd,msg,wp,lp);
 }
-#endif // SHELLNSE_NO_VISTA_HANDLERS
+#endif // ARCHIVEFLDR_NO_VISTA_HANDLERS

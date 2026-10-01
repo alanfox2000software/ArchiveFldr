@@ -1,6 +1,6 @@
 // Sdk7z.h
 // Minimal, self-contained re-declaration of the handful of 7-Zip SDK
-// "COM-lite" interfaces ShellNSE needs to drive the external 7z.dll engine
+// "COM-lite" interfaces ArchiveFldr needs to drive the external 7z.dll engine
 // (thirdparty\7z\7z.64.dll / thirdparty\7z\7z.32.dll).
 //
 // We intentionally do NOT vendor the full 7-Zip C++ SDK. These interfaces
@@ -176,7 +176,7 @@ DEFINE_GUID(CLSID_CFormat7z,
 // 7z.dll exported entry points we call via GetProcAddress
 // ─────────────────────────────────────────────────────────
 // 7z.dll publishes its own format list. Asking it which formats it has,
-// instead of hard-coding a table of class GUIDs, means ShellNSE supports
+// instead of hard-coding a table of class GUIDs, means ArchiveFldr supports
 // exactly what the user's copy of 7z.dll supports — including formats
 // added in versions newer than this source.
 typedef HRESULT (WINAPI *Func7z_GetNumberOfFormats)(UINT32* numFormats);

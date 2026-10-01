@@ -44,20 +44,20 @@
 #  define VC_EXTRA_LEAN
 #endif
 
-// SHELLNSE_XP is set by the project when building with the XP toolset
+// ARCHIVEFLDR_XP is set by the project when building with the XP toolset
 // (see BUILD-XP.md). It pins the headers to XP so the STL picks the
 // XP-compatible synchronisation primitives — with _WIN32_WINNT at 0x0A00
 // std::mutex compiles down to SRW locks, which XP's kernel32 does not
 // export, and the DLL would not load at all.
-#ifdef SHELLNSE_XP
+#ifdef ARCHIVEFLDR_XP
 #  ifndef _WIN32_WINNT
 #    define _WIN32_WINNT 0x0501
 #  endif
 #  ifndef WINVER
 #    define WINVER       0x0501
 #  endif
-#  ifndef SHELLNSE_NO_VISTA_HANDLERS
-#    define SHELLNSE_NO_VISTA_HANDLERS   // no thumbnail/preview pane on XP
+#  ifndef ARCHIVEFLDR_NO_VISTA_HANDLERS
+#    define ARCHIVEFLDR_NO_VISTA_HANDLERS   // no thumbnail/preview pane on XP
 #  endif
 #else
 #  ifndef _WIN32_WINNT
@@ -73,7 +73,7 @@
 #endif
 
 #ifndef NTDDI_VERSION
-#  ifdef SHELLNSE_XP
+#  ifdef ARCHIVEFLDR_XP
 #    define NTDDI_VERSION 0x05010300   // XP SP3
 #  else
 #    define NTDDI_VERSION 0x0A000006

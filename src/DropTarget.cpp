@@ -67,7 +67,7 @@ HRESULT Perform(HWND hwnd, CShellFolder* folder, IDataObject* pdo)
     if (!ok)
         MessageBoxW(hwnd,
             L"Some files could not be added to the archive.",
-            L"ShellNSE", MB_ICONWARNING | MB_OK);
+            L"ArchiveFldr", MB_ICONWARNING | MB_OK);
 
     return ok ? S_OK : S_FALSE;
 }

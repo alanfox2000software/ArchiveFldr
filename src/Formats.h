@@ -1,6 +1,6 @@
 // Formats.h
 // ─────────────────────────────────────────────────────────────────────────
-// Every file type ShellNSE claims, in one table.
+// Every file type ArchiveFldr claims, in one table.
 //
 // This used to live in four places that quietly drifted apart: the
 // extension list in GUIDs.h, the pretty-name table in ArchiveEngine.cpp,
@@ -28,7 +28,7 @@ struct Format
 {
     const wchar_t* ext;        // L".zst", lowercase, leading dot
     const wchar_t* name;       // L"Zstandard" — shown in the UI
-    const wchar_t* progId;     // L"ShellNSE.ZstFile", or nullptr to claim
+    const wchar_t* progId;     // L"ArchiveFldr.ZstFile", or nullptr to claim
                                // the extension without owning the file type
     EngineKind     engine;     // preferred engine
     const wchar_t* component;  // ThirdParty id that engine needs

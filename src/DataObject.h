@@ -1,6 +1,6 @@
 // DataObject.h
 // IDataObject for items INSIDE an archive — this is what makes copy (Ctrl+C)
-// and drag-out of the ShellNSE view produce real files.
+// and drag-out of the ArchiveFldr view produce real files.
 //
 // Formats served:
 //   CFSTR_FILEDESCRIPTORW  flattened list of the selection (folders expand)

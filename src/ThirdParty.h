@@ -1,19 +1,19 @@
 // ThirdParty.h
 // ─────────────────────────────────────────────────────────────────────────
 // Universal layout + loader for the external ("third party") engine DLLs
-// that ShellNSE drives but does not ship: 7z.dll today, and whatever comes
+// that ArchiveFldr drives but does not ship: 7z.dll today, and whatever comes
 // next (unrar.dll, a zip engine, a zstd engine, …).
 //
 // Every component follows the SAME on-disk convention, so adding one is a
 // single row in kComponents[] plus the code that talks to it — never a new
 // ad-hoc search routine:
 //
-//   <ShellNSE dir>\thirdparty\<id>\<bits>\<base…>        brotli layout
-//   <ShellNSE dir>\thirdparty\<id>\<base…>               most engines
-//   <ShellNSE dir>\thirdparty\<bits>\<base…>
-//   <ShellNSE dir>\thirdparty\<base…>                    flat thirdparty dir
-//   <ShellNSE dir>\<id>\<base…>                          short layout
-//   <ShellNSE dir>\<base…>                               next to ShellNSE
+//   <ArchiveFldr dir>\thirdparty\<id>\<bits>\<base…>        brotli layout
+//   <ArchiveFldr dir>\thirdparty\<id>\<base…>               most engines
+//   <ArchiveFldr dir>\thirdparty\<bits>\<base…>
+//   <ArchiveFldr dir>\thirdparty\<base…>                    flat thirdparty dir
+//   <ArchiveFldr dir>\<id>\<base…>                          short layout
+//   <ArchiveFldr dir>\<base…>                               next to ArchiveFldr
 //   …then the component's optional registry install hint.
 //
 // and within each of those directories, for each base name:
@@ -23,7 +23,7 @@
 //   <base><bits>.dll       unrar64.dll
 //   <base>.dll             plain copy
 //
-// <bits> is 64 for ShellNSE.64.dll and 32 for ShellNSE.32.dll: the engine
+// <bits> is 64 for ArchiveFldr.64.dll and 32 for ArchiveFldr.32.dll: the engine
 // DLL must always match the bitness of the host process. The .xp. variant
 // exists because some projects ship a separate XP-compatible build (zstd
 // does); it is tried last elsewhere, since an XP build still runs happily
@@ -54,7 +54,7 @@ struct Component
 const Component*               Find(const wchar_t* id);
 std::vector<const Component*>  All();
 
-// Folder that holds ShellNSE.<bits>.dll (no trailing backslash).
+// Folder that holds ArchiveFldr.<bits>.dll (no trailing backslash).
 std::wstring   ModuleDir();
 // L"64" or L"32", matching the current process.
 const wchar_t* BitnessTag();

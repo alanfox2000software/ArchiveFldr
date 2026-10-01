@@ -20,14 +20,14 @@ static const Format kFormats[] =
 {
 //    ext        name              progId                 engine        component  codec     unwrap
     // ── 7-Zip handles these ──────────────────────────────────────────────
-    { L".7z",    L"7-Zip",         L"ShellNSE.7zFile",    EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".7z",    L"7-Zip",         L"ArchiveFldr.7zFile",    EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".7zip",  L"7-Zip",         nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
-    { L".zip",   L"ZIP",           L"ShellNSE.ZipFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".zip",   L"ZIP",           L"ArchiveFldr.ZipFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".zipx",  L"ZIPX",          nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
-    { L".jar",   L"Java archive",  L"ShellNSE.JarFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".jar",   L"Java archive",  L"ArchiveFldr.JarFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".war",   L"Web archive",   nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".ear",   L"EAR",           nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
-    { L".apk",   L"Android pack",  L"ShellNSE.ApkFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".apk",   L"Android pack",  L"ArchiveFldr.ApkFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".ipa",   L"iOS app",       nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".docx",  L"Word document", nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".xlsx",  L"Excel workbook",nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
@@ -35,24 +35,24 @@ static const Format kFormats[] =
     { L".odt",   L"OpenDocument",  nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".ods",   L"OpenDocument",  nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".odp",   L"OpenDocument",  nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
-    { L".tar",   L"TAR",           L"ShellNSE.TarFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
-    { L".tgz",   L"TAR + GZip",    L"ShellNSE.TgzFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".tar",   L"TAR",           L"ArchiveFldr.TarFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".tgz",   L"TAR + GZip",    L"ArchiveFldr.TgzFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".tbz2",  L"TAR + BZip2",   nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".txz",   L"TAR + XZ",      nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".tlz",   L"TAR + LZMA",    nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
-    { L".gz",    L"GZip",          L"ShellNSE.GzFile",    EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".gz",    L"GZip",          L"ArchiveFldr.GzFile",    EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".gzip",  L"GZip",          nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
-    { L".bz2",   L"BZip2",         L"ShellNSE.Bz2File",   EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".bz2",   L"BZip2",         L"ArchiveFldr.Bz2File",   EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".bzip2", L"BZip2",         nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
-    { L".xz",    L"XZ",            L"ShellNSE.XzFile",    EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".xz",    L"XZ",            L"ArchiveFldr.XzFile",    EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".z",     L"compress",      nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".lz",    L"Lzip",          nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".lzma",  L"LZMA",          nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
-    { L".lzh",   L"LZH",           L"ShellNSE.LzhFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".lzh",   L"LZH",           L"ArchiveFldr.LzhFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".lha",   L"LZH",           nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".arj",   L"ARJ",           nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
-    { L".cab",   L"Cabinet",       L"ShellNSE.CabFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
-    { L".iso",   L"ISO image",     L"ShellNSE.IsoFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".cab",   L"Cabinet",       L"ArchiveFldr.CabFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".iso",   L"ISO image",     L"ArchiveFldr.IsoFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".img",   L"Disk image",    nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".nrg",   L"Nero image",    nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".mdf",   L"Disk image",    nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
@@ -67,14 +67,14 @@ static const Format kFormats[] =
     { L".vhdx",  L"Virtual disk",  nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
 
     // ── RAR: prefer unrar.dll, fall back to 7-Zip ────────────────────────
-    { L".rar",   L"RAR",           L"ShellNSE.RarFile",   EK::Unrar,    L"Unrar",  nullptr,  nullptr },
-    { L".cbr",   L"Comic book RAR",L"ShellNSE.CbrFile",   EK::Unrar,    L"Unrar",  nullptr,  nullptr },
+    { L".rar",   L"RAR",           L"ArchiveFldr.RarFile",   EK::Unrar,    L"Unrar",  nullptr,  nullptr },
+    { L".cbr",   L"Comic book RAR",L"ArchiveFldr.CbrFile",   EK::Unrar,    L"Unrar",  nullptr,  nullptr },
     { L".r00",   L"RAR volume",    nullptr,               EK::Unrar,    L"Unrar",  nullptr,  nullptr },
     { L".r01",   L"RAR volume",    nullptr,               EK::Unrar,    L"Unrar",  nullptr,  nullptr },
     { L".r02",   L"RAR volume",    nullptr,               EK::Unrar,    L"Unrar",  nullptr,  nullptr },
 
     // ── WIM family: prefer wimlib, fall back to 7-Zip ────────────────────
-    { L".wim",   L"Windows image", L"ShellNSE.WimFile",   EK::Wim,      L"WimLib", nullptr,  nullptr },
+    { L".wim",   L"Windows image", L"ArchiveFldr.WimFile",   EK::Wim,      L"WimLib", nullptr,  nullptr },
     { L".swm",   L"Split WIM",     nullptr,               EK::Wim,      L"WimLib", nullptr,  nullptr },
     { L".esd",   L"Encrypted WIM", nullptr,               EK::Wim,      L"WimLib", nullptr,  nullptr },
 
@@ -82,14 +82,14 @@ static const Format kFormats[] =
     // One compressed stream = one file. 7-Zip proper ships none of these
     // codecs, so there is no fallback: without the DLL the file cannot be
     // read, and the UI says which DLL is missing and where it looked.
-    { L".zst",   L"Zstandard",     L"ShellNSE.ZstFile",   EK::Codec,    L"zstd",   L"zstd",   nullptr },
+    { L".zst",   L"Zstandard",     L"ArchiveFldr.ZstFile",   EK::Codec,    L"zstd",   L"zstd",   nullptr },
     { L".zstd",  L"Zstandard",     nullptr,               EK::Codec,    L"zstd",   L"zstd",   nullptr },
-    { L".tzst",  L"Zstandard TAR", L"ShellNSE.TzstFile",  EK::Codec,    L"zstd",   L"zstd",   L".tar" },
-    { L".br",    L"Brotli",        L"ShellNSE.BrFile",    EK::Codec,    L"brotli", L"brotli", nullptr },
-    { L".lz4",   L"LZ4",           L"ShellNSE.Lz4File",   EK::Codec,    L"lz4",    L"lz4",    nullptr },
+    { L".tzst",  L"Zstandard TAR", L"ArchiveFldr.TzstFile",  EK::Codec,    L"zstd",   L"zstd",   L".tar" },
+    { L".br",    L"Brotli",        L"ArchiveFldr.BrFile",    EK::Codec,    L"brotli", L"brotli", nullptr },
+    { L".lz4",   L"LZ4",           L"ArchiveFldr.Lz4File",   EK::Codec,    L"lz4",    L"lz4",    nullptr },
     { L".tlz4",  L"LZ4 TAR",       nullptr,               EK::Codec,    L"lz4",    L"lz4",    L".tar" },
-    { L".lz5",   L"LZ5",           L"ShellNSE.Lz5File",   EK::Codec,    L"lz5",    L"lz5",    nullptr },
-    { L".liz",   L"Lizard",        L"ShellNSE.LizFile",   EK::Codec,    L"lizard", L"lizard", nullptr },
+    { L".lz5",   L"LZ5",           L"ArchiveFldr.Lz5File",   EK::Codec,    L"lz5",    L"lz5",    nullptr },
+    { L".liz",   L"Lizard",        L"ArchiveFldr.LizFile",   EK::Codec,    L"lizard", L"lizard", nullptr },
 };
 
 const Format* Find(const wchar_t* ext)

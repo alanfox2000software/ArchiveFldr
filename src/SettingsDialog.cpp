@@ -541,7 +541,7 @@ INT_PTR CALLBACK CPageAbout::DlgProc(
         p=(CPageAbout*)lp;
         SetWindowLongPtrW(hDlg,DWLP_USER,(LONG_PTR)p);
         p->m_hwnd=hDlg;
-        SetDlgItemTextW(hDlg,IDC_STATIC_NAME,    L"ShellNSE");
+        SetDlgItemTextW(hDlg,IDC_STATIC_NAME,    L"ArchiveFldr");
         SetDlgItemTextW(hDlg,IDC_STATIC_VERSION, L"Version 1.0.0");
         SetDlgItemTextW(hDlg,IDC_STATIC_DESC,
             L"Windows Shell Namespace Extension\r\n"
@@ -558,9 +558,9 @@ INT_PTR CALLBACK CPageAbout::DlgProc(
     if (msg==WM_COMMAND) {
         if (LOWORD(wp)==IDC_LINK_WEBSITE)
             ShellExecuteW(hDlg,L"open",
-                L"https://github.com/ShellNSE",nullptr,nullptr,SW_SHOW);
+                L"https://github.com/ArchiveFldr",nullptr,nullptr,SW_SHOW);
         if (LOWORD(wp)==IDC_BTN_CHECK_UPDATE)
-            MessageBoxW(hDlg,L"ShellNSE v1.0.0 is up to date.",
+            MessageBoxW(hDlg,L"ArchiveFldr v1.0.0 is up to date.",
                 L"Check for Updates",MB_ICONINFORMATION);
     }
     return FALSE;
@@ -616,7 +616,7 @@ INT_PTR CSettingsDialog::WndProc(
         case IDC_BTN_APPLY:  OnApply();                            return TRUE;
         case IDC_BTN_HELP:
             ShellExecuteW(hDlg,L"open",
-                L"https://github.com/ShellNSE/wiki",
+                L"https://github.com/ArchiveFldr/wiki",
                 nullptr,nullptr,SW_SHOW);
             return TRUE;
         }
@@ -647,7 +647,7 @@ INT_PTR CSettingsDialog::WndProc(
 
 void CSettingsDialog::OnInit(HWND hDlg)
 {
-    SetWindowTextW(hDlg, L"ShellNSE Settings");
+    SetWindowTextW(hDlg, L"ArchiveFldr Settings");
 
     m_hTree     = GetDlgItem(hDlg, IDC_TREE_PAGES);
     m_hFrame    = GetDlgItem(hDlg, IDC_FRAME_PAGE);

@@ -37,7 +37,7 @@ const VerbDef kVerbs[] = {
     { L"paste",       "paste",       L"Add the clipboard's files here"        },
     { L"refresh",     "refresh",     L"Refresh this view"                     },
     { L"properties",  "properties",  L"Show properties"                       },
-    { L"settings",    "settings",    L"Open ShellNSE settings"                },
+    { L"settings",    "settings",    L"Open ArchiveFldr settings"                },
 };
 
 // Scoped hourglass for the operations that can take a moment.
@@ -149,7 +149,7 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
     }
 
     auto& s = Settings::Get();
-    // The "collect everything under one ShellNSE sub-menu" preference only
+    // The "collect everything under one ArchiveFldr sub-menu" preference only
     // applies to the crowded file menu in a normal Explorer folder.
     m_useSubMenu = s.ctxUseSubMenu && (m_mode == ModeArchiveFile);
 
@@ -199,7 +199,7 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
         addSep();
         addItem(CMD_TEST,        L"&Test archive");
         addItem(CMD_INFO,        L"Archive &info...");
-        addItem(CMD_SETTINGS,    L"ShellNSE &settings...");
+        addItem(CMD_SETTINGS,    L"ArchiveFldr &settings...");
         break;
     }
 
@@ -213,10 +213,10 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
         if (s.ctxAddToArchive)  addItem(CMD_ADD,            L"Add to Archive...");
         if (s.ctxCompressEmail) addItem(CMD_COMPRESS_EMAIL, L"Compress and E-mail...");
         addSep();
-        if (s.ctxOpenInShell)   addItem(CMD_OPEN_SHELL,     L"Open with ShellNSE");
+        if (s.ctxOpenInShell)   addItem(CMD_OPEN_SHELL,     L"Open with ArchiveFldr");
         if (s.ctxTestArchive)   addItem(CMD_TEST,           L"Test Archive");
         if (s.ctxArchiveInfo)   addItem(CMD_INFO,           L"Archive Info...");
-        if (s.ctxSettings)      addItem(CMD_SETTINGS,       L"ShellNSE Settings...");
+        if (s.ctxSettings)      addItem(CMD_SETTINGS,       L"ArchiveFldr Settings...");
         break;
     }
     }
@@ -539,9 +539,9 @@ void CContextMenu::DoOpenItem()
         browsed = true;
         if (!BrowseTo(p))
             MessageBoxW(m_hwnd,
-                (L"ShellNSE could not open \"" + CPidlMgr::GetName(p) +
+                (L"ArchiveFldr could not open \"" + CPidlMgr::GetName(p) +
                  L"\" inside the archive.").c_str(),
-                L"ShellNSE", MB_ICONWARNING | MB_OK);
+                L"ArchiveFldr", MB_ICONWARNING | MB_OK);
     }
     if (!anyFile) return;
 
@@ -568,9 +568,9 @@ void CContextMenu::DoOpenItem()
         if (!ArchiveOps::ExtractEntry(eng, e, tempDir, &onDisk))
         {
             MessageBoxW(m_hwnd,
-                (L"ShellNSE could not extract \"" + e.name +
+                (L"ArchiveFldr could not extract \"" + e.name +
                  L"\" from the archive.").c_str(),
-                L"ShellNSE", MB_ICONERROR | MB_OK);
+                L"ArchiveFldr", MB_ICONERROR | MB_OK);
             continue;
         }
 
@@ -634,8 +634,8 @@ void CContextMenu::DoExtract(bool here)
         MessageBoxW(m_hwnd,
             L"Some items could not be extracted.\n\n"
             L"The archive may be damaged, or it may contain encrypted items "
-            L"(ShellNSE has no password prompt yet).",
-            L"ShellNSE", MB_ICONWARNING | MB_OK);
+            L"(ArchiveFldr has no password prompt yet).",
+            L"ArchiveFldr", MB_ICONWARNING | MB_OK);
 }
 
 void CContextMenu::DoAdd()
@@ -683,7 +683,7 @@ void CContextMenu::DoCompressEmail()
 void CContextMenu::DoOpenShell()
 {
     // ─────────────────────────────────────────────────────────────────
-    // "Open with ShellNSE" — browse the archive inside Windows Explorer.
+    // "Open with ArchiveFldr" — browse the archive inside Windows Explorer.
     //
     // This used to be ShellExecute(L"open", <archive>), which just asks the
     // shell to run the file type's *default* open command. For an archive
@@ -704,14 +704,14 @@ void CContextMenu::DoOpenShell()
     // ─────────────────────────────────────────────────────────────────
     if (m_archivePath.empty()) {
         MessageBoxW(m_hwnd, L"No archive was selected.",
-                    L"ShellNSE", MB_ICONWARNING | MB_OK);
+                    L"ArchiveFldr", MB_ICONWARNING | MB_OK);
         return;
     }
 
     if (!PathFileExistsW(m_archivePath.c_str())) {
         MessageBoxW(m_hwnd,
             (L"The archive no longer exists:\n\n" + m_archivePath).c_str(),
-            L"ShellNSE", MB_ICONERROR | MB_OK);
+            L"ArchiveFldr", MB_ICONERROR | MB_OK);
         return;
     }
 
@@ -725,12 +725,12 @@ void CContextMenu::DoOpenShell()
         MessageBoxW(m_hwnd,
             L"The 7-Zip engine DLL was not found, so .7z archives cannot be "
             L"opened.\n\n"
-            L"Put a bitness-matched 7z.dll next to ShellNSE, in any of:\n"
-            L"    <ShellNSE folder>\\thirdparty\\7z\\7z.64.dll   (64-bit)\n"
-            L"    <ShellNSE folder>\\thirdparty\\7z\\7z.32.dll   (32-bit)\n"
-            L"    <ShellNSE folder>\\7z.64.dll  /  7z.32.dll  /  7z.dll\n\n"
+            L"Put a bitness-matched 7z.dll next to ArchiveFldr, in any of:\n"
+            L"    <ArchiveFldr folder>\\thirdparty\\7z\\7z.64.dll   (64-bit)\n"
+            L"    <ArchiveFldr folder>\\thirdparty\\7z\\7z.32.dll   (32-bit)\n"
+            L"    <ArchiveFldr folder>\\7z.64.dll  /  7z.32.dll  /  7z.dll\n\n"
             L"A system-wide 7-Zip installation is also used automatically.",
-            L"ShellNSE", MB_ICONERROR | MB_OK);
+            L"ArchiveFldr", MB_ICONERROR | MB_OK);
         return;
     }
 
@@ -738,7 +738,7 @@ void CContextMenu::DoOpenShell()
         auto engine = CreateArchiveEngine(m_archivePath);
         if (!engine || !engine->Open(m_archivePath))
         {
-            std::wstring msg = L"ShellNSE could not read this archive:\n\n" +
+            std::wstring msg = L"ArchiveFldr could not read this archive:\n\n" +
                                m_archivePath;
             if (is7z)
                 msg += L"\n\nEngine: " + (Get7zEnginePath().empty()
@@ -747,7 +747,7 @@ void CContextMenu::DoOpenShell()
                        L"\n\nThe file may be corrupt, or it may use encrypted "
                        L"headers (password-protected archives are not "
                        L"supported yet).";
-            MessageBoxW(m_hwnd, msg.c_str(), L"ShellNSE",
+            MessageBoxW(m_hwnd, msg.c_str(), L"ArchiveFldr",
                         MB_ICONERROR | MB_OK);
             return;
         }
@@ -755,7 +755,7 @@ void CContextMenu::DoOpenShell()
 
     // explorer.exe /e,::{CLSID},<archive path>
     wchar_t clsid[64] = {};
-    StringFromGUID2(CLSID_ShellNSEFolder, clsid, ARRAYSIZE(clsid));
+    StringFromGUID2(CLSID_ArchiveFldrFolder, clsid, ARRAYSIZE(clsid));
 
     wchar_t explorerExe[MAX_PATH] = {};
     if (GetWindowsDirectoryW(explorerExe, MAX_PATH))
@@ -789,10 +789,10 @@ void CContextMenu::DoOpenShell()
     }
 
     MessageBoxW(m_hwnd,
-        L"ShellNSE could not open an Explorer window for this archive.\n\n"
+        L"ArchiveFldr could not open an Explorer window for this archive.\n\n"
         L"Make sure the extension is registered (run, as administrator):\n"
-        L"    regsvr32 ShellNSE.64.dll",
-        L"ShellNSE", MB_ICONERROR | MB_OK);
+        L"    regsvr32 ArchiveFldr.64.dll",
+        L"ArchiveFldr", MB_ICONERROR | MB_OK);
 }
 
 void CContextMenu::DoTest()
@@ -845,7 +845,7 @@ void CContextMenu::DoInfo()
     // Which binary is actually loaded. Explorer caches shell extensions
     // aggressively, so after a rebuild this is the quickest way to tell
     // whether the DLL under test is the one that just got built.
-    msg += L"\n\nShellNSE build: " NSE_WIDE(__DATE__) L" " NSE_WIDE(__TIME__);
+    msg += L"\n\nArchiveFldr build: " NSE_WIDE(__DATE__) L" " NSE_WIDE(__TIME__);
     msg += (sizeof(void*) == 8) ? L" (64-bit)" : L" (32-bit)";
 
     MessageBoxW(m_hwnd, msg.c_str(), L"Archive Info", MB_ICONINFORMATION | MB_OK);
@@ -862,7 +862,7 @@ void CContextMenu::DoCopy()
     if (FAILED(MakeDataObject(IID_IDataObject, (void**)&pdo)) || !pdo)
     {
         MessageBoxW(m_hwnd, L"Nothing could be copied from this selection.",
-                    L"ShellNSE", MB_ICONWARNING | MB_OK);
+                    L"ArchiveFldr", MB_ICONWARNING | MB_OK);
         return;
     }
 
@@ -901,7 +901,7 @@ void CContextMenu::DoPaste()
     NotifyRefresh();
     if (!ok)
         MessageBoxW(m_hwnd, L"Some files could not be added to the archive.",
-                    L"ShellNSE", MB_ICONWARNING | MB_OK);
+                    L"ArchiveFldr", MB_ICONWARNING | MB_OK);
 }
 
 void CContextMenu::DoRefresh()

@@ -34,10 +34,10 @@ public:
     static HRESULT CreateShellFolder      (REFIID, LPVOID*);
     static HRESULT CreateContextMenu      (REFIID, LPVOID*);
     static HRESULT CreateDropTarget       (REFIID, LPVOID*);
-#ifndef SHELLNSE_NO_VISTA_HANDLERS
+#ifndef ARCHIVEFLDR_NO_VISTA_HANDLERS
     static HRESULT CreateThumbnailProvider(REFIID, LPVOID*);
     static HRESULT CreatePreviewHandler   (REFIID, LPVOID*);
-#endif // SHELLNSE_NO_VISTA_HANDLERS
+#endif // ARCHIVEFLDR_NO_VISTA_HANDLERS
 
 private:
     ~CClassFactory() { InterlockedDecrement(&g_cDllRefCount); }

@@ -1,4 +1,4 @@
-// Settings.h — Persistent settings for ShellNSE (registry-backed)
+// Settings.h — Persistent settings for ArchiveFldr (registry-backed)
 #pragma once
 #include "stdafx.h"
 
@@ -96,7 +96,7 @@ public:
     bool          ctxArchiveInfo      = true;
     bool          ctxSettings         = true;
     bool          ctxUseSubMenu       = true;
-    std::wstring  ctxSubMenuTitle     = L"ShellNSE";
+    std::wstring  ctxSubMenuTitle     = L"ArchiveFldr";
 
     // ── Appearance ────────────────────────────────────────
     bool          darkMode            = false;

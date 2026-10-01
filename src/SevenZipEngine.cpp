@@ -3,7 +3,7 @@
 //
 // We never ship or statically link any 7-Zip decoder code. At runtime we
 // LoadLibrary() a bitness-matched engine DLL (thirdparty\7z\7z.64.dll or
-// thirdparty\7z\7z.32.dll, placed next to ShellNSE.64.dll / ShellNSE.32.dll)
+// thirdparty\7z\7z.32.dll, placed next to ArchiveFldr.64.dll / ArchiveFldr.32.dll)
 // and talk to it purely through its public "COM-lite" ABI — the same
 // contract 7-Zip's own CPP/7zip/UI/Client7z sample uses. See Sdk7z.h for
 // the interface/GUID declarations and provenance notes.
@@ -32,7 +32,7 @@ std::once_flag             g_initOnce;
 
 // Engine discovery is delegated to the universal third-party DLL layout
 // (see ThirdParty.h): thirdparty\7z\7z.64.dll, thirdparty\7z\7z.dll,
-// <ShellNSE dir>\7z.64.dll, an installed 7-Zip, ... — one shared search
+// <ArchiveFldr dir>\7z.64.dll, an installed 7-Zip, ... — one shared search
 // order that every future engine DLL inherits for free.
 std::wstring Resolve7zDllPath()
 {
@@ -639,7 +639,7 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
     if (!createObj)
     {
         m_lastError = L"7-Zip engine not found. Place 7z.64.dll / 7z.32.dll under "
-                      L"thirdparty\\7z\\ next to ShellNSE.";
+                      L"thirdparty\\7z\\ next to ArchiveFldr.";
         return false;
     }
 

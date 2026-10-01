@@ -536,10 +536,10 @@ bool CUnrarEngine::Run(const std::set<std::wstring>& wanted,
             {
                 MessageBoxW(nullptr,
                     L"This RAR archive is encrypted.\n\n"
-                    L"ShellNSE cannot prompt for a password from inside "
+                    L"ArchiveFldr cannot prompt for a password from inside "
                     L"Explorer. Open the archive in WinRAR or 7-Zip to "
                     L"extract it.",
-                    L"ShellNSE", MB_ICONINFORMATION | MB_OK);
+                    L"ArchiveFldr", MB_ICONINFORMATION | MB_OK);
             }
             break;
         }

@@ -8,8 +8,8 @@ Settings::Settings()
     // Set tempDirPath and logFilePath defaults at runtime
     wchar_t buf[MAX_PATH];
     if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0, buf))) {
-        tempDirPath = std::wstring(buf) + L"\\ShellNSE\\Temp";
-        logFilePath = std::wstring(buf) + L"\\ShellNSE\\ShellNSE.log";
+        tempDirPath = std::wstring(buf) + L"\\ArchiveFldr\\Temp";
+        logFilePath = std::wstring(buf) + L"\\ArchiveFldr\\ArchiveFldr.log";
     }
 }
 
@@ -247,7 +247,7 @@ void Settings::Reset()
     ctxArchiveInfo   = true;
     ctxSettings      = true;
     ctxUseSubMenu    = true;
-    ctxSubMenuTitle  = L"ShellNSE";
+    ctxSubMenuTitle  = L"ArchiveFldr";
 
     // ── Appearance ────────────────────────────────────────
     darkMode          = false;
@@ -278,8 +278,8 @@ void Settings::Reset()
     if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA,
                                    nullptr, 0, buf)))
     {
-        tempDirPath = std::wstring(buf) + L"\\ShellNSE\\Temp";
-        logFilePath = std::wstring(buf) + L"\\ShellNSE\\ShellNSE.log";
+        tempDirPath = std::wstring(buf) + L"\\ArchiveFldr\\Temp";
+        logFilePath = std::wstring(buf) + L"\\ArchiveFldr\\ArchiveFldr.log";
     }
 
     Save();

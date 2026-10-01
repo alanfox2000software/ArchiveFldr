@@ -369,7 +369,7 @@ HRESULT CArchiveDataObject::RenderHDrop(STGMEDIUM* pmed)
 
 HRESULT CArchiveDataObject::RenderDropEffect(STGMEDIUM* pmed)
 {
-    // Always a copy: ShellNSE cannot delete the item out of the archive, so
+    // Always a copy: ArchiveFldr cannot delete the item out of the archive, so
     // offering "move" would silently lose the user's data.
     DWORD effect = DROPEFFECT_COPY;
     HGLOBAL h = AllocGlobal(&effect, sizeof(effect));

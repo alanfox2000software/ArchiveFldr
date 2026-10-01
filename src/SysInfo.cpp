@@ -11,16 +11,16 @@ namespace {
 
 // Declared locally rather than pulling in <winternl.h>, which drags along a
 // pile of conflicting NT definitions.
-typedef struct _SHELLNSE_OSVERSIONINFOW {
+typedef struct _ARCHIVEFLDR_OSVERSIONINFOW {
     ULONG dwOSVersionInfoSize;
     ULONG dwMajorVersion;
     ULONG dwMinorVersion;
     ULONG dwBuildNumber;
     ULONG dwPlatformId;
     WCHAR szCSDVersion[128];
-} SHELLNSE_OSVERSIONINFOW;
+} ARCHIVEFLDR_OSVERSIONINFOW;
 
-typedef LONG (WINAPI* PfnRtlGetVersion)(SHELLNSE_OSVERSIONINFOW*);
+typedef LONG (WINAPI* PfnRtlGetVersion)(ARCHIVEFLDR_OSVERSIONINFOW*);
 
 DWORD QueryVersion()
 {
@@ -31,7 +31,7 @@ DWORD QueryVersion()
         if (auto fn = reinterpret_cast<PfnRtlGetVersion>(
                 GetProcAddress(nt, "RtlGetVersion")))
         {
-            SHELLNSE_OSVERSIONINFOW vi{};
+            ARCHIVEFLDR_OSVERSIONINFOW vi{};
             vi.dwOSVersionInfoSize = sizeof(vi);
             if (fn(&vi) == 0)
                 return (DWORD)((vi.dwMajorVersion << 8) | vi.dwMinorVersion);

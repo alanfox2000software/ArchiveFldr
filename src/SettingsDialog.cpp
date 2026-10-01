@@ -719,6 +719,18 @@ void CSettingsDialog::ShowPage(int idx)
         if (i==idx) m_pages[i]->Resize(rcFrame);
     }
     m_curPage = idx;
+
+    // All page dialogs share the exact same rectangle inside the frame.
+    // Explicitly raise the newly-active one to the top of the Z-order and
+    // force it to repaint immediately, so it can never be left hidden
+    // behind a previously-shown sibling page or a stale host repaint.
+    HWND hActive = m_pages[idx]->GetHwnd();
+    if (hActive) {
+        SetWindowPos(hActive, HWND_TOP, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        InvalidateRect(hActive, nullptr, TRUE);
+        UpdateWindow(hActive);
+    }
 }
 
 void CSettingsDialog::OnTreeSel(HTREEITEM hItem)

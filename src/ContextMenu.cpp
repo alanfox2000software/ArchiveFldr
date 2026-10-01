@@ -3,6 +3,7 @@
 #include "ContextMenu.h"
 #include "ShellFolder.h"
 #include "ArchiveEngine.h"
+#include "SevenZipEngine.h"   // Is7zEngineAvailable() / Get7zEnginePath()
 #include "Settings.h"
 #include "SettingsDialog.h"
 #include "GUIDs.h"
@@ -121,23 +122,61 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
 }
 
 // ── IContextMenu::InvokeCommand ───────────────────────────
+// A caller may address a command either by menu offset (lpVerb packed with
+// MAKEINTRESOURCE) or by its canonical verb string — and the verb may arrive
+// in ANSI (lpVerb) or, with CMINVOKECOMMANDINFOEX, Unicode (lpVerbW) form.
+// All of those have to be accepted: Explorer picks the form, not us.
 STDMETHODIMP CContextMenu::InvokeCommand(LPCMINVOKECOMMANDINFO pici)
 {
     if (!pici) return E_POINTER;
-    UINT cmd = IS_INTRESOURCE(pici->lpVerb) ?
-        (UINT)LOWORD(pici->lpVerb) : 0xFFFF;
 
-    // Also handle string verbs
-    if (!IS_INTRESOURCE(pici->lpVerb)) {
-        std::string v = pici->lpVerb;
-        if      (v=="extract")  cmd = CMD_EXTRACT;
-        else if (v=="extracthere") cmd = CMD_EXTRACTHERE;
-        else if (v=="add")      cmd = CMD_ADD;
-        else if (v=="test")     cmd = CMD_TEST;
-        else if (v=="info")     cmd = CMD_INFO;
-        else if (v=="settings") cmd = CMD_SETTINGS;
-        else return E_FAIL;
+    // Parent any UI we show (progress, message boxes, dialogs) on the window
+    // that invoked us — otherwise dialogs come up ownerless behind Explorer.
+    if (pici->hwnd) m_hwnd = pici->hwnd;
+
+    UINT cmd = (UINT)-1;
+    std::wstring verb;
+
+    const CMINVOKECOMMANDINFOEX* piciEx =
+        (pici->cbSize >= sizeof(CMINVOKECOMMANDINFOEX))
+            ? reinterpret_cast<const CMINVOKECOMMANDINFOEX*>(pici) : nullptr;
+
+    if (piciEx && (piciEx->fMask & CMIC_MASK_UNICODE) &&
+        piciEx->lpVerbW && !IS_INTRESOURCE(piciEx->lpVerbW))
+    {
+        verb = piciEx->lpVerbW;
     }
+    else if (pici->lpVerb && !IS_INTRESOURCE(pici->lpVerb))
+    {
+        int need = MultiByteToWideChar(CP_ACP, 0, pici->lpVerb, -1, nullptr, 0);
+        if (need > 1) {
+            verb.resize((size_t)need - 1);
+            MultiByteToWideChar(CP_ACP, 0, pici->lpVerb, -1, verb.data(), need);
+        }
+    }
+    else if (pici->lpVerb)   // MAKEINTRESOURCE(offset); NULL means "default verb"
+    {
+        cmd = (UINT)LOWORD(reinterpret_cast<UINT_PTR>(pici->lpVerb));
+    }
+
+    if (!verb.empty())
+    {
+        static const struct { const wchar_t* verb; UINT cmd; } kVerbs[] = {
+            { L"extract",     CMD_EXTRACT        },
+            { L"extracthere", CMD_EXTRACTHERE    },
+            { L"add",         CMD_ADD            },
+            { L"email",       CMD_COMPRESS_EMAIL },
+            { L"openshell",   CMD_OPEN_SHELL     },
+            { L"open",        CMD_OPEN_SHELL     },  // legacy alias
+            { L"test",        CMD_TEST           },
+            { L"info",        CMD_INFO           },
+            { L"settings",    CMD_SETTINGS       },
+        };
+        for (const auto& k : kVerbs)
+            if (_wcsicmp(verb.c_str(), k.verb) == 0) { cmd = k.cmd; break; }
+    }
+
+    if (cmd >= CMD_COUNT) return E_INVALIDARG;
 
     switch (cmd) {
     case CMD_EXTRACT:       DoExtract(false); break;
@@ -174,15 +213,19 @@ STDMETHODIMP CContextMenu::GetCommandString(
     };
 
     // Verb strings (ANSI)
+    // NOTE: the ShellNSE browse command is "openshell", not "open" — a verb
+    // literally named "open" collides with the file type's own default verb
+    // and can make Explorer route the wrong command here. InvokeCommand()
+    // still accepts "open" as a backwards-compatible alias.
     static const char* const verbsA[] = {
-        "extract", "extracthere", "add", "email",
-        "open",    "test",        "info","settings"
+        "extract",   "extracthere", "add",  "email",
+        "openshell", "test",        "info", "settings"
     };
 
     // Verb strings (Unicode)
     static const wchar_t* const verbsW[] = {
-        L"extract", L"extracthere", L"add",   L"email",
-        L"open",    L"test",        L"info",  L"settings"
+        L"extract",   L"extracthere", L"add",   L"email",
+        L"openshell", L"test",        L"info",  L"settings"
     };
 
     switch (uType)
@@ -290,9 +333,117 @@ void CContextMenu::DoCompressEmail()
 
 void CContextMenu::DoOpenShell()
 {
-    // Open the archive in Windows Explorer (via ShellExecute)
-    ShellExecuteW(m_hwnd, L"open",
-        m_archivePath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    // ─────────────────────────────────────────────────────────────────
+    // "Open with ShellNSE" — browse the archive inside Windows Explorer.
+    //
+    // This used to be ShellExecute(L"open", <archive>), which just asks the
+    // shell to run the file type's *default* open command. For an archive
+    // that is either nothing at all (silent no-op — the bug), or whatever
+    // other archiver owns the association. It could never show the archive
+    // in Explorer, because nothing told Explorer to use our namespace
+    // extension.
+    //
+    // The documented way to open a view of a namespace extension on a
+    // specific object is (see "Specifying a Namespace Extension's Location"):
+    //
+    //     %SystemRoot%\Explorer.exe /e,::{extension CLSID},<object name>
+    //
+    // Explorer parses <object name> into a PIDL and hands it to our
+    // IPersistFolder::Initialize — exactly what CShellFolder expects. Going
+    // through the CLSID explicitly also means this works no matter which
+    // application currently owns the .7z/.zip file association.
+    // ─────────────────────────────────────────────────────────────────
+    if (m_archivePath.empty()) {
+        MessageBoxW(m_hwnd, L"No archive was selected.",
+                    L"ShellNSE", MB_ICONWARNING | MB_OK);
+        return;
+    }
+
+    if (!PathFileExistsW(m_archivePath.c_str())) {
+        MessageBoxW(m_hwnd,
+            (L"The archive no longer exists:\n\n" + m_archivePath).c_str(),
+            L"ShellNSE", MB_ICONERROR | MB_OK);
+        return;
+    }
+
+    // Pre-flight the archive so a failure is reported here, with a reason,
+    // instead of silently producing an empty Explorer window.
+    LPCWSTR ext = PathFindExtensionW(m_archivePath.c_str());
+    const bool is7z = ext && (_wcsicmp(ext, L".7z")   == 0 ||
+                              _wcsicmp(ext, L".7zip") == 0);
+    if (is7z && !Is7zEngineAvailable())
+    {
+        MessageBoxW(m_hwnd,
+            L"The 7-Zip engine DLL was not found, so .7z archives cannot be "
+            L"opened.\n\n"
+            L"Put a bitness-matched 7z.dll next to ShellNSE, in any of:\n"
+            L"    <ShellNSE folder>\\thirdparty\\7z\\7z.64.dll   (64-bit)\n"
+            L"    <ShellNSE folder>\\thirdparty\\7z\\7z.32.dll   (32-bit)\n"
+            L"    <ShellNSE folder>\\7z.64.dll  /  7z.32.dll  /  7z.dll\n\n"
+            L"A system-wide 7-Zip installation is also used automatically.",
+            L"ShellNSE", MB_ICONERROR | MB_OK);
+        return;
+    }
+
+    {
+        auto engine = CreateArchiveEngine(m_archivePath);
+        if (!engine || !engine->Open(m_archivePath))
+        {
+            std::wstring msg = L"ShellNSE could not read this archive:\n\n" +
+                               m_archivePath;
+            if (is7z)
+                msg += L"\n\nEngine: " + (Get7zEnginePath().empty()
+                                            ? std::wstring(L"<none>")
+                                            : Get7zEnginePath()) +
+                       L"\n\nThe file may be corrupt, or it may use encrypted "
+                       L"headers (password-protected archives are not "
+                       L"supported yet).";
+            MessageBoxW(m_hwnd, msg.c_str(), L"ShellNSE",
+                        MB_ICONERROR | MB_OK);
+            return;
+        }
+    }
+
+    // explorer.exe /e,::{CLSID},<archive path>
+    wchar_t clsid[64] = {};
+    StringFromGUID2(CLSID_ShellNSEFolder, clsid, ARRAYSIZE(clsid));
+
+    wchar_t explorerExe[MAX_PATH] = {};
+    if (GetWindowsDirectoryW(explorerExe, MAX_PATH))
+        PathAppendW(explorerExe, L"explorer.exe");
+    else
+        wcscpy_s(explorerExe, L"explorer.exe");
+
+    std::wstring params = L"/e,::";
+    params += clsid;
+    params += L',';
+    params += m_archivePath;
+
+    SHELLEXECUTEINFOW sei{ sizeof(sei) };
+    sei.fMask        = SEE_MASK_FLAG_NO_UI;
+    sei.hwnd         = m_hwnd;
+    sei.lpVerb       = L"open";
+    sei.lpFile       = explorerExe;
+    sei.lpParameters = params.c_str();
+    sei.nShow        = SW_SHOWNORMAL;
+    if (ShellExecuteExW(&sei))
+        return;
+
+    // Fallback: browse the archive as a file-system junction. This is what
+    // double-clicking does once DllRegisterServer has run, so it works even
+    // if launching explorer.exe with a rooted CLSID was blocked.
+    if (PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(m_archivePath.c_str()))
+    {
+        HRESULT hr = SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
+        ILFree(pidl);
+        if (SUCCEEDED(hr)) return;
+    }
+
+    MessageBoxW(m_hwnd,
+        L"ShellNSE could not open an Explorer window for this archive.\n\n"
+        L"Make sure the extension is registered (run, as administrator):\n"
+        L"    regsvr32 ShellNSE.64.dll",
+        L"ShellNSE", MB_ICONERROR | MB_OK);
 }
 
 void CContextMenu::DoTest()

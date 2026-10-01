@@ -22,6 +22,28 @@ most people only need `7z.64.dll` on modern 64-bit Windows.
 A plain, unrenamed `thirdparty\7z\7z.dll` is also accepted as a fallback
 if you don't want to rename the file.
 
+### Full runtime search order
+
+ShellNSE looks for the engine in this order and uses the first hit
+(`<dll dir>` is the folder holding `ShellNSE.64.dll` / `ShellNSE.32.dll`):
+
+| # | Location |
+|---|----------|
+| 1 | `<dll dir>\thirdparty\7z\7z.64.dll` (or `7z.32.dll` for the 32-bit build) |
+| 2 | `<dll dir>\thirdparty\7z\7z.dll` |
+| 3 | `<dll dir>\7z\7z.64.dll` / `7z.32.dll` |
+| 4 | `<dll dir>\7z\7z.dll` |
+| 5 | `<dll dir>\7z.64.dll` / `7z.32.dll` (right next to ShellNSE) |
+| 6 | `<dll dir>\7z.dll` |
+| 7 | `HKLM\SOFTWARE\7-Zip` → `Path` (64-bit view, then 32-bit view) |
+| 8 | `HKCU\SOFTWARE\7-Zip` → `Path` (64-bit view, then 32-bit view) |
+
+The bitness must match the ShellNSE build that loads it: a 64-bit
+`ShellNSE.64.dll` inside 64-bit Explorer can only load a 64-bit `7z.dll`.
+
+If **Open with ShellNSE** reports that no engine was found, the message box
+lists exactly the paths that were probed — drop the DLL at any one of them.
+
 ### Where to get `7z.dll`
 
 `7z.dll` ships inside the official 7-Zip installer/archive from

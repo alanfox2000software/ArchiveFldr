@@ -51,37 +51,67 @@ bool FileExistsW(const std::wstring& p)
     return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 }
 
+// A 7-Zip install registers its folder under SOFTWARE\7-Zip. Check both
+// registry views and both hives: a 32-bit ShellNSE must not be redirected to
+// the WOW6432Node copy when only a 64-bit 7-Zip is present, and per-user
+// installs land in HKCU.
+std::wstring Try7zInstallPath(HKEY root, DWORD viewFlag)
+{
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(root, L"SOFTWARE\\7-Zip", 0,
+                      KEY_READ | viewFlag, &hKey) != ERROR_SUCCESS)
+        return L"";
+
+    wchar_t val[MAX_PATH] = {};
+    DWORD sz = sizeof(val);
+    DWORD type = 0;
+    LSTATUS st = RegQueryValueExW(hKey, L"Path", nullptr, &type, (LPBYTE)val, &sz);
+    RegCloseKey(hKey);
+
+    if (st != ERROR_SUCCESS || type != REG_SZ || !val[0]) return L"";
+
+    std::wstring p = val;
+    if (p.back() != L'\\') p += L'\\';
+    p += L"7z.dll";
+    return FileExistsW(p) ? p : std::wstring();
+}
+
 std::wstring Resolve7zDllPath()
 {
     std::wstring dir = GetModuleDir();
     if (!dir.empty())
     {
-        std::wstring candidate = dir + L"\\thirdparty\\7z\\" + PickBitnessDllName();
-        if (FileExistsW(candidate)) return candidate;
+        // Look in every place a user plausibly drops the engine DLL, not
+        // just thirdparty\7z\ — "I put 7z.64.dll next to the DLL and nothing
+        // happened" was by far the most common way this silently failed.
+        const wchar_t* const kSubDirs[] = {
+            L"\\thirdparty\\7z\\",
+            L"\\7z\\",
+            L"\\",
+        };
+        // Bitness-suffixed name first, then a plain 7z.dll (what you get by
+        // copying it straight out of an existing 7-Zip installation).
+        const wchar_t* const kNames[] = { PickBitnessDllName(), L"7z.dll" };
 
-        // Convenience fallback: a plain, unsuffixed 7z.dll dropped in the
-        // same folder also works (common when users just copy their
-        // existing 7-Zip install's 7z.dll without renaming it).
-        std::wstring plain = dir + L"\\thirdparty\\7z\\7z.dll";
-        if (FileExistsW(plain)) return plain;
+        for (const wchar_t* sub : kSubDirs)
+            for (const wchar_t* name : kNames)
+            {
+                std::wstring candidate = dir + sub + name;
+                if (FileExistsW(candidate)) return candidate;
+            }
     }
 
-    // Last resort: a system-wide 7-Zip install registers its folder here.
-    HKEY hKey;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\7-Zip", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    // Last resort: a system-wide (or per-user) 7-Zip installation.
+    const struct { HKEY root; DWORD view; } kHives[] = {
+        { HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY },
+        { HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY },
+        { HKEY_CURRENT_USER,  KEY_WOW64_64KEY },
+        { HKEY_CURRENT_USER,  KEY_WOW64_32KEY },
+    };
+    for (const auto& h : kHives)
     {
-        wchar_t val[MAX_PATH] = {};
-        DWORD sz = sizeof(val);
-        DWORD type = 0;
-        LSTATUS st = RegQueryValueExW(hKey, L"Path", nullptr, &type, (LPBYTE)val, &sz);
-        RegCloseKey(hKey);
-        if (st == ERROR_SUCCESS && type == REG_SZ)
-        {
-            std::wstring p = val;
-            if (!p.empty() && p.back() != L'\\') p += L'\\';
-            p += L"7z.dll";
-            if (FileExistsW(p)) return p;
-        }
+        std::wstring p = Try7zInstallPath(h.root, h.view);
+        if (!p.empty()) return p;
     }
     return L"";
 }
@@ -91,7 +121,10 @@ void InitEngineOnce()
     g_enginePath = Resolve7zDllPath();
     if (g_enginePath.empty()) return;
 
-    g_hLib = LoadLibraryW(g_enginePath.c_str());
+    // LOAD_WITH_ALTERED_SEARCH_PATH so the engine resolves its own
+    // dependencies from the folder it lives in, not from ours.
+    g_hLib = LoadLibraryExW(g_enginePath.c_str(), nullptr,
+                            LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!g_hLib) { g_enginePath.clear(); return; }
 
     g_pCreateObject = reinterpret_cast<Func7z_CreateObject>(

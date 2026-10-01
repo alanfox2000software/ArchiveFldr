@@ -180,11 +180,58 @@ STDMETHODIMP CShellFolder::GetClassID(CLSID* pclsid)
 }
 STDMETHODIMP CShellFolder::Initialize(LPCITEMIDLIST pidl)
 {
+    // The shell hands us the fully qualified PIDL of our junction point —
+    // i.e. the archive file itself, whether we were reached by browsing into
+    // it (file-as-folder registration) or through a rooted view
+    // (explorer.exe /e,::{CLSID},<archive>).
     CPidlMgr::Free(m_pidlAbs);
     m_pidlAbs = CPidlMgr::Clone(pidl);
-    // Try to recover archive path from Desktop.ini or registry
-    wchar_t path[MAX_PATH*2] = {};
-    if (SHGetPathFromIDListW(pidl, path)) {
+    m_internalPath.clear();
+
+    wchar_t path[MAX_PATH * 2] = {};
+    if (!SHGetPathFromIDListW(pidl, path))
+    {
+        // SHGetPathFromIDList is limited to MAX_PATH and to "simple" file
+        // system PIDLs; fall back to the modern name API before giving up.
+        PWSTR psz = nullptr;
+        if (SUCCEEDED(SHGetNameFromIDList(pidl, SIGDN_FILESYSPATH, &psz)) && psz)
+        {
+            wcsncpy_s(path, psz, _TRUNCATE);
+            CoTaskMemFree(psz);
+        }
+    }
+
+    if (!path[0])
+    {
+        // Last resort. A rooted view ("explorer.exe /e,::{CLSID},C:\x.7z")
+        // can hand us a PIDL that is the CLSID junction with the archive
+        // appended, which is not a plain file system PIDL. Its desktop
+        // parsing name still carries the archive path, so dig it back out
+        // instead of coming up empty and showing a blank window.
+        PWSTR psz = nullptr;
+        if (SUCCEEDED(SHGetNameFromIDList(pidl, SIGDN_DESKTOPABSOLUTEPARSING, &psz)) && psz)
+        {
+            std::wstring s = psz;
+            CoTaskMemFree(psz);
+
+            size_t pos = std::wstring::npos;
+            for (size_t i = 0; i + 2 < s.size(); ++i)          // "X:\"
+                if (iswalpha(s[i]) && s[i + 1] == L':' &&
+                    (s[i + 2] == L'\\' || s[i + 2] == L'/')) { pos = i; break; }
+            if (pos == std::wstring::npos)                      // "\\server\share"
+                pos = s.find(L"\\\\");
+
+            if (pos != std::wstring::npos)
+            {
+                std::wstring cand = s.substr(pos);
+                if (PathFileExistsW(cand.c_str()))
+                    wcsncpy_s(path, cand.c_str(), _TRUNCATE);
+            }
+        }
+    }
+
+    if (path[0])
+    {
         m_archivePath = path;
         m_engine = CreateArchiveEngine(m_archivePath);
         if (m_engine) m_engine->Open(m_archivePath);
@@ -194,32 +241,82 @@ STDMETHODIMP CShellFolder::Initialize(LPCITEMIDLIST pidl)
 STDMETHODIMP CShellFolder::GetCurFolder(LPITEMIDLIST* ppidl)
 {
     if (!ppidl) return E_POINTER;
-    *ppidl = m_pidlAbs ? CPidlMgr::Clone(m_pidlAbs) : ILClone(nullptr);
-    return S_OK;
+    *ppidl = nullptr;
+    // Documented contract: when the folder has not been initialized with a
+    // PIDL, hand back NULL and S_FALSE. The default Shell view calls this
+    // during creation and does not expect a NULL PIDL alongside S_OK.
+    if (!m_pidlAbs) return S_FALSE;
+    *ppidl = CPidlMgr::Clone(m_pidlAbs);
+    return *ppidl ? S_OK : E_OUTOFMEMORY;
 }
 
 // ─────────────────────────────────────────────────────────
 // IShellFolder::ParseDisplayName
 // ─────────────────────────────────────────────────────────
 STDMETHODIMP CShellFolder::ParseDisplayName(
-    HWND /*hwnd*/, LPBC /*pbc*/, LPOLESTR pszName,
+    HWND hwnd, LPBC pbc, LPOLESTR pszName,
     ULONG* pchEaten, LPITEMIDLIST* ppidl, ULONG* pdwAttributes)
 {
     if (!pszName || !ppidl) return E_POINTER;
     *ppidl = nullptr;
     if (pchEaten) *pchEaten = 0;
-
-    // Find entry by name in this folder
     if (!m_engine) return E_FAIL;
+
+    // The shell hands over the whole remaining path, not just one segment
+    // ("sub\inner\file.txt"), and expects us to walk it. GetDisplayNameOf
+    // now hands out exactly such multi-segment parsing names, so they have
+    // to parse back into a PIDL or Explorer cannot resolve its own
+    // address bar / breadcrumb entries.
+    const std::wstring input = pszName;
+    const size_t sep         = input.find_first_of(L"\\/");
+    const std::wstring first = (sep == std::wstring::npos) ? input : input.substr(0, sep);
+    const std::wstring rest  = (sep == std::wstring::npos) ? std::wstring()
+                                                           : input.substr(sep + 1);
+    if (first.empty()) return E_INVALIDARG;
+
     auto entries = m_engine->List(m_internalPath);
-    for (auto& e : entries) {
-        if (_wcsicmp(e.name.c_str(), pszName) == 0) {
-            *ppidl = CPidlMgr::Create(e);
-            if (pchEaten) *pchEaten = (ULONG)wcslen(pszName);
-            if (pdwAttributes && *ppidl)
+    for (auto& e : entries)
+    {
+        if (_wcsicmp(e.name.c_str(), first.c_str()) != 0) continue;
+
+        LPITEMIDLIST child = CPidlMgr::Create(e);
+        if (!child) return E_OUTOFMEMORY;
+
+        if (rest.empty())
+        {
+            *ppidl = child;
+            if (pchEaten) *pchEaten = (ULONG)input.size();
+            if (pdwAttributes)
                 GetAttributesOf(1, (LPCITEMIDLIST*)ppidl, pdwAttributes);
-            return *ppidl ? S_OK : E_OUTOFMEMORY;
+            return S_OK;
         }
+
+        if (!e.isDirectory)
+        {
+            ILFree(child);
+            return HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND);
+        }
+
+        // Descend and let the sub-folder parse what is left.
+        IShellFolder* pSub = nullptr;
+        HRESULT hr = BindToObject(child, pbc, IID_IShellFolder, (void**)&pSub);
+        if (FAILED(hr) || !pSub) { ILFree(child); return FAILED(hr) ? hr : E_FAIL; }
+
+        LPITEMIDLIST tail = nullptr;
+        ULONG tailEaten = 0;
+        hr = pSub->ParseDisplayName(hwnd, pbc,
+                                    const_cast<LPOLESTR>(rest.c_str()),
+                                    &tailEaten, &tail, pdwAttributes);
+        pSub->Release();
+
+        if (SUCCEEDED(hr) && tail)
+        {
+            *ppidl = ILCombine(child, tail);
+            ILFree(tail);
+            if (pchEaten) *pchEaten = (ULONG)input.size();
+        }
+        ILFree(child);
+        return *ppidl ? S_OK : (FAILED(hr) ? hr : E_OUTOFMEMORY);
     }
     return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
 }
@@ -300,6 +397,22 @@ STDMETHODIMP CShellFolder::CompareIDs(
     case 5: cmp = CompareFileTime(&a->mtime, &b->mtime); break;
     default: cmp = _wcsicmp(a->name, b->name); break;
     }
+
+    // Equal so far: the PIDLs may be multi-level ("dir\sub\file"), and the
+    // Shell requires a *total* ordering over complete ID lists — comparing
+    // only the first SHITEMID makes distinct items look identical, which
+    // shows up as duplicated or vanishing rows in the view.
+    if (cmp == 0)
+    {
+        LPCITEMIDLIST next1 = ILNext(pidl1);
+        LPCITEMIDLIST next2 = ILNext(pidl2);
+        bool more1 = next1 && next1->mkid.cb != 0;
+        bool more2 = next2 && next2->mkid.cb != 0;
+
+        if (more1 && more2) return CompareIDs(lParam, next1, next2);
+        if (more1 != more2) cmp = more1 ? 1 : -1;
+    }
+
     return MAKE_HRESULT(SEVERITY_SUCCESS, 0, (USHORT)cmp);
 }
 
@@ -311,10 +424,28 @@ STDMETHODIMP CShellFolder::CreateViewObject(HWND hwnd, REFIID riid, void** ppv)
     if (!ppv) return E_POINTER;
     *ppv = nullptr;
 
-    if (IsEqualIID(riid, IID_IShellView)) {
+    if (IsEqualIID(riid, IID_IShellView) || IsEqualIID(riid, IID_IShellView2)) {
+        // Prefer the Shell's own default folder view (DefView). It is the
+        // view Explorer expects to host, and it drives this folder through
+        // the IShellFolder2 methods we already implement — columns, sorting,
+        // selection, the item context menu, the details/preview panes and
+        // keyboard handling all come for free, which a hand-rolled list
+        // control cannot provide inside an Explorer frame.
+        SFV_CREATE sfv = { sizeof(sfv) };
+        sfv.pshf = static_cast<IShellFolder*>(static_cast<IShellFolder2*>(this));
+
+        IShellView* pDefView = nullptr;
+        HRESULT hr = SHCreateShellFolderView(&sfv, &pDefView);
+        if (SUCCEEDED(hr) && pDefView) {
+            hr = pDefView->QueryInterface(riid, ppv);
+            pDefView->Release();
+            if (SUCCEEDED(hr)) return hr;
+        }
+
+        // Fallback: ShellNSE's built-in view implementation.
         auto* pView = new(std::nothrow) CShellView(this, hwnd);
         if (!pView) return E_OUTOFMEMORY;
-        HRESULT hr = pView->QueryInterface(riid, ppv);
+        hr = pView->QueryInterface(riid, ppv);
         pView->Release(); return hr;
     }
     if (IsEqualIID(riid, IID_IDropTarget)) {
@@ -330,7 +461,18 @@ STDMETHODIMP CShellFolder::CreateViewObject(HWND hwnd, REFIID riid, void** ppv)
 STDMETHODIMP CShellFolder::GetAttributesOf(
     UINT cidl, LPCITEMIDLIST* apidl, SFGAOF* rgfInOut)
 {
-    if (!apidl || !rgfInOut) return E_POINTER;
+    if (!rgfInOut) return E_POINTER;
+
+    // cidl == 0 asks about this folder itself. Explorer does this while
+    // deciding whether the junction can be browsed, so it has to answer
+    // SFGAO_FOLDER — returning E_POINTER here (the old behaviour) made the
+    // shell give up on the archive.
+    if (cidl == 0 || !apidl) {
+        *rgfInOut &= (SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_BROWSABLE |
+                      SFGAO_DROPTARGET | SFGAO_HASPROPSHEET);
+        return S_OK;
+    }
+
     SFGAOF attrs = *rgfInOut;
     SFGAOF result = 0xFFFFFFFF;
 
@@ -375,12 +517,18 @@ STDMETHODIMP CShellFolder::GetUIObjectOf(
         HRESULT hr = p->QueryInterface(riid, ppv);
         p->Release(); return hr;
     }
-    if (IsEqualIID(riid, IID_IExtractIcon)) {
-        // Return our custom icon extractor
-        // (simplified: return system shell icon)
-        return SHCreateFileExtractIconW(
-            CPidlMgr::IsDir(apidl[0]) ? L"folder" : m_archivePath.c_str(),
-            FILE_ATTRIBUTE_NORMAL, riid, ppv);
+    if (IsEqualIID(riid, IID_IExtractIconW) ||
+        IsEqualIID(riid, IID_IExtractIconA)) {
+        // Hand the shell the icon that matches the item's own type: pass the
+        // entry name so the association lookup keys off its extension.
+        // (Passing the archive path, as before, drew every row — .txt, .exe,
+        // folders — with the archive's icon.)
+        const bool isDir = CPidlMgr::IsDir(apidl[0]);
+        std::wstring name = CPidlMgr::GetName(apidl[0]);
+        if (name.empty()) name = isDir ? L"folder" : L"file";
+        return SHCreateFileExtractIconW(name.c_str(),
+            isDir ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL,
+            riid, ppv);
     }
     return E_NOINTERFACE;
 }
@@ -388,12 +536,61 @@ STDMETHODIMP CShellFolder::GetUIObjectOf(
 // ─────────────────────────────────────────────────────────
 // IShellFolder::GetDisplayNameOf
 // ─────────────────────────────────────────────────────────
+// "dir1/dir2/" → "dir1\dir2" (no trailing separator)
+static std::wstring InternalPathToWin32(const std::wstring& internal)
+{
+    std::wstring s = internal;
+    while (!s.empty() && s.back() == L'/') s.pop_back();
+    for (auto& ch : s) if (ch == L'/') ch = L'\\';
+    return s;
+}
+
 STDMETHODIMP CShellFolder::GetDisplayNameOf(
-    LPCITEMIDLIST pidl, DWORD /*uFlags*/, STRRET* pName)
+    LPCITEMIDLIST pidl, DWORD uFlags, STRRET* pName)
 {
     if (!pName) return E_POINTER;
-    std::wstring name = CPidlMgr::GetName(pidl);
+    ZeroMemory(pName, sizeof(*pName));
     pName->uType = STRRET_WSTR;
+
+    // An empty PIDL means "this folder". Explorer asks for it to fill in the
+    // window title and the address bar of a rooted view; returning an empty
+    // string (the old behaviour) left the window nameless.
+    if (!pidl || pidl->mkid.cb == 0)
+    {
+        std::wstring self;
+        if (uFlags & SHGDN_FORPARSING)
+        {
+            self = m_archivePath;
+            std::wstring inner = InternalPathToWin32(m_internalPath);
+            if (!inner.empty()) self += L"\\" + inner;
+        }
+        else if (m_pidlRel && CPidlMgr::IsOurs(m_pidlRel))
+        {
+            self = CPidlMgr::GetName(m_pidlRel);        // sub-folder name
+        }
+        else
+        {
+            self = PathFindFileNameW(m_archivePath.c_str()); // "archive.7z"
+        }
+        return SHStrDupW(self.c_str(), &pName->pOleStr);
+    }
+
+    if (!CPidlMgr::IsOurs(pidl)) return E_INVALIDARG;
+
+    std::wstring name = CPidlMgr::GetName(pidl);
+
+    // A fully qualified parsing name (SHGDN_FORPARSING without
+    // SHGDN_INFOLDER) must identify the item from the desktop down, the way
+    // "C:\x.zip\sub\file.txt" does for a compressed folder.
+    if ((uFlags & SHGDN_FORPARSING) && !(uFlags & SHGDN_INFOLDER))
+    {
+        std::wstring full = m_archivePath;
+        std::wstring inner = InternalPathToWin32(m_internalPath);
+        if (!inner.empty()) full += L"\\" + inner;
+        full += L"\\" + name;
+        name.swap(full);
+    }
+
     return SHStrDupW(name.c_str(), &pName->pOleStr);
 }
 

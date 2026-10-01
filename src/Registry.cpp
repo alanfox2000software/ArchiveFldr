@@ -13,8 +13,19 @@ static constexpr wchar_t kIThumbnailProvider[] =
 static constexpr wchar_t kIPreviewHandler[] =
     L"{8895b1c6-b41f-4c1c-a562-0d564250836f}";
 
+// CATID_BrowsableShellExt — a namespace extension must advertise this
+// category before Explorer will browse into it from a rooted view
+// (explorer.exe /e,::{CLSID},<object>) or from a file junction.
+static constexpr wchar_t kCatidBrowsableShellExt[] =
+    L"{00021490-0000-0000-C000-000000000046}";
+
 static constexpr wchar_t kRegKeyPreviewHandlers[] =
     L"Software\\Microsoft\\Windows\\CurrentVersion\\PreviewHandlers";
+
+// Private value used to remember whoever owned a file-as-folder junction
+// before we took it over (e.g. Windows 11's built-in ArchiveFolder), so that
+// DllUnregisterServer can hand it back instead of leaving the type broken.
+static constexpr wchar_t kBackupValueName[] = L"ShellNSE.PreviousCLSID";
 
 // ── Low-level helpers ─────────────────────────────────────
 std::wstring CRegistry::ClsidToStr(const CLSID& clsid)
@@ -42,12 +53,144 @@ HRESULT CRegistry::SetRegStr(HKEY root, const wchar_t* path,
     return HRESULT_FROM_WIN32(rc);
 }
 
+HRESULT CRegistry::SetRegDword(HKEY root, const wchar_t* path,
+                                const wchar_t* name, DWORD value)
+{
+    HKEY hk = nullptr;
+    LONG rc = RegCreateKeyExW(root, path, 0, nullptr,
+                              REG_OPTION_NON_VOLATILE, KEY_WRITE,
+                              nullptr, &hk, nullptr);
+    if (rc != ERROR_SUCCESS)
+        return HRESULT_FROM_WIN32(rc);
+
+    rc = RegSetValueExW(hk, name, 0, REG_DWORD,
+                        reinterpret_cast<const BYTE*>(&value), sizeof(value));
+    RegCloseKey(hk);
+    return HRESULT_FROM_WIN32(rc);
+}
+
 HRESULT CRegistry::DelRegKey(HKEY root, const wchar_t* path)
 {
     LONG rc = RegDeleteTreeW(root, path);
     if (rc == ERROR_FILE_NOT_FOUND || rc == ERROR_PATH_NOT_FOUND)
         return S_OK;
     return HRESULT_FROM_WIN32(rc);
+}
+
+// Point a "file as folder" junction key (its default value holds a CLSID) at
+// our namespace extension, remembering any previous owner.
+HRESULT CRegistry::TakeOverJunction(const std::wstring& keyPath,
+                                     const std::wstring& ourClsid)
+{
+    HKEY hk = nullptr;
+    LONG rc = RegCreateKeyExW(HKEY_LOCAL_MACHINE, keyPath.c_str(), 0, nullptr,
+                              REG_OPTION_NON_VOLATILE, KEY_READ | KEY_WRITE,
+                              nullptr, &hk, nullptr);
+    if (rc != ERROR_SUCCESS)
+        return HRESULT_FROM_WIN32(rc);
+
+    wchar_t cur[64] = {};
+    DWORD cb = sizeof(cur), type = 0;
+    if (RegQueryValueExW(hk, nullptr, nullptr, &type,
+                         reinterpret_cast<LPBYTE>(cur), &cb) == ERROR_SUCCESS &&
+        type == REG_SZ && cur[0] && _wcsicmp(cur, ourClsid.c_str()) != 0)
+    {
+        // Only record the first (i.e. the genuine, non-ShellNSE) owner.
+        DWORD probe = 0, ptype = 0;
+        if (RegQueryValueExW(hk, kBackupValueName, nullptr, &ptype,
+                             nullptr, &probe) != ERROR_SUCCESS)
+        {
+            RegSetValueExW(hk, kBackupValueName, 0, REG_SZ,
+                           reinterpret_cast<const BYTE*>(cur),
+                           (DWORD)((wcslen(cur) + 1) * sizeof(wchar_t)));
+        }
+    }
+
+    rc = RegSetValueExW(hk, nullptr, 0, REG_SZ,
+                        reinterpret_cast<const BYTE*>(ourClsid.c_str()),
+                        (DWORD)((ourClsid.size() + 1) * sizeof(wchar_t)));
+    RegCloseKey(hk);
+    return HRESULT_FROM_WIN32(rc);
+}
+
+void CRegistry::ReleaseJunction(const std::wstring& keyPath,
+                                 const std::wstring& ourClsid)
+{
+    HKEY hk = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, keyPath.c_str(), 0,
+                      KEY_READ | KEY_WRITE, &hk) != ERROR_SUCCESS)
+        return;
+
+    wchar_t cur[64] = {};
+    DWORD cb = sizeof(cur), type = 0;
+    bool ours = RegQueryValueExW(hk, nullptr, nullptr, &type,
+                                 reinterpret_cast<LPBYTE>(cur), &cb) == ERROR_SUCCESS &&
+                type == REG_SZ && _wcsicmp(cur, ourClsid.c_str()) == 0;
+
+    wchar_t prev[64] = {};
+    DWORD pcb = sizeof(prev), ptype = 0;
+    bool hadPrev = RegQueryValueExW(hk, kBackupValueName, nullptr, &ptype,
+                                    reinterpret_cast<LPBYTE>(prev), &pcb) == ERROR_SUCCESS &&
+                   ptype == REG_SZ && prev[0];
+
+    if (ours && hadPrev)
+    {
+        RegSetValueExW(hk, nullptr, 0, REG_SZ,
+                       reinterpret_cast<const BYTE*>(prev),
+                       (DWORD)((wcslen(prev) + 1) * sizeof(wchar_t)));
+        RegDeleteValueW(hk, kBackupValueName);
+        RegCloseKey(hk);
+        return;
+    }
+
+    RegDeleteValueW(hk, kBackupValueName);
+    RegCloseKey(hk);
+
+    // Nothing owned this junction before us — remove the key we created.
+    if (ours)
+        DelRegKey(HKEY_LOCAL_MACHINE, keyPath.c_str());
+}
+
+// ─────────────────────────────────────────────────────────
+// Namespace-extension (folder object) registration
+//
+// Registering the DLL as an in-proc server is NOT enough for Explorer to
+// browse a .7z as if it were a folder. The folder CLSID additionally needs:
+//
+//   ShellFolder\Attributes            the SFGAO_* flags of the junction —
+//                                     without SFGAO_FOLDER the shell never
+//                                     treats the archive as browsable
+//   ShellFolder\WantsFORPARSING       ask us for a parsing name (address bar)
+//   Implemented Categories\{00021490} CATID_BrowsableShellExt
+//
+// Missing these is why "Open with ShellNSE" opened nothing.
+// ─────────────────────────────────────────────────────────
+HRESULT CRegistry::RegisterNamespaceFolder(const wchar_t* dllPath)
+{
+    const std::wstring sid  = ClsidToStr(CLSID_ShellNSEFolder);
+    const std::wstring base = std::wstring(L"Software\\Classes\\CLSID\\") + sid;
+
+    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
+        (base + L"\\DefaultIcon").c_str(), nullptr,
+        (std::wstring(dllPath) + L",0").c_str()));
+
+    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
+        (base + L"\\Implemented Categories\\" + kCatidBrowsableShellExt).c_str(),
+        nullptr, L""));
+
+    // SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_BROWSABLE | SFGAO_DROPTARGET
+    const DWORD kFolderAttributes =
+        SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_BROWSABLE | SFGAO_DROPTARGET;
+
+    RETURN_IF_FAILED(SetRegDword(HKEY_LOCAL_MACHINE,
+        (base + L"\\ShellFolder").c_str(), L"Attributes", kFolderAttributes));
+
+    // Tells the shell to ask IShellFolder::GetDisplayNameOf(SHGDN_FORPARSING)
+    // for this junction's parsing name (used by the address bar / breadcrumb).
+    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
+        (base + L"\\ShellFolder").c_str(), L"WantsFORPARSING", L""));
+
+    return S_OK;
 }
 
 // Register ContextMenu / Drop / Thumbnail / Preview / PropertySheet under a
@@ -146,6 +289,32 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
 
     RETURN_IF_FAILED(RegisterShellExOnBase(progBase));
 
+    // Make the ProgID a "file as folder" junction: this single value is what
+    // makes Explorer hand the archive to our namespace extension instead of
+    // treating it as an opaque file. Modelled on CompressedFolder (.zip),
+    // which registers HKCR\CompressedFolder\CLSID the same way.
+    RETURN_IF_FAILED(TakeOverJunction(progBase + L"\\CLSID", folder));
+
+    // Double-clicking the archive browses it, exactly like a zip folder:
+    //   HKCR\<ProgID>\shell\open\command = %SystemRoot%\Explorer.exe /idlist,%I,%L
+    {
+        std::wstring openKey = progBase + L"\\shell\\open";
+        RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, openKey.c_str(),
+            L"MultiSelectModel", L"Document"));
+
+        wchar_t explorerExe[MAX_PATH] = {};
+        if (!GetWindowsDirectoryW(explorerExe, MAX_PATH))
+            wcscpy_s(explorerExe, L"C:\\Windows");
+        std::wstring cmd = std::wstring(explorerExe) +
+                           L"\\Explorer.exe /idlist,%I,%L";
+        RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
+            (openKey + L"\\command").c_str(), nullptr, cmd.c_str()));
+    }
+
+    // (No extra "open with ShellNSE" static verb here on purpose: the
+    // IContextMenu handler registered above already supplies that command,
+    // and a second registry verb would show up as a duplicate menu entry.)
+
     // ── 2) Extension (.zip) ───────────────────────────────
     std::wstring extBase = std::wstring(L"Software\\Classes\\") + ext;
 
@@ -155,24 +324,31 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, extBase.c_str(),
         L"PerceivedType", L"compressed"));
 
-    // Project-specific ShellFolder marker (kept from original)
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
-        (extBase + L"\\ShellFolder").c_str(), nullptr, folder.c_str()));
+    // Older ShellNSE builds wrote a bogus ".ext\ShellFolder = {CLSID}" key.
+    // That is not a junction location the shell has ever read, so it did
+    // nothing; drop it instead of leaving confusing leftovers behind.
+    DelRegKey(HKEY_LOCAL_MACHINE, (extBase + L"\\ShellFolder").c_str());
 
     // Also on the extension (harmless; ignored when ProgID owns the type)
     RETURN_IF_FAILED(RegisterShellExOnBase(extBase));
 
     // ── 3) SystemFileAssociations\.ext ────────────────────
-    // Used by Explorer even when UserChoice / ProgID differs.
+    // Used by Explorer even when UserChoice / ProgID differs. The CLSID
+    // value here is the junction Windows 11 itself uses for .7z/.rar/.tar
+    // (its built-in ArchiveFolder), and it keeps working when another
+    // archiver owns the file association.
     std::wstring sfaBase =
         std::wstring(L"Software\\Classes\\SystemFileAssociations\\") + ext;
     RETURN_IF_FAILED(RegisterShellExOnBase(sfaBase));
+    RETURN_IF_FAILED(TakeOverJunction(sfaBase + L"\\CLSID", folder));
 
     return S_OK;
 }
 
 HRESULT CRegistry::UnregisterExtension(const wchar_t* ext)
 {
+    const std::wstring folder = ClsidToStr(CLSID_ShellNSEFolder);
+
     std::wstring extBase = std::wstring(L"Software\\Classes\\") + ext;
     UnregisterShellExOnBase(extBase);
     DelRegKey(HKEY_LOCAL_MACHINE, (extBase + L"\\ShellFolder").c_str());
@@ -180,6 +356,9 @@ HRESULT CRegistry::UnregisterExtension(const wchar_t* ext)
     std::wstring sfaBase =
         std::wstring(L"Software\\Classes\\SystemFileAssociations\\") + ext;
     UnregisterShellExOnBase(sfaBase);
+    // Give the file-as-folder junction back to whoever had it before us
+    // (on Windows 11 that is the built-in ArchiveFolder handler).
+    ReleaseJunction(sfaBase + L"\\CLSID", folder);
 
     // Do not delete the entire .ext key (may restore system default later).
     // ProgID tree is removed in UnregisterAll by name.
@@ -239,6 +418,11 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
         L"ShellNSE Preview Handler", dllPath));
     RETURN_IF_FAILED(RegisterCOMServer(CLSID_ShellNSEPropSheet,
         L"ShellNSE Property Sheet", dllPath));
+
+    // 1b. Namespace-extension specifics for the folder object
+    //     (ShellFolder\Attributes, CATID_BrowsableShellExt, icon).
+    //     Without this Explorer will not browse into an archive.
+    RETURN_IF_FAILED(RegisterNamespaceFolder(dllPath));
 
     // 2. Approved list (Vista+)
     RETURN_IF_FAILED(RegisterApproved(CLSID_ShellNSEFolder,

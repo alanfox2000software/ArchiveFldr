@@ -91,8 +91,8 @@
        Output / Intermediate Directories
   ════════════════════════════════════════════════════ -->
   <!-- One output folder per configuration AND platform:
-       bin\Debug\win32, bin\Debug\x64, bin\Release\win32,
-       bin\Release\x64.
+       Debug\x32, Debug\x64, Release\x32,
+       Release\x64.
 
        The two bitnesses used to share bin\$(Configuration)\ so that
        ArchiveFldr.32.dll and ArchiveFldr.64.dll landed side by side.
@@ -115,25 +115,25 @@
        warning MSB8028, and it makes clean and incremental builds
        unreliable. -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\win32\</OutDir>
+    <OutDir>$(SolutionDir)$(Configuration)\x32\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x86\$(ProjectName)\</IntDir>
     <TargetName>ArchiveFldr.32</TargetName>
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\win32\</OutDir>
+    <OutDir>$(SolutionDir)$(Configuration)\x32\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x86\$(ProjectName)\</IntDir>
     <TargetName>ArchiveFldr.32</TargetName>
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\x64\</OutDir>
+    <OutDir>$(SolutionDir)$(Configuration)\x64\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x64\$(ProjectName)\</IntDir>
     <TargetName>ArchiveFldr.64</TargetName>
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\x64\</OutDir>
+    <OutDir>$(SolutionDir)$(Configuration)\x64\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x64\$(ProjectName)\</IntDir>
     <TargetName>ArchiveFldr.64</TargetName>
     <TargetExt>.dll</TargetExt>
@@ -598,7 +598,7 @@ exit /b 0</Command>
        ArchiveFldrBuildWin32Companion=false to turn it off.
   ═══════════════════════════════════════════════════ -->
   <PropertyGroup>
-    <ArchiveFldrBuildWin32Companion Condition="'$(ArchiveFldrBuildWin32Companion)' == ''">true</ArchiveFldrBuildWin32Companion>
+    <ArchiveFldrBuildWin32Companion Condition="'$(ArchiveFldrBuildWin32Companion)' == ''">false</ArchiveFldrBuildWin32Companion>
     <ArchiveFldrWin32Companion Condition="'$(Platform)' == 'x64' AND '$(ArchiveFldrBuildWin32Companion)' == 'true'">true</ArchiveFldrWin32Companion>
   </PropertyGroup>
 

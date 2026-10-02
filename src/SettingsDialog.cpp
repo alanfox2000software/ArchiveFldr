@@ -205,7 +205,7 @@ void SetSub(HWND list, int row, int col, const wchar_t* text)
 // Both shell extension DLLs, by the names the build produces.
 //
 // They no longer have to be in the same folder. Each platform builds
-// into bin\<Config>\x64 or bin\<Config>\win32, so the settings program
+// into <Config>\x64 or <Config>\x32, so the settings program
 // has to step sideways to find its opposite number — and it must, or
 // Install silently stops registering the other bitness and 32-bit
 // hosts lose the extension.
@@ -227,7 +227,7 @@ std::wstring DllPath(bool x64)
     parent.erase(slash + 1);
 
     const std::wstring sibling =
-        parent + (x64 ? L"x64\\" : L"win32\\") + name;
+        parent + (x64 ? L"x64\\" : L"x32\\") + name;
     if (PathFileExistsW(sibling.c_str())) return sibling;
 
     // Nothing found. Return the beside-the-EXE spelling so the caller's

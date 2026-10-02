@@ -83,26 +83,21 @@ builds normally in VS2026 — the switch only takes effect when you pass it.
 
 ## What gets built
 
-Everything lands in `bin\<Configuration>\`, and it all belongs in the
-same folder:
+Outputs land in `<Configuration>\x32` (Win32) or `<Configuration>\x64` (x64):
 
 | File | What it is | Built by |
 |---|---|---|
 | `ArchiveFldr.64.dll` | the shell extension, for 64-bit hosts | x64 |
-| `ArchiveFldr.32.dll` | the shell extension, for 32-bit hosts | x64 **and** Win32 |
+| `ArchiveFldr.32.dll` | the shell extension, for 32-bit hosts | Win32 |
 | `ArchiveFldrSetting.64.exe` / `ArchiveFldrSetting.32.exe` | the settings window, started by "ArchiveFldr settings..." | x64 / Win32 |
 | `Lang\*.txt` | the language files, copied from `Lang\` | both |
 | `thirdparty\**\*.dll` | the codec engines, copied from `thirdparty\` | both |
 
-**An x64 build produces both DLLs.** On 64-bit Windows the two are live
-at the same time — a 64-bit Explorer loads `ArchiveFldr.64.dll`, while
-32-bit hosts such as the common file dialog in a 32-bit program load
-`ArchiveFldr.32.dll` — and the settings program registers both. A
-solution configuration can only map a project to one platform, so the
-x64 configuration of `ArchiveFldr.vcxproj` builds Win32 as a nested
-step. Pass `/p:ArchiveFldrBuildWin32Companion=false` to skip it. A
-Win32 build still produces only the 32-bit DLL, which is all a 32-bit
-Windows can use.
+A Win32 build writes only `Release\x32` (or `Debug\x32`). An x64 build
+writes only `Release\x64` (or `Debug\x64`) — it does not also build the
+32-bit DLL. On 64-bit Windows both DLLs are still needed at runtime
+(Explorer loads `ArchiveFldr.64.dll`; 32-bit hosts load
+`ArchiveFldr.32.dll`); build each platform separately.
 
 Only the DLLs are registered. The settings program is an ordinary
 executable that the DLL starts on demand, which keeps the whole Options

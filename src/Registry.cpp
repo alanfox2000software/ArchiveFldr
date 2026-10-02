@@ -479,7 +479,7 @@ static std::wstring ExplorerOpenCommand()
 static constexpr wchar_t kOpenHelperExe[] = L"ArchiveFldrOpen.exe";
 
 // Which copy of it to name, now that each platform builds into its own
-// folder (bin\<Config>\x64 and bin\<Config>\win32).
+// folder (<Config>\x64 and <Config>\x32).
 //
 // There is only one place to record the answer — the open command lives
 // under HKLM\Software\Classes, which is shared between the two registry
@@ -511,7 +511,7 @@ static std::wstring OpenHelperPath(const wchar_t* dllPath)
         tries.push_back(parent + L"x64\\" + kOpenHelperExe);
     tries.push_back(dir + kOpenHelperExe);
     if (!parent.empty())
-        tries.push_back(parent + L"win32\\" + kOpenHelperExe);
+        tries.push_back(parent + L"x32\\" + kOpenHelperExe);
 
     // Only claim one that is really there. A command pointing at a
     // program that was never built would break opening altogether,

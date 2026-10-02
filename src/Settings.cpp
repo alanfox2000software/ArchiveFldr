@@ -42,22 +42,24 @@ void Settings::WriteStr(HKEY hk, const wchar_t* n, const std::wstring& v) {
         (BYTE*)v.c_str(), (DWORD)((v.size()+1)*sizeof(wchar_t)));
 }
 
-// A ";"-separated extension list. The sentinel means "never written",
-// in which case the default is every registrable format -- the same list
-// registration itself uses, so a fresh install claims what it says it
-// claims rather than nothing.
-static void LoadAssoc(HKEY hk, const wchar_t* value,
-                      std::set<std::wstring>& out)
+// A ";"-separated extension list -- of the formats the user switched
+// OFF, not the ones left on.
+//
+// Storing the ticked set quietly broke every time a format was added to
+// the table: an extension that did not exist when the list was last
+// saved reads back as "not wanted", so new formats arrived switched off
+// and invisible, and nothing said why. Recording the exclusions instead
+// means the default is always "everything this build knows about", and
+// only a deliberate untick survives an upgrade.
+static bool ReadExtList(HKEY hk, const wchar_t* value,
+                        std::set<std::wstring>& out)
 {
     wchar_t buf[8192] = {};
     DWORD sz = sizeof(buf);
     out.clear();
     if (RegQueryValueExW(hk, value, nullptr, nullptr, (BYTE*)buf, &sz)
             != ERROR_SUCCESS)
-    {
-        for (const auto* f : Formats::Registrable()) out.insert(f->ext);
-        return;
-    }
+        return false;
 
     const std::wstring packed = buf;
     size_t at = 0;
@@ -75,6 +77,37 @@ static void LoadAssoc(HKEY hk, const wchar_t* value,
         if (sep == packed.size()) break;
         at = sep + 1;
     }
+    return true;
+}
+
+static void LoadAssoc(HKEY hk, const wchar_t* offValue,
+                      std::set<std::wstring>& out)
+{
+    // Start from everything this build can register...
+    out.clear();
+    for (const auto* f : Formats::Registrable()) out.insert(f->ext);
+
+    // ...and take away what the user turned off. Absent means nothing
+    // was turned off, which is the same answer a fresh install gives.
+    std::set<std::wstring> off;
+    if (!ReadExtList(hk, offValue, off)) return;
+    for (const auto& e : off) out.erase(e);
+}
+
+// The complement, for writing: what this build can register, minus what
+// is ticked.
+static std::wstring PackAssocOff(const std::set<std::wstring>& ticked)
+{
+    std::wstring packed;
+    for (const auto* f : Formats::Registrable())
+    {
+        std::wstring e = f->ext;
+        for (auto& ch : e) ch = (wchar_t)towlower(ch);
+        if (ticked.find(e) != ticked.end()) continue;
+        if (!packed.empty()) packed += L';';
+        packed += e;
+    }
+    return packed;
 }
 
 static std::wstring PackAssoc(const std::set<std::wstring>& in)
@@ -120,11 +153,12 @@ void Settings::Load()
     createSolidArchive  = ReadBool(hk, L"SolidArchive",    createSolidArchive);
     encryptFileNames    = ReadBool(hk, L"EncryptNames",     encryptFileNames);
 
-    // Formats. Two REG_SZ values, each a ";"-separated extension list;
-    // absent means "never written", which defaults to every registrable
-    // format -- the same list registration itself uses.
-    LoadAssoc(hk, L"Associations32", assoc32);
-    LoadAssoc(hk, L"Associations64", assoc64);
+    // Formats. Two REG_SZ values, each a ";"-separated list of the
+    // extensions the user switched OFF; absent means none of them, so a
+    // build that adds a format has it ticked by default instead of
+    // silently inheriting "not in the list, therefore not wanted".
+    LoadAssoc(hk, L"Associations32Off", assoc32);
+    LoadAssoc(hk, L"Associations64Off", assoc64);
     registerAsDefaultApp = ReadBool(hk, L"RegisterAsDefaultApp", registerAsDefaultApp);
 
     // Context menu
@@ -187,8 +221,15 @@ void Settings::Save() const
     WriteBool (hk, L"EncryptNames",    encryptFileNames);
 
     // Formats
-    WriteStr(hk, L"Associations32", PackAssoc(assoc32));
-    WriteStr(hk, L"Associations64", PackAssoc(assoc64));
+    WriteStr(hk, L"Associations32Off", PackAssocOff(assoc32));
+    WriteStr(hk, L"Associations64Off", PackAssocOff(assoc64));
+
+    // The old ticked-set values cannot be interpreted safely -- they
+    // cannot tell a format the user switched off from one that did not
+    // exist when they were written -- so they are removed rather than
+    // left behind to be misread by something later.
+    RegDeleteValueW(hk, L"Associations32");
+    RegDeleteValueW(hk, L"Associations64");
     WriteBool(hk, L"RegisterAsDefaultApp", registerAsDefaultApp);
 
     // Context menu

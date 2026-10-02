@@ -522,8 +522,24 @@ static bool ExtensionIsWanted(const wchar_t* ext)
 {
     std::wstring low = ext ? ext : L"";
     for (auto& ch : low) ch = (wchar_t)towlower(ch);
-    const std::set<std::wstring>& wanted = Settings::Get().AssociatedHere();
-    return wanted.find(low) != wanted.end();
+
+    // The union of both lists, exactly as RegisterCapabilities uses.
+    //
+    // This used to ask AssociatedHere(), which is this bitness's list
+    // alone, and the two then disagreed: the Capabilities key advertised
+    // a type on ArchiveFldr's Default apps page while OpenWithProgids --
+    // the value the picker behind that page is actually built from --
+    // had it removed. The result was a file type listed under ArchiveFldr
+    // that offered no ArchiveFldr to choose.
+    //
+    // A union is also the only answer that survives registering both
+    // DLLs in turn. Software\Classes is shared between the 32- and
+    // 64-bit views, so both registrations write these same keys; if each
+    // honoured only its own list, the second would strip out whatever
+    // the first had offered.
+    const Settings& cfg = Settings::Get();
+    return cfg.assoc64.find(low) != cfg.assoc64.end()
+        || cfg.assoc32.find(low) != cfg.assoc32.end();
 }
 
 // Registration is best-effort, step by step.

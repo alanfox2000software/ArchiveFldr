@@ -103,6 +103,28 @@
        (CL.*.tlog, link.*.tlog, mt.*.tlog) collided in the same place:
        that is warning MSB8028, and it makes clean and incremental
        builds unreliable. -->
+  <!-- ONE TargetName for both platforms. Not an oversight, and not to
+       be "fixed" into ArchiveFldrOpen.32 / .64 the way the DLL and the
+       settings program are named.
+
+       Windows keys an entry in "Open with" and "pick a default app" on
+       the BASE NAME of the executable in the open command, and merges
+       handlers that share one. Two names would be two applications, so
+       the picker would list two identical "ArchiveFldr" rows. Owning a
+       single name is the entire reason this program exists.
+
+       It does not have to match the bitness of whatever called it.
+       HKLM\SOFTWARE\Classes is *shared* between the 32- and 64-bit
+       registry views — only CLSID, Interface, TypeLib and a few media
+       keys under it are redirected — so a 32-bit caller reads exactly
+       the same open command as a 64-bit one, and a process of either
+       bitness can start a program of the other. Whichever build lands
+       here last is the one that runs, and on x64 Windows both work.
+
+       The single case where it does matter: a 64-bit build of this
+       program will not run on 32-bit Windows. That is also the only
+       case where it cannot arise, because a 32-bit Windows is given
+       the Win32 build of everything. -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x86\$(ProjectName)\</IntDir>

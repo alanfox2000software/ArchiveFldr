@@ -747,11 +747,60 @@ static constexpr wchar_t kCapabilitiesKey[] = L"Software\\ArchiveFldr\\Capabilit
 static constexpr wchar_t kRegisteredApps[]  = L"Software\\RegisteredApplications";
 static constexpr wchar_t kAppName[]         = L"ArchiveFldr";
 
+// Capabilities are written through the 64-bit view whatever the bitness
+// of the DLL doing the writing.
+//
+// Software\RegisteredApplications is shared between the two registry
+// views rather than redirected, because Default apps has to see
+// applications of both bitnesses. The Capabilities key it points at is
+// not shared. Registering a 32-bit DLL without this flag therefore
+// publishes a pointer in the shared list to a key that only exists in
+// WOW6432Node, and Default apps follows the pointer and finds nothing.
+// Pinning both to the 64-bit view keeps the pointer and its target in
+// the same place. On 32-bit Windows the flag is ignored.
+static HRESULT SetCapStr(const wchar_t* path, const wchar_t* name,
+                         const wchar_t* value)
+{
+    HKEY hk = nullptr;
+    LONG rc = RegCreateKeyExW(HKEY_LOCAL_MACHINE, path, 0, nullptr,
+                              REG_OPTION_NON_VOLATILE,
+                              KEY_WRITE | KEY_WOW64_64KEY,
+                              nullptr, &hk, nullptr);
+    if (rc != ERROR_SUCCESS)
+        return HRESULT_FROM_WIN32(rc);
+
+    rc = RegSetValueExW(
+        hk, name, 0, REG_SZ,
+        reinterpret_cast<const BYTE*>(value),
+        static_cast<DWORD>((wcslen(value) + 1) * sizeof(wchar_t)));
+    RegCloseKey(hk);
+    return HRESULT_FROM_WIN32(rc);
+}
+
+// Delete one subkey through the 64-bit view. DeleteRegTree recurses on
+// the handle it is given, so the view carries down to the children.
+static HRESULT DelCapKey(const wchar_t* parent, const wchar_t* child)
+{
+    HKEY hk = nullptr;
+    LONG rc = RegOpenKeyExW(HKEY_LOCAL_MACHINE, parent, 0,
+                            KEY_READ | KEY_WRITE | KEY_WOW64_64KEY, &hk);
+    if (rc == ERROR_FILE_NOT_FOUND || rc == ERROR_PATH_NOT_FOUND)
+        return S_OK;
+    if (rc != ERROR_SUCCESS)
+        return HRESULT_FROM_WIN32(rc);
+
+    rc = SysInfo::DeleteRegTree(hk, child);
+    RegCloseKey(hk);
+    if (rc == ERROR_FILE_NOT_FOUND || rc == ERROR_PATH_NOT_FOUND)
+        return S_OK;
+    return HRESULT_FROM_WIN32(rc);
+}
+
 HRESULT CRegistry::RegisterCapabilities(const wchar_t* dllPath)
 {
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, kCapabilitiesKey,
+    RETURN_IF_FAILED(SetCapStr(kCapabilitiesKey,
         L"ApplicationName", L"ArchiveFldr"));
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, kCapabilitiesKey,
+    RETURN_IF_FAILED(SetCapStr(kCapabilitiesKey,
         L"ApplicationDescription",
         L"Browse archives as folders in File Explorer."));
 
@@ -759,19 +808,27 @@ HRESULT CRegistry::RegisterCapabilities(const wchar_t* dllPath)
         std::wstring icon = OwnIcon(dllPath ? dllPath : L"");
         if (icon.empty()) icon = SystemIcon(L"zipfldr.dll", 0);
         if (!icon.empty())
-            SetRegStr(HKEY_LOCAL_MACHINE, kCapabilitiesKey,
-                      L"ApplicationIcon", icon.c_str());
+            SetCapStr(kCapabilitiesKey, L"ApplicationIcon", icon.c_str());
     }
 
     // Only the extensions the user left ticked on the Formats page.
     // Windows reads this key to build the per-type list in Settings >
     // Default apps, so an unticked type simply never appears there.
     const std::wstring assoc = std::wstring(kCapabilitiesKey) + L"\\FileAssociations";
-    const std::set<std::wstring>& wanted = Settings::Get().AssociatedHere();
+
+    // The union of both association lists, not just this bitness's.
+    // There is one Capabilities key but two lists, and on an x64 machine
+    // Install registers both DLLs in turn -- so if each wrote only its
+    // own list, the second run would erase what the first had just
+    // published. The Default apps entry describes the application, not
+    // the DLL that happened to register it.
+    const Settings& cfg = Settings::Get();
+    std::set<std::wstring> wanted = cfg.assoc64;
+    wanted.insert(cfg.assoc32.begin(), cfg.assoc32.end());
 
     // Clear first: an extension that was ticked last time and is not now
     // has to lose its value, not keep it.
-    DelRegKey(HKEY_LOCAL_MACHINE, assoc.c_str());
+    DelCapKey(kCapabilitiesKey, L"FileAssociations");
 
     for (const auto* f : Formats::Registrable())
     {
@@ -784,26 +841,30 @@ HRESULT CRegistry::RegisterCapabilities(const wchar_t* dllPath)
         OfferProgIdFor(f->ext, f->progId, want);
 
         if (!want) continue;
-        RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, assoc.c_str(),
-                                   f->ext, f->progId));
+        RETURN_IF_FAILED(SetCapStr(assoc.c_str(), f->ext, f->progId));
     }
 
     // The pointer that makes Windows actually look at the key above.
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, kRegisteredApps,
-        kAppName, kCapabilitiesKey));
+    RETURN_IF_FAILED(SetCapStr(kRegisteredApps, kAppName, kCapabilitiesKey));
     return S_OK;
 }
 
 HRESULT CRegistry::UnregisterCapabilities()
 {
     HKEY hk = nullptr;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, kRegisteredApps, 0, KEY_SET_VALUE,
-                      &hk) == ERROR_SUCCESS)
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, kRegisteredApps, 0,
+                      KEY_SET_VALUE | KEY_WOW64_64KEY, &hk) == ERROR_SUCCESS)
     {
         RegDeleteValueW(hk, kAppName);
         RegCloseKey(hk);
     }
-    return DelRegKey(HKEY_LOCAL_MACHINE, L"Software\\ArchiveFldr");
+
+    // The Capabilities subkey and nothing else. This used to delete
+    // Software\ArchiveFldr outright -- which is the settings root, not a
+    // registration artefact -- so withdrawing from Default apps threw
+    // away every preference the user had, including the association
+    // ticks and the very flag that asked for the withdrawal.
+    return DelCapKey(L"Software\\ArchiveFldr", L"Capabilities");
 }
 
 // ─────────────────────────────────────────────────────────

@@ -92,8 +92,17 @@ static std::wstring PackAssoc(const std::set<std::wstring>& in)
 void Settings::Load()
 {
     HKEY hk = nullptr;
+    // KEY_WOW64_64KEY, always. These settings are machine-wide and say
+    // nothing about the bitness of whoever is reading them -- the two
+    // association lists are separate values in this one key, not
+    // separate keys. Without the flag a 32-bit process is redirected to
+    // SOFTWARE\WOW6432Node\ArchiveFldr and sees an empty key, so the
+    // 32-bit DLL would read defaults while the 64-bit settings program
+    // wrote the real thing somewhere it could never look. On 32-bit
+    // Windows the flag is ignored, which is exactly what we want.
     if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, kRegKeySettings,
-        0, nullptr, 0, KEY_READ, nullptr, &hk, nullptr) != ERROR_SUCCESS)
+        0, nullptr, 0, KEY_READ | KEY_WOW64_64KEY,
+        nullptr, &hk, nullptr) != ERROR_SUCCESS)
         return;
 
     language            = ReadStr (hk, L"Language",        language.c_str());
@@ -158,8 +167,10 @@ void Settings::Load()
 void Settings::Save() const
 {
     HKEY hk = nullptr;
+    // 64-bit view, to match Load(). See the note there.
     if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, kRegKeySettings,
-        0, nullptr, 0, KEY_WRITE, nullptr, &hk, nullptr) != ERROR_SUCCESS)
+        0, nullptr, 0, KEY_WRITE | KEY_WOW64_64KEY,
+        nullptr, &hk, nullptr) != ERROR_SUCCESS)
         return;
 
     // General

@@ -19,6 +19,11 @@ private:
                                         const wchar_t* dllPath,
                                         const wchar_t* threadModel = L"Apartment");
     static HRESULT UnregisterCOMServer (const CLSID&);
+    // Identity for ArchiveFldrOpen.exe, the program named by every
+    // open verb. Private: it is part of RegisterAll's sequence, not a
+    // thing callers arrange for themselves.
+    static HRESULT RegisterOpenHelper  (const wchar_t* dllPath);
+
     static HRESULT RegisterExtension   (const wchar_t* ext, const wchar_t* progId,
                                         const wchar_t* dllPath);
     static HRESULT UnregisterExtension (const wchar_t* ext, const wchar_t* progId);

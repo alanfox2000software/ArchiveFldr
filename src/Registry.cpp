@@ -133,6 +133,23 @@ HRESULT CRegistry::SetRegDword(HKEY root, const wchar_t* path,
     return HRESULT_FROM_WIN32(rc);
 }
 
+// Remove one value, leaving the key and its siblings alone. Used where
+// a value written by an earlier version has to go away without taking
+// the key it lives on with it.
+static HRESULT DelRegValue(HKEY root, const wchar_t* path,
+                           const wchar_t* name)
+{
+    HKEY hk = nullptr;
+    LONG rc = RegOpenKeyExW(root, path, 0, KEY_SET_VALUE, &hk);
+    if (rc == ERROR_FILE_NOT_FOUND || rc == ERROR_PATH_NOT_FOUND) return S_OK;
+    if (rc != ERROR_SUCCESS) return HRESULT_FROM_WIN32(rc);
+
+    rc = RegDeleteValueW(hk, name);
+    RegCloseKey(hk);
+    if (rc == ERROR_FILE_NOT_FOUND) return S_OK;
+    return HRESULT_FROM_WIN32(rc);
+}
+
 HRESULT CRegistry::DelRegKey(HKEY root, const wchar_t* path)
 {
     // Late bound: RegDeleteTreeW is Vista+, and a static import of it
@@ -447,6 +464,36 @@ static std::wstring ExplorerOpenCommand()
     return std::wstring(win) + L"\\Explorer.exe /idlist,%I,%L";
 }
 
+// ArchiveFldrOpen.exe, which ships beside the DLL.
+//
+// Windows identifies a candidate in "Open with" and "pick a default
+// app" by the base name of the executable in its open command, and
+// merges handlers that resolve to the same one. Pointing at Explorer
+// gave us the same name as the built-in CompressedFolder handler, so
+// every ArchiveFldr type was folded into the single "File Explorer"
+// row and the application never appeared in the picker under its own
+// name — the reason the entry was missing and the icon was Explorer's.
+//
+// The helper opens nothing; it hands the pidl back to the Folder class
+// and lets the namespace extension do the work. See src/OpenMain.cpp.
+static constexpr wchar_t kOpenHelperExe[] = L"ArchiveFldrOpen.exe";
+
+static std::wstring OpenHelperPath(const wchar_t* dllPath)
+{
+    if (!dllPath || !*dllPath) return L"";
+
+    std::wstring dir = dllPath;
+    const size_t slash = dir.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return L"";
+    dir.erase(slash + 1);
+
+    std::wstring exe = dir + kOpenHelperExe;
+    // Only claim it if it is really there. A stale command pointing at
+    // a program that was never built would break opening altogether,
+    // which is far worse than being missing from a list.
+    return PathFileExistsW(exe.c_str()) ? exe : std::wstring();
+}
+
 // The type description Explorer shows in its Type column and Settings
 // shows next to the extension. Every ProgID used to say "Archive File",
 // which told the user nothing about which of the 21 types they were
@@ -655,10 +702,30 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
                 L"Icon", ownIcon.c_str()));
 
         const std::wstring cmdKey = openKey + L"\\command";
-        keep(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(),
-            nullptr, ExplorerOpenCommand().c_str()));
-        keep(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(),
-            L"DelegateExecute", kFolderOpenDelegate));
+        const std::wstring helper = OpenHelperPath(dllPath);
+        if (!helper.empty())
+        {
+            keep(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(), nullptr,
+                (L"\"" + helper + L"\" \"%1\"").c_str()));
+
+            // No DelegateExecute alongside it. The delegate IS the
+            // folder-open handler, and it wins over the command line
+            // wherever it is understood — which would put us straight
+            // back to being Explorer.
+            DelRegValue(HKEY_LOCAL_MACHINE, cmdKey.c_str(),
+                L"DelegateExecute");
+        }
+        else
+        {
+            // No helper on disk — an older layout, or a build where only
+            // the DLL was produced. Fall back to driving Explorer
+            // directly: indistinguishable from CompressedFolder in the
+            // picker, but archives still open, which matters more.
+            keep(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(),
+                nullptr, ExplorerOpenCommand().c_str()));
+            keep(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(),
+                L"DelegateExecute", kFolderOpenDelegate));
+        }
     }
 
     // (No extra "open with ArchiveFldr" static verb here on purpose: the
@@ -847,6 +914,48 @@ static HRESULT DelCapKey(const wchar_t* parent, const wchar_t* child)
     return HRESULT_FROM_WIN32(rc);
 }
 
+// HKCR\Applications\ArchiveFldrOpen.exe — what the shell reads to find
+// out who an executable belongs to.
+//
+// This is the key the Open With UI consults once it has resolved a
+// handler down to a program. It is also, verbatim, why ArchiveFldr used
+// to show up as File Explorer with File Explorer's icon: the open
+// command named Explorer.exe, so the shell read
+// HKCR\Applications\Explorer.exe and faithfully reported what it found
+// there. Now that the command names a program of ours, this is where
+// the right answer goes.
+HRESULT CRegistry::RegisterOpenHelper(const wchar_t* dllPath)
+{
+    const std::wstring helper = OpenHelperPath(dllPath);
+    if (helper.empty()) return S_OK;   // nothing built, nothing to say
+
+    const std::wstring base =
+        std::wstring(L"Software\\Classes\\Applications\\") + kOpenHelperExe;
+
+    FirstFailure keep;
+    keep(SetRegStr(HKEY_LOCAL_MACHINE, base.c_str(),
+        L"FriendlyAppName", kFriendlyAppName));
+
+    const std::wstring icon = OwnIcon(dllPath ? dllPath : L"");
+    if (!icon.empty())
+        keep(SetRegStr(HKEY_LOCAL_MACHINE, (base + L"\\DefaultIcon").c_str(),
+            nullptr, icon.c_str()));
+
+    keep(SetRegStr(HKEY_LOCAL_MACHINE,
+        (base + L"\\shell\\open\\command").c_str(), nullptr,
+        (L"\"" + helper + L"\" \"%1\"").c_str()));
+
+    // What it will admit to handling. Windows uses this to decide
+    // whether to suggest the program for a type it has not been asked
+    // about yet; without it we are offered for everything, which is
+    // how an archive tool ends up suggested for .jpg.
+    const std::wstring types = base + L"\\SupportedTypes";
+    for (const auto* f : Formats::Registrable())
+        keep(SetRegStr(HKEY_LOCAL_MACHINE, types.c_str(), f->ext, L""));
+
+    return keep.hr;
+}
+
 HRESULT CRegistry::RegisterCapabilities(const wchar_t* dllPath)
 {
     RETURN_IF_FAILED(SetCapStr(kCapabilitiesKey,
@@ -1001,6 +1110,9 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
     //    The user controls this from the settings program; registration
     //    only honours the stored answer. Withdrawing is explicit, so a
     //    re-register after unticking really does remove the entry.
+    // Give the open helper an identity before anything points at it.
+    RETURN_IF_FAILED(RegisterOpenHelper(dllPath));
+
     if (Settings::Get().registerAsDefaultApp)
         RETURN_IF_FAILED(RegisterCapabilities(dllPath));
     else
@@ -1050,6 +1162,13 @@ HRESULT CRegistry::UnregisterAll()
         { L".pptx", L"ArchiveFldr.PptxFile" },
     };
     for (const auto& e : legacy) exts.push_back(e);
+
+    // The open helper's identity key. Nothing else refers to it once
+    // the ProgID trees below are gone, and leaving it behind would keep
+    // ArchiveFldr in the Open With list with no way to act on it.
+    DelRegKey(HKEY_LOCAL_MACHINE,
+        (std::wstring(L"Software\\Classes\\Applications\\")
+            + kOpenHelperExe).c_str());
 
     for (const auto& e : exts)
     {

@@ -45,47 +45,31 @@ static void Trace(const wchar_t* what, HRESULT hr)
 
 // Ask Explorer to browse INTO the archive.
 //
-// Three ways, because the obvious one is wrong and the next one is not
-// guaranteed. Getting this right matters more than it looks: every one
-// of them fails silently, so a bad choice here is a double-click that
-// does nothing at all, with no error to go on.
-static bool BrowseTo(PCIDLIST_ABSOLUTE pidl)
+// One call, and its result is deliberately not acted on.
+//
+// SHOpenFolderAndSelectItems opens the window first and selects
+// afterwards, and the empty child pidl below names an item that does
+// not exist, so the selection fails and a failure HRESULT comes back
+// from a call that has already done its job. Every published use of
+// this trick ignores the return value, and the first version of this
+// file found out why the hard way: it treated the failure as "did
+// nothing", fell through to two more attempts, and each of those
+// opened another window.
+//
+// So there is no cascade here any more. A second mechanism cannot be
+// tried after this one without risking a second window, because there
+// is no way to ask whether the first succeeded.
+static void BrowseTo(PCIDLIST_ABSOLUTE pidl)
 {
-    // 1. Open the item AS a folder. The empty child pidl is the known
-    //    way to say "this folder, nothing selected inside it" --
-    //    passing cidl = 0 instead would open the PARENT and select the
-    //    archive in it, which is the documented behaviour and the
-    //    opposite of what is wanted.
+    // The empty child pidl is the known way to say "this folder, with
+    // nothing selected inside it". The obvious spelling, cidl = 0, does
+    // the opposite -- Microsoft documents it as opening the PARENT and
+    // selecting the item in it.
     ITEMIDLIST idNull = {};
     PCUITEMID_CHILD pidlNull[1] = { static_cast<PCUITEMID_CHILD>(&idNull) };
-    HRESULT hr = SHOpenFolderAndSelectItems(pidl, 1, pidlNull, 0);
-    Trace(L"SHOpenFolderAndSelectItems", hr);
-    if (SUCCEEDED(hr)) return true;
 
-    // 2. The "explore" verb. Deliberately not "open": open is the verb
-    //    that brought us here, so asking for it again is how a handler
-    //    invites the shell to call it back forever. Nothing registers
-    //    an explore verb on our ProgIDs, so this resolves to the Folder
-    //    class and stops there.
-    SHELLEXECUTEINFOW sei = { sizeof(sei) };
-    sei.fMask    = SEE_MASK_IDLIST | SEE_MASK_FLAG_NO_UI;
-    sei.lpIDList = const_cast<PIDLIST_ABSOLUTE>(pidl);
-    sei.lpVerb   = L"explore";
-    sei.nShow    = SW_SHOWNORMAL;
-    if (ShellExecuteExW(&sei)) { Trace(L"explore verb", S_OK); return true; }
-    Trace(L"explore verb failed, GetLastError",
-          HRESULT_FROM_WIN32(GetLastError()));
-
-    // 3. The Folder class's open verb, named outright. This was the
-    //    only attempt the first version made, and on its own it did
-    //    nothing -- hence the two above it.
-    sei.fMask  |= SEE_MASK_CLASSNAME;
-    sei.lpClass = L"Folder";
-    sei.lpVerb  = L"open";
-    if (ShellExecuteExW(&sei)) { Trace(L"Folder open verb", S_OK); return true; }
-    Trace(L"Folder open verb failed, GetLastError",
-          HRESULT_FROM_WIN32(GetLastError()));
-    return false;
+    const HRESULT hr = SHOpenFolderAndSelectItems(pidl, 1, pidlNull, 0);
+    Trace(L"SHOpenFolderAndSelectItems", hr);   // reported, not obeyed
 }
 
 static void BrowseArchive(const wchar_t* path)

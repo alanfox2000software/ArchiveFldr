@@ -155,10 +155,25 @@ std::vector<std::wstring> ProbePaths(const Component& c)
         L"\\",
     };
 
-    for (const auto& sub : subDirs)
-        for (const auto& base : SplitNames(c.baseNames))
-            for (const auto& name : NameVariants(base))
-                out.push_back(dir + sub + name);
+    // Each platform now builds into its own folder (bin\<Config>\x64,
+    // bin\<Config>\win32), so a single shared thirdparty\ tree sits one
+    // level up rather than beside the module. Look in both: beside
+    // first, because a deployed install keeps everything together.
+    std::wstring parent = dir;
+    const size_t slash = parent.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) parent.erase(slash);
+    if (parent == dir) parent.clear();          // already at a root
+
+    const std::wstring roots[] = { dir, parent };
+
+    for (const auto& root : roots)
+    {
+        if (root.empty()) continue;
+        for (const auto& sub : subDirs)
+            for (const auto& base : SplitNames(c.baseNames))
+                for (const auto& name : NameVariants(base))
+                    out.push_back(root + sub + name);
+    }
 
     return out;
 }

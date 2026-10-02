@@ -478,20 +478,47 @@ static std::wstring ExplorerOpenCommand()
 // and lets the namespace extension do the work. See src/OpenMain.cpp.
 static constexpr wchar_t kOpenHelperExe[] = L"ArchiveFldrOpen.exe";
 
+// Which copy of it to name, now that each platform builds into its own
+// folder (bin\<Config>\x64 and bin\<Config>\win32).
+//
+// There is only one place to record the answer — the open command lives
+// under HKLM\Software\Classes, which is shared between the two registry
+// views — but Install registers both DLLs in turn, and if each simply
+// named the helper beside itself then the surviving value would be
+// whichever pass happened to run last.
+//
+// So on 64-bit Windows the x64 build is preferred outright: both passes
+// then agree, and opening an archive does not start a WOW64 process.
+// Beside the DLL comes next, which is what a single-folder deployment
+// and a 32-bit-only machine both want.
 static std::wstring OpenHelperPath(const wchar_t* dllPath)
 {
     if (!dllPath || !*dllPath) return L"";
 
     std::wstring dir = dllPath;
-    const size_t slash = dir.find_last_of(L"\\/");
+    size_t slash = dir.find_last_of(L"\\/");
     if (slash == std::wstring::npos) return L"";
-    dir.erase(slash + 1);
+    dir.erase(slash + 1);                       // ...\bin\Release\x64\
 
-    std::wstring exe = dir + kOpenHelperExe;
-    // Only claim it if it is really there. A stale command pointing at
-    // a program that was never built would break opening altogether,
+    std::wstring parent = dir;                  // ...\bin\Release\
+    parent.pop_back();
+    slash = parent.find_last_of(L"\\/");
+    parent = (slash == std::wstring::npos) ? std::wstring()
+                                           : parent.substr(0, slash + 1);
+
+    std::vector<std::wstring> tries;
+    if (!parent.empty() && SysInfo::Is64BitWindows())
+        tries.push_back(parent + L"x64\\" + kOpenHelperExe);
+    tries.push_back(dir + kOpenHelperExe);
+    if (!parent.empty())
+        tries.push_back(parent + L"win32\\" + kOpenHelperExe);
+
+    // Only claim one that is really there. A command pointing at a
+    // program that was never built would break opening altogether,
     // which is far worse than being missing from a list.
-    return PathFileExistsW(exe.c_str()) ? exe : std::wstring();
+    for (const auto& t : tries)
+        if (PathFileExistsW(t.c_str())) return t;
+    return L"";
 }
 
 // The type description Explorer shows in its Type column and Settings

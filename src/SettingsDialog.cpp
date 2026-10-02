@@ -203,9 +203,36 @@ void SetSub(HWND list, int row, int col, const wchar_t* text)
 }
 
 // Both shell extension DLLs, by the names the build produces.
+//
+// They no longer have to be in the same folder. Each platform builds
+// into bin\<Config>\x64 or bin\<Config>\win32, so the settings program
+// has to step sideways to find its opposite number — and it must, or
+// Install silently stops registering the other bitness and 32-bit
+// hosts lose the extension.
+//
+// Beside the EXE still comes first: that is a single-folder install,
+// which is what gets shipped.
 std::wstring DllPath(bool x64)
 {
-    return ExeDir() + (x64 ? L"ArchiveFldr.64.dll" : L"ArchiveFldr.32.dll");
+    const wchar_t* name = x64 ? L"ArchiveFldr.64.dll" : L"ArchiveFldr.32.dll";
+
+    const std::wstring here = ExeDir();
+    if (here.empty()) return name;
+    if (PathFileExistsW((here + name).c_str())) return here + name;
+
+    std::wstring parent = here;
+    parent.pop_back();
+    const size_t slash = parent.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return here + name;
+    parent.erase(slash + 1);
+
+    const std::wstring sibling =
+        parent + (x64 ? L"x64\\" : L"win32\\") + name;
+    if (PathFileExistsW(sibling.c_str())) return sibling;
+
+    // Nothing found. Return the beside-the-EXE spelling so the caller's
+    // "not present" message names the place people will look first.
+    return here + name;
 }
 
 bool DllPresent(bool x64)

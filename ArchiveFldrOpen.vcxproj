@@ -90,19 +90,30 @@
   <!-- ═══════════════════════════════════════════════════
        Output / Intermediate Directories
   ════════════════════════════════════════════════════ -->
-  <!-- Both platforms share one OutDir (bin\$(Configuration)\) so that
-       ArchiveFldr.32.dll and ArchiveFldr.64.dll land side by side,
-       alongside a shared thirdparty\ tree (see PostBuildEvent below).
-       That is what lets ArchiveFldr find its bitness-matched engine
-       DLLs relative to its own module path at runtime (see
-       src\ThirdParty.h).
+  <!-- One output folder per configuration AND platform:
+       bin\Debug\win32, bin\Debug\x64, bin\Release\win32,
+       bin\Release\x64.
 
-       IntDir, by contrast, is per architecture AND per project. Both
-       projects compile res\resource.rc, so a shared IntDir had them
-       writing the same resource.res, and MSBuild's file trackers
-       (CL.*.tlog, link.*.tlog, mt.*.tlog) collided in the same place:
-       that is warning MSB8028, and it makes clean and incremental
-       builds unreliable. -->
+       The two bitnesses used to share bin\$(Configuration)\ so that
+       ArchiveFldr.32.dll and ArchiveFldr.64.dll landed side by side.
+       That had one real virtue — the settings program could find its
+       opposite-bitness DLL by looking next to itself — and one real
+       vice: ArchiveFldrOpen.exe carries the same name in both
+       platforms, so whichever built last silently overwrote the
+       other. Separate folders end the overwrite, and CPageInstall
+       learned to look in the sibling folder to keep the virtue.
+
+       thirdparty\ can still be a single shared tree. Put it in
+       bin\$(Configuration)\, the parent of these two, and both
+       bitnesses will find it: ThirdParty::ProbePaths looks one level
+       up as well as beside the module.
+
+       IntDir is per architecture AND per project. Both projects
+       compile res\resource.rc, so a shared IntDir had them writing the
+       same resource.res, and MSBuild's file trackers (CL.*.tlog,
+       link.*.tlog, mt.*.tlog) collided in the same place: that is
+       warning MSB8028, and it makes clean and incremental builds
+       unreliable. -->
   <!-- ONE TargetName for both platforms. Not an oversight, and not to
        be "fixed" into ArchiveFldrOpen.32 / .64 the way the DLL and the
        settings program are named.
@@ -126,25 +137,25 @@
        case where it cannot arise, because a 32-bit Windows is given
        the Win32 build of everything. -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
+    <OutDir>$(SolutionDir)bin\$(Configuration)\win32\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x86\$(ProjectName)\</IntDir>
     <TargetName>ArchiveFldrOpen</TargetName>
     <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
+    <OutDir>$(SolutionDir)bin\$(Configuration)\win32\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x86\$(ProjectName)\</IntDir>
     <TargetName>ArchiveFldrOpen</TargetName>
     <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
+    <OutDir>$(SolutionDir)bin\$(Configuration)\x64\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x64\$(ProjectName)\</IntDir>
     <TargetName>ArchiveFldrOpen</TargetName>
     <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
+    <OutDir>$(SolutionDir)bin\$(Configuration)\x64\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x64\$(ProjectName)\</IntDir>
     <TargetName>ArchiveFldrOpen</TargetName>
     <TargetExt>.exe</TargetExt>
@@ -477,4 +488,41 @@
     </ResourceCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <!-- ═══════════════════════════════════════════════════
+       Win32 companion
+
+       Same arrangement as ArchiveFldr.vcxproj, and now necessary
+       rather than merely tidy. Each platform builds into its own
+       folder, so an x64 build that produced no 32-bit helper would
+       leave bin\$(Configuration)\win32 with a DLL and nothing to open
+       with — and the 32-bit half of Install would then rewrite the
+       shared open command to point at Explorer, undoing the 64-bit
+       half's work on a key both of them share.
+
+       Recursion stops by construction: the nested build is Win32 and
+       this only runs for x64. Set ArchiveFldrBuildWin32Companion=false
+       to turn it off.
+  ═══════════════════════════════════════════════════ -->
+  <PropertyGroup>
+    <ArchiveFldrBuildWin32Companion Condition="'$(ArchiveFldrBuildWin32Companion)' == ''">true</ArchiveFldrBuildWin32Companion>
+    <ArchiveFldrWin32Companion Condition="'$(Platform)' == 'x64' AND '$(ArchiveFldrBuildWin32Companion)' == 'true'">true</ArchiveFldrWin32Companion>
+  </PropertyGroup>
+
+  <Target Name="ArchiveFldrOpenBuildWin32"
+          AfterTargets="Build"
+          Condition="'$(ArchiveFldrWin32Companion)' == 'true'">
+    <Message Importance="high"
+             Text="[ArchiveFldrOpen] $(Configuration)|x64 also builds the 32-bit helper..." />
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);Platform=Win32" />
+  </Target>
+
+  <Target Name="ArchiveFldrOpenCleanWin32"
+          AfterTargets="Clean"
+          Condition="'$(ArchiveFldrWin32Companion)' == 'true'">
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="Clean"
+             Properties="Configuration=$(Configuration);Platform=Win32" />
+  </Target>
 </Project>

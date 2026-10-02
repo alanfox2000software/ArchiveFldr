@@ -90,39 +90,50 @@
   <!-- ═══════════════════════════════════════════════════
        Output / Intermediate Directories
   ════════════════════════════════════════════════════ -->
-  <!-- Both platforms share one OutDir (bin\$(Configuration)\) so that
-       ArchiveFldr.32.dll and ArchiveFldr.64.dll land side by side,
-       alongside a shared thirdparty\ tree (see PostBuildEvent below).
-       That is what lets ArchiveFldr find its bitness-matched engine
-       DLLs relative to its own module path at runtime (see
-       src\ThirdParty.h).
+  <!-- One output folder per configuration AND platform:
+       bin\Debug\win32, bin\Debug\x64, bin\Release\win32,
+       bin\Release\x64.
 
-       IntDir, by contrast, is per architecture AND per project. Both
-       projects compile res\resource.rc, so a shared IntDir had them
-       writing the same resource.res, and MSBuild's file trackers
-       (CL.*.tlog, link.*.tlog, mt.*.tlog) collided in the same place:
-       that is warning MSB8028, and it makes clean and incremental
-       builds unreliable. -->
+       The two bitnesses used to share bin\$(Configuration)\ so that
+       ArchiveFldr.32.dll and ArchiveFldr.64.dll landed side by side.
+       That had one real virtue — the settings program could find its
+       opposite-bitness DLL by looking next to itself — and one real
+       vice: ArchiveFldrOpen.exe carries the same name in both
+       platforms, so whichever built last silently overwrote the
+       other. Separate folders end the overwrite, and CPageInstall
+       learned to look in the sibling folder to keep the virtue.
+
+       thirdparty\ can still be a single shared tree. Put it in
+       bin\$(Configuration)\, the parent of these two, and both
+       bitnesses will find it: ThirdParty::ProbePaths looks one level
+       up as well as beside the module.
+
+       IntDir is per architecture AND per project. Both projects
+       compile res\resource.rc, so a shared IntDir had them writing the
+       same resource.res, and MSBuild's file trackers (CL.*.tlog,
+       link.*.tlog, mt.*.tlog) collided in the same place: that is
+       warning MSB8028, and it makes clean and incremental builds
+       unreliable. -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
+    <OutDir>$(SolutionDir)bin\$(Configuration)\win32\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x86\$(ProjectName)\</IntDir>
     <TargetName>ArchiveFldr.32</TargetName>
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
+    <OutDir>$(SolutionDir)bin\$(Configuration)\win32\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x86\$(ProjectName)\</IntDir>
     <TargetName>ArchiveFldr.32</TargetName>
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
+    <OutDir>$(SolutionDir)bin\$(Configuration)\x64\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x64\$(ProjectName)\</IntDir>
     <TargetName>ArchiveFldr.64</TargetName>
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
+    <OutDir>$(SolutionDir)bin\$(Configuration)\x64\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x64\$(ProjectName)\</IntDir>
     <TargetName>ArchiveFldr.64</TargetName>
     <TargetExt>.dll</TargetExt>

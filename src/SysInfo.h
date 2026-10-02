@@ -40,6 +40,24 @@ inline bool IsWin7OrLater()  { return Version() >= 0x0601; }
 inline bool IsWin8OrLater()  { return Version() >= 0x0602; }
 inline bool IsWin10OrLater() { return Version() >= 0x0A00; }
 
+// True on 64-bit Windows, whether this process is the 64-bit one or a
+// 32-bit one running under WOW64. Late bound: IsWow64Process arrived in
+// XP SP2, and a static import would stop the DLL loading on anything
+// older.
+inline bool Is64BitWindows()
+{
+#ifdef _WIN64
+    return true;
+#else
+    typedef BOOL (WINAPI* PFNISWOW64)(HANDLE, PBOOL);
+    HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+    if (!k32) return false;
+    PFNISWOW64 fn = (PFNISWOW64)GetProcAddress(k32, "IsWow64Process");
+    BOOL wow = FALSE;
+    return fn && fn(GetCurrentProcess(), &wow) && wow;
+#endif
+}
+
 // "Windows XP", "Windows 11", … for diagnostics and the settings page.
 std::wstring Name();
 

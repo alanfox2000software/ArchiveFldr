@@ -559,6 +559,7 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
     std::wstring progBase = std::wstring(L"Software\\Classes\\") + progId;
 
     const std::wstring typeName = TypeNameFor(ext);
+    std::wstring ownIcon;
 
     keep(SetRegStr(HKEY_LOCAL_MACHINE, progBase.c_str(),
         nullptr, typeName.c_str()));
@@ -572,6 +573,33 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
         else
             DelRegKey(HKEY_LOCAL_MACHINE,
                       (progBase + L"\\DefaultIcon").c_str());
+        ownIcon = icon;
+    }
+
+    // Which application the picker believes is behind this ProgID.
+    //
+    // With no Application subkey the shell works that out from the open
+    // command — and ours names Explorer.exe, so every row in "pick a
+    // default app" borrowed Explorer's icon and publisher. The
+    // FriendlyAppName on the verb below already corrected the label, but
+    // a label is not an icon: nothing else told Windows these entries
+    // belonged to ArchiveFldr rather than to File Explorer.
+    //
+    // ApplicationCompany earns its place too. The Open With list quietly
+    // skips handlers it cannot attribute to a publisher, which is one of
+    // the ways an entry goes missing from the picker.
+    {
+        const std::wstring appKey = progBase + L"\\Application";
+        keep(SetRegStr(HKEY_LOCAL_MACHINE, appKey.c_str(),
+            L"ApplicationName", kFriendlyAppName));
+        keep(SetRegStr(HKEY_LOCAL_MACHINE, appKey.c_str(),
+            L"ApplicationCompany", kFriendlyAppName));
+        keep(SetRegStr(HKEY_LOCAL_MACHINE, appKey.c_str(),
+            L"ApplicationDescription",
+            L"Browse archives as folders in File Explorer."));
+        if (!ownIcon.empty())
+            keep(SetRegStr(HKEY_LOCAL_MACHINE, appKey.c_str(),
+                L"ApplicationIcon", ownIcon.c_str()));
     }
 
     // FriendlyTypeName is a value ON the ProgID key. Earlier builds wrote a
@@ -602,6 +630,13 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
         // in the list.
         keep(SetRegStr(HKEY_LOCAL_MACHINE, openKey.c_str(),
             L"FriendlyAppName", kFriendlyAppName));
+
+        // ...and the picture beside it. With no Icon on the verb the
+        // shell falls back to the first icon of the executable the
+        // command names, which is Explorer's.
+        if (!ownIcon.empty())
+            keep(SetRegStr(HKEY_LOCAL_MACHINE, openKey.c_str(),
+                L"Icon", ownIcon.c_str()));
 
         const std::wstring cmdKey = openKey + L"\\command";
         keep(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(),

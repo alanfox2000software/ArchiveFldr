@@ -56,10 +56,19 @@ HRESULT CRegistry::SetRegStr(HKEY root, const wchar_t* path,
     return HRESULT_FROM_WIN32(rc);
 }
 
-// ArchiveFldr ships no icon resources, so every DefaultIcon points at a stock
-// Windows icon rather than an index into this DLL. An index with nothing
-// behind it does not fall back to anything — the shell paints its empty
-// placeholder, which is how a blank page ended up badged onto archives.
+// ArchiveFldr now carries its own icon (res\\resource.ico, resource id 1),
+// so DefaultIcon points into this DLL. ",0" means "the first icon in the
+// module", which is that one. Falls back to the stock compressed-folder
+// icon only if the DLL path is somehow unusable: an index with nothing
+// behind it does not degrade gracefully — the shell paints its empty
+// placeholder, which is how a blank page once ended up badged onto
+// archives.
+static std::wstring OwnIcon(const std::wstring& dllPath)
+{
+    if (dllPath.empty() || !PathFileExistsW(dllPath.c_str())) return L"";
+    return dllPath + L",0";
+}
+
 static std::wstring SystemIcon(const wchar_t* dllName, int index)
 {
     wchar_t sys[MAX_PATH] = {};
@@ -227,12 +236,13 @@ HRESULT CRegistry::RegisterNamespaceFolder(const wchar_t* dllPath)
     const std::wstring sid  = ClsidToStr(CLSID_ArchiveFldrFolder);
     const std::wstring base = std::wstring(L"Software\\Classes\\CLSID\\") + sid;
 
-    // zipfldr.dll,0 is the compressed-folder icon every Windows install
-    // has. If it is somehow missing, write nothing: no value at all makes
-    // the shell fall back to the generic folder icon, which is still a
-    // real icon.
+    // Our own icon, falling back to the stock compressed-folder icon that
+    // every Windows install has. If neither resolves, write nothing: no
+    // value at all makes the shell fall back to the generic folder icon,
+    // which is still a real icon.
     {
-        const std::wstring icon = SystemIcon(L"zipfldr.dll", 0);
+        std::wstring icon = OwnIcon(dllPath);
+        if (icon.empty()) icon = SystemIcon(L"zipfldr.dll", 0);
         if (!icon.empty())
             RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
                 (base + L"\\DefaultIcon").c_str(), nullptr, icon.c_str()));
@@ -554,7 +564,8 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
         nullptr, typeName.c_str()));
 
     {
-        const std::wstring icon = SystemIcon(L"zipfldr.dll", 0);
+        std::wstring icon = OwnIcon(dllPath);
+        if (icon.empty()) icon = SystemIcon(L"zipfldr.dll", 0);
         if (!icon.empty())
             keep(SetRegStr(HKEY_LOCAL_MACHINE,
                 (progBase + L"\\DefaultIcon").c_str(), nullptr, icon.c_str()));
@@ -736,7 +747,7 @@ static constexpr wchar_t kCapabilitiesKey[] = L"Software\\ArchiveFldr\\Capabilit
 static constexpr wchar_t kRegisteredApps[]  = L"Software\\RegisteredApplications";
 static constexpr wchar_t kAppName[]         = L"ArchiveFldr";
 
-HRESULT CRegistry::RegisterCapabilities(const wchar_t* /*dllPath*/)
+HRESULT CRegistry::RegisterCapabilities(const wchar_t* dllPath)
 {
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, kCapabilitiesKey,
         L"ApplicationName", L"ArchiveFldr"));
@@ -745,9 +756,8 @@ HRESULT CRegistry::RegisterCapabilities(const wchar_t* /*dllPath*/)
         L"Browse archives as folders in File Explorer."));
 
     {
-        // No icon of our own ships with this project, so borrow the stock
-        // compressed-folder icon rather than pointing at an empty slot.
-        const std::wstring icon = SystemIcon(L"zipfldr.dll", 0);
+        std::wstring icon = OwnIcon(dllPath ? dllPath : L"");
+        if (icon.empty()) icon = SystemIcon(L"zipfldr.dll", 0);
         if (!icon.empty())
             SetRegStr(HKEY_LOCAL_MACHINE, kCapabilitiesKey,
                       L"ApplicationIcon", icon.c_str());

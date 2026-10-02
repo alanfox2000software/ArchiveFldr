@@ -9,6 +9,11 @@
 #endif
 
 // Dialog IDs
+// ── Icons ─────────────────────────────────────────────────
+// Lowest-numbered icon in the module: Explorer picks that one as the
+// executable's icon, and ",0" in a DefaultIcon value resolves to it too.
+#define IDI_ARCHIVEFLDR             1
+
 #define IDD_SETTINGS_MAIN           100
 #define IDD_PAGE_GENERAL            101
 #define IDD_PAGE_FORMATS            102

@@ -763,6 +763,19 @@ void CSettingsDialog::OnInit(HWND hDlg)
 {
     SetWindowTextW(hDlg, L"ArchiveFldr Settings");
 
+    // Title bar and Alt-Tab. LoadIconW picks one size for both; LoadImage
+    // asks for the two the shell actually wants, so neither is a stretched
+    // copy of the other.
+    HINSTANCE hInst = (HINSTANCE)GetWindowLongPtrW(hDlg, GWLP_HINSTANCE);
+    if (HANDLE small_ = LoadImageW(hInst, MAKEINTRESOURCEW(IDI_ARCHIVEFLDR),
+                                   IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                                   GetSystemMetrics(SM_CYSMICON), 0))
+        SendMessageW(hDlg, WM_SETICON, ICON_SMALL, (LPARAM)small_);
+    if (HANDLE big = LoadImageW(hInst, MAKEINTRESOURCEW(IDI_ARCHIVEFLDR),
+                                IMAGE_ICON, GetSystemMetrics(SM_CXICON),
+                                GetSystemMetrics(SM_CYICON), 0))
+        SendMessageW(hDlg, WM_SETICON, ICON_BIG, (LPARAM)big);
+
     m_hTree     = GetDlgItem(hDlg, IDC_TREE_PAGES);
     m_hFrame    = GetDlgItem(hDlg, IDC_FRAME_PAGE);
     m_hBtnOK    = GetDlgItem(hDlg, IDC_BTN_OK);

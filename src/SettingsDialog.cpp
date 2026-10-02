@@ -56,6 +56,66 @@ HINSTANCE SelfInstance()
     return (HINSTANCE)h;
 }
 
+// ── page hosting ─────────────────────────────────────────
+//
+// A page is a child dialog parked over the tab control's display
+// rectangle. It is a *sibling* of that tab control, not a child of it,
+// so the two compete for the same pixels and whichever sits higher in
+// the sibling z-order wins.
+//
+// That is what left every page blank. Place() asked for HWND_TOP and
+// passed SWP_NOZORDER in the same call — and SWP_NOZORDER tells
+// SetWindowPos to ignore hWndInsertAfter altogether, so the request was
+// a no-op. The pages were created, sized and shown correctly; the tab
+// control simply painted its empty body straight over the top of them,
+// which looks exactly like a page that was never created at all.
+//
+// Everything below is shared by all five pages rather than copied into
+// each, so a fix cannot land in four of them and miss the fifth.
+
+HWND CreatePage(UINT dlgId, HWND parent, DLGPROC proc, void* self)
+{
+    HWND page = CreateDialogParamW(SelfInstance(), MAKEINTRESOURCEW(dlgId),
+                                   parent, proc, (LPARAM)self);
+    if (!page)
+    {
+        // A page that fails to create is indistinguishable from one that
+        // is merely hidden, so say so instead of leaving a blank panel
+        // and no explanation.
+        const DWORD err = GetLastError();
+        wchar_t msg[192];
+        swprintf_s(msg, L"Could not create settings page %u.\r\n"
+                        L"Windows reported error %lu.", dlgId, err);
+        MessageBoxW(parent, msg, L"ArchiveFldr", MB_OK | MB_ICONERROR);
+        return nullptr;
+    }
+
+    // A themed tab body is not COLOR_3DFACE. Without this the page shows
+    // as a flat grey rectangle on top of the lighter tab background.
+    EnableThemeDialogTexture(page, ETDT_ENABLETAB);
+    return page;
+}
+
+void PlacePage(HWND page, const RECT& rc)
+{
+    if (!page) return;
+    SetWindowPos(page, HWND_TOP, rc.left, rc.top,
+                 rc.right - rc.left, rc.bottom - rc.top, SWP_NOACTIVATE);
+}
+
+void ShowPageWindow(HWND page, bool show)
+{
+    if (!page) return;
+    if (!show) { ShowWindow(page, SW_HIDE); return; }
+
+    // Raise and show in one call. The lift above the tab control has to
+    // be repeated on every switch: hiding and re-showing a window does
+    // not restore its z-order, and the tab control is repainted
+    // underneath each time the selection changes.
+    SetWindowPos(page, HWND_TOP, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+
 std::wstring ExeDir()
 {
     wchar_t path[MAX_PATH] = {};
@@ -240,22 +300,18 @@ CPageSystem::~CPageSystem()
 
 HWND CPageSystem::Create(HWND parent)
 {
-    m_hwnd = CreateDialogParamW(SelfInstance(),
-                MAKEINTRESOURCEW(IDD_PAGE_SYSTEM), parent,
-                DlgProc, (LPARAM)this);
+    m_hwnd = CreatePage(IDD_PAGE_SYSTEM, parent, DlgProc, this);
     return m_hwnd;
 }
 
 void CPageSystem::Show(bool show)
 {
-    if (m_hwnd) ShowWindow(m_hwnd, show ? SW_SHOW : SW_HIDE);
+    ShowPageWindow(m_hwnd, show);
 }
 
 void CPageSystem::Place(const RECT& rc)
 {
-    if (m_hwnd)
-        SetWindowPos(m_hwnd, HWND_TOP, rc.left, rc.top,
-                     rc.right - rc.left, rc.bottom - rc.top, SWP_NOZORDER);
+    PlacePage(m_hwnd, rc);
 }
 
 void CPageSystem::BuildList()
@@ -498,22 +554,18 @@ std::wstring CtxRowText(int i)
 
 HWND CPageArchiveFldr::Create(HWND parent)
 {
-    m_hwnd = CreateDialogParamW(SelfInstance(),
-                MAKEINTRESOURCEW(IDD_PAGE_ARCHIVEFLDR), parent,
-                DlgProc, (LPARAM)this);
+    m_hwnd = CreatePage(IDD_PAGE_ARCHIVEFLDR, parent, DlgProc, this);
     return m_hwnd;
 }
 
 void CPageArchiveFldr::Show(bool show)
 {
-    if (m_hwnd) ShowWindow(m_hwnd, show ? SW_SHOW : SW_HIDE);
+    ShowPageWindow(m_hwnd, show);
 }
 
 void CPageArchiveFldr::Place(const RECT& rc)
 {
-    if (m_hwnd)
-        SetWindowPos(m_hwnd, HWND_TOP, rc.left, rc.top,
-                     rc.right - rc.left, rc.bottom - rc.top, SWP_NOZORDER);
+    PlacePage(m_hwnd, rc);
 }
 
 void CPageArchiveFldr::FillItems()
@@ -634,22 +686,18 @@ INT_PTR CALLBACK CPageArchiveFldr::DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARA
 // ═════════════════════════════════════════════════════════
 HWND CPageFolders::Create(HWND parent)
 {
-    m_hwnd = CreateDialogParamW(SelfInstance(),
-                MAKEINTRESOURCEW(IDD_PAGE_FOLDERS), parent,
-                DlgProc, (LPARAM)this);
+    m_hwnd = CreatePage(IDD_PAGE_FOLDERS, parent, DlgProc, this);
     return m_hwnd;
 }
 
 void CPageFolders::Show(bool show)
 {
-    if (m_hwnd) ShowWindow(m_hwnd, show ? SW_SHOW : SW_HIDE);
+    ShowPageWindow(m_hwnd, show);
 }
 
 void CPageFolders::Place(const RECT& rc)
 {
-    if (m_hwnd)
-        SetWindowPos(m_hwnd, HWND_TOP, rc.left, rc.top,
-                     rc.right - rc.left, rc.bottom - rc.top, SWP_NOZORDER);
+    PlacePage(m_hwnd, rc);
 }
 
 void CPageFolders::SyncEnabled()
@@ -763,22 +811,18 @@ INT_PTR CALLBACK CPageFolders::DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp
 // ═════════════════════════════════════════════════════════
 HWND CPageInstall::Create(HWND parent)
 {
-    m_hwnd = CreateDialogParamW(SelfInstance(),
-                MAKEINTRESOURCEW(IDD_PAGE_SETTINGS), parent,
-                DlgProc, (LPARAM)this);
+    m_hwnd = CreatePage(IDD_PAGE_SETTINGS, parent, DlgProc, this);
     return m_hwnd;
 }
 
 void CPageInstall::Show(bool show)
 {
-    if (m_hwnd) ShowWindow(m_hwnd, show ? SW_SHOW : SW_HIDE);
+    ShowPageWindow(m_hwnd, show);
 }
 
 void CPageInstall::Place(const RECT& rc)
 {
-    if (m_hwnd)
-        SetWindowPos(m_hwnd, HWND_TOP, rc.left, rc.top,
-                     rc.right - rc.left, rc.bottom - rc.top, SWP_NOZORDER);
+    PlacePage(m_hwnd, rc);
 }
 
 void CPageInstall::RefreshState()
@@ -913,22 +957,18 @@ INT_PTR CALLBACK CPageInstall::DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp
 // ═════════════════════════════════════════════════════════
 HWND CPageLanguage::Create(HWND parent)
 {
-    m_hwnd = CreateDialogParamW(SelfInstance(),
-                MAKEINTRESOURCEW(IDD_PAGE_LANGUAGE), parent,
-                DlgProc, (LPARAM)this);
+    m_hwnd = CreatePage(IDD_PAGE_LANGUAGE, parent, DlgProc, this);
     return m_hwnd;
 }
 
 void CPageLanguage::Show(bool show)
 {
-    if (m_hwnd) ShowWindow(m_hwnd, show ? SW_SHOW : SW_HIDE);
+    ShowPageWindow(m_hwnd, show);
 }
 
 void CPageLanguage::Place(const RECT& rc)
 {
-    if (m_hwnd)
-        SetWindowPos(m_hwnd, HWND_TOP, rc.left, rc.top,
-                     rc.right - rc.left, rc.bottom - rc.top, SWP_NOZORDER);
+    PlacePage(m_hwnd, rc);
 }
 
 void CPageLanguage::Load()

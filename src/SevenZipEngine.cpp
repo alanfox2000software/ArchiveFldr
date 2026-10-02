@@ -1585,6 +1585,38 @@ bool FormatIsWritable(const std::wstring& format)
     return false;
 }
 
+// Extensions that are a known container under a name 7z.dll's handler
+// does not happen to advertise.
+//
+// A handler publishes the extension list its own build was compiled
+// with, and the zip handler's is "zip z01 zipx jar xpi odt ods docx xlsx
+// epub ipa apk appx" -- which leaves .cbz, .smzip, .zab, .war and .ear
+// out even though every one of them is an ordinary zip. Without this
+// table a target name ending in .cbz matches no handler, so compressing
+// to one was refused outright. The same applies to the comic and tarball
+// spellings of the other containers.
+//
+// This only names the *container*. Whether that container can actually
+// be written is still 7z.dll's answer, checked below.
+struct ExtAlias { const wchar_t* ext; const wchar_t* handler; };
+static const ExtAlias kExtAliases[] =
+{
+    // zip family
+    { L"cbz",   L"zip"   },
+    { L"smzip", L"zip"   },
+    { L"zab",   L"zip"   },
+    { L"war",   L"zip"   },
+    { L"ear",   L"zip"   },
+    // the others that share a container under a different spelling
+    { L"cb7",   L"7z"    },
+    { L"cbt",   L"tar"   },
+    { L"tb2",   L"bzip2" },
+    { L"tbz",   L"bzip2" },
+    { L"tbz2",  L"bzip2" },
+    { L"dz",    L"gzip"  },
+    { L"zsd",   L"zstd"  },
+};
+
 std::wstring FormatForTargetName(const std::wstring& fileName)
 {
     const wchar_t* dot = PathFindExtensionW(fileName.c_str());
@@ -1594,6 +1626,13 @@ std::wstring FormatForTargetName(const std::wstring& fileName)
     for (const auto& h : WritableHandlers())
         for (const auto& e : h.exts)
             if (_wcsicmp(e.c_str(), bare.c_str()) == 0) return h.name;
+
+    // Nothing advertised it. Try the aliases, and still insist the
+    // handler they name is one this copy of 7z.dll can write.
+    for (const auto& a : kExtAliases)
+        if (_wcsicmp(a.ext, bare.c_str()) == 0 && FormatIsWritable(a.handler))
+            return a.handler;
+
     return L"";
 }
 

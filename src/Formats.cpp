@@ -28,6 +28,16 @@ static const Format kFormats[] =
     { L".war",   L"Web archive",   nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".ear",   L"EAR",           nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".apk",   L"Android pack",  L"ArchiveFldr.ApkFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".cbz",   L"Comic archive", L"ArchiveFldr.CbzFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
+    // The rest of the zip family. A progId would offer to take the file
+    // type in Settings > Default apps, which is right for an archive and
+    // wrong for somebody else's document: .epub belongs to a reader and
+    // .xpi to Firefox the way .docx belongs to Word. They are still read,
+    // browsed and written as the zips they are.
+    { L".smzip", L"SciTE package", nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".xpi",   L"Firefox add-on",nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".zab",   L"ZAB archive",   nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".epub",  L"EPUB book",     nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".ipa",   L"iOS app",       nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".docx",  L"Word document", nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".xlsx",  L"Excel workbook",nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },

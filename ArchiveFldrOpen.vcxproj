@@ -471,13 +471,22 @@
   <!-- ═══════════════════════════════════════════════════
        Source Files
 
-       One translation unit, on purpose. This program must not grow a
-       dependency on the shell extension or the settings code: it sits
-       in front of every archive open, so its whole job is to start and
-       hand off.
+       Small on purpose: this sits in front of every archive open, so
+       its whole job is to start and hand off.
+
+       BrowseTo.cpp is shared with the shell extension rather than
+       copied. It is the code behind the context menu's "Open with
+       ArchiveFldr", it already knows the three ways this goes wrong,
+       and a second implementation of it is exactly how the open verb
+       ended up opening nothing and then opening three windows.
   ════════════════════════════════════════════════════ -->
   <ItemGroup>
     <ClCompile Include="src\OpenMain.cpp" />
+    <ClCompile Include="src\BrowseTo.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\BrowseTo.h" />
+    <ClInclude Include="src\stdafx.h" />
   </ItemGroup>
   <!-- ═══════════════════════════════════════════════════
        Resource Files

@@ -4,7 +4,7 @@
 // and a helper program was explicitly not wanted in that path:
 //
 // Windows identifies an entry in "Open with" / "pick a default app" by
-// the *base name of the executable* in its open command, and merges any
+// the base name of the executable in its open command, and merges any
 // handlers that share one. Our command was
 //
 //     %windir%\Explorer.exe /idlist,%I,%L
@@ -21,66 +21,38 @@
 // two. That is all this program is for.
 //
 // It opens nothing itself and contains no archive code. It turns the
-// path it is handed into a pidl and gives it straight back to the
-// shell's Folder class — the very code path the old registry command
-// reached directly — so the namespace extension still does every bit of
-// the work, and there is no window, no prompt and no elevation between
-// a double-click and the archive.
-
-#include <windows.h>
-#include <shlobj.h>
-#include <shellapi.h>
-#include <stdio.h>
-
-static void Trace(const wchar_t* what, HRESULT hr)
-{
-    // Silent by design, but not invisible. If an archive ever fails to
-    // open again, DebugView will say which of the three attempts was
-    // reached and what it returned, instead of leaving "nothing
-    // happens" as the only evidence.
-    wchar_t msg[256] = {};
-    swprintf_s(msg, L"[ArchiveFldrOpen] %s -> 0x%08X\n", what, (unsigned)hr);
-    OutputDebugStringW(msg);
-}
-
-// Ask Explorer to browse INTO the archive.
+// path it is handed into a pidl and calls ShellBrowseToFolder — the
+// same function behind the context menu's "Open with ArchiveFldr", so
+// a double-click and that menu item now go down one code path instead
+// of two. The namespace extension still does every bit of the work,
+// and there is no window, no prompt and no elevation between a
+// double-click and the archive.
 //
-// One call, and its result is deliberately not acted on.
-//
-// SHOpenFolderAndSelectItems opens the window first and selects
-// afterwards, and the empty child pidl below names an item that does
-// not exist, so the selection fails and a failure HRESULT comes back
-// from a call that has already done its job. Every published use of
-// this trick ignores the return value, and the first version of this
-// file found out why the hard way: it treated the failure as "did
-// nothing", fell through to two more attempts, and each of those
-// opened another window.
-//
-// So there is no cascade here any more. A second mechanism cannot be
-// tried after this one without risking a second window, because there
-// is no way to ask whether the first succeeded.
-static void BrowseTo(PCIDLIST_ABSOLUTE pidl)
-{
-    // The empty child pidl is the known way to say "this folder, with
-    // nothing selected inside it". The obvious spelling, cidl = 0, does
-    // the opposite -- Microsoft documents it as opening the PARENT and
-    // selecting the item in it.
-    ITEMIDLIST idNull = {};
-    PCUITEMID_CHILD pidlNull[1] = { static_cast<PCUITEMID_CHILD>(&idNull) };
+// Sharing that function rather than writing another one is the whole
+// lesson of this file's history. BrowseTo.cpp already knew that
+// ShellExecuteEx is asynchronous and that a program which exits
+// immediately must pass SEE_MASK_NOASYNC or the queued operation dies
+// with the process — which is precisely why the first version of this
+// file opened nothing at all.
 
-    const HRESULT hr = SHOpenFolderAndSelectItems(pidl, 1, pidlNull, 0);
-    Trace(L"SHOpenFolderAndSelectItems", hr);   // reported, not obeyed
-}
+#include "stdafx.h"
+#include "BrowseTo.h"
 
 static void BrowseArchive(const wchar_t* path)
 {
     if (!path || !*path) return;
 
     PIDLIST_ABSOLUTE pidl = nullptr;
-    const HRESULT hr = SHParseDisplayName(path, nullptr, &pidl, 0, nullptr);
-    if (FAILED(hr) || !pidl) { Trace(L"SHParseDisplayName", hr); return; }
+    if (FAILED(SHParseDisplayName(path, nullptr, &pidl, 0, nullptr)) || !pidl)
+        return;
 
-    BrowseTo(pidl);
+    // No owner window: this program has none, and ShellBrowseToFolder
+    // only uses it to parent whatever error UI the shell decides to
+    // show. nullptr keeps a failure quiet, which is the one thing that
+    // must not change — a dialog in front of a double-click is worse
+    // than no window at all.
+    ShellBrowseToFolder(nullptr, pidl);
+
     CoTaskMemFree(pidl);
 }
 

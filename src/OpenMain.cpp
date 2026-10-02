@@ -30,32 +30,73 @@
 #include <windows.h>
 #include <shlobj.h>
 #include <shellapi.h>
+#include <stdio.h>
+
+static void Trace(const wchar_t* what, HRESULT hr)
+{
+    // Silent by design, but not invisible. If an archive ever fails to
+    // open again, DebugView will say which of the three attempts was
+    // reached and what it returned, instead of leaving "nothing
+    // happens" as the only evidence.
+    wchar_t msg[256] = {};
+    swprintf_s(msg, L"[ArchiveFldrOpen] %s -> 0x%08X\n", what, (unsigned)hr);
+    OutputDebugStringW(msg);
+}
+
+// Ask Explorer to browse INTO the archive.
+//
+// Three ways, because the obvious one is wrong and the next one is not
+// guaranteed. Getting this right matters more than it looks: every one
+// of them fails silently, so a bad choice here is a double-click that
+// does nothing at all, with no error to go on.
+static bool BrowseTo(PCIDLIST_ABSOLUTE pidl)
+{
+    // 1. Open the item AS a folder. The empty child pidl is the known
+    //    way to say "this folder, nothing selected inside it" --
+    //    passing cidl = 0 instead would open the PARENT and select the
+    //    archive in it, which is the documented behaviour and the
+    //    opposite of what is wanted.
+    ITEMIDLIST idNull = {};
+    PCUITEMID_CHILD pidlNull[1] = { static_cast<PCUITEMID_CHILD>(&idNull) };
+    HRESULT hr = SHOpenFolderAndSelectItems(pidl, 1, pidlNull, 0);
+    Trace(L"SHOpenFolderAndSelectItems", hr);
+    if (SUCCEEDED(hr)) return true;
+
+    // 2. The "explore" verb. Deliberately not "open": open is the verb
+    //    that brought us here, so asking for it again is how a handler
+    //    invites the shell to call it back forever. Nothing registers
+    //    an explore verb on our ProgIDs, so this resolves to the Folder
+    //    class and stops there.
+    SHELLEXECUTEINFOW sei = { sizeof(sei) };
+    sei.fMask    = SEE_MASK_IDLIST | SEE_MASK_FLAG_NO_UI;
+    sei.lpIDList = const_cast<PIDLIST_ABSOLUTE>(pidl);
+    sei.lpVerb   = L"explore";
+    sei.nShow    = SW_SHOWNORMAL;
+    if (ShellExecuteExW(&sei)) { Trace(L"explore verb", S_OK); return true; }
+    Trace(L"explore verb failed, GetLastError",
+          HRESULT_FROM_WIN32(GetLastError()));
+
+    // 3. The Folder class's open verb, named outright. This was the
+    //    only attempt the first version made, and on its own it did
+    //    nothing -- hence the two above it.
+    sei.fMask  |= SEE_MASK_CLASSNAME;
+    sei.lpClass = L"Folder";
+    sei.lpVerb  = L"open";
+    if (ShellExecuteExW(&sei)) { Trace(L"Folder open verb", S_OK); return true; }
+    Trace(L"Folder open verb failed, GetLastError",
+          HRESULT_FROM_WIN32(GetLastError()));
+    return false;
+}
 
 static void BrowseArchive(const wchar_t* path)
 {
     if (!path || !*path) return;
 
     PIDLIST_ABSOLUTE pidl = nullptr;
-    if (FAILED(SHParseDisplayName(path, nullptr, &pidl, 0, nullptr)) || !pidl)
-        return;
+    const HRESULT hr = SHParseDisplayName(path, nullptr, &pidl, 0, nullptr);
+    if (FAILED(hr) || !pidl) { Trace(L"SHParseDisplayName", hr); return; }
 
-    SHELLEXECUTEINFOW sei = { sizeof(sei) };
-    sei.fMask    = SEE_MASK_IDLIST | SEE_MASK_CLASSNAME | SEE_MASK_FLAG_NO_UI;
-    sei.lpIDList = pidl;
-
-    // Name the Folder class explicitly. Left to itself the shell would
-    // look the extension up, find this program again, and the two would
-    // bounce off each other forever. Asking for Folder's open verb is
-    // what the registry command used to say out loud.
-    sei.lpClass  = L"Folder";
-    sei.lpVerb   = L"open";
-    sei.nShow    = SW_SHOWNORMAL;
-
-    // SEE_MASK_FLAG_NO_UI: a failure here must stay silent. A message
-    // box in front of a double-click is the one thing this must never
-    // do.
-    ShellExecuteExW(&sei);
-
+    BrowseTo(pidl);
     CoTaskMemFree(pidl);
 }
 

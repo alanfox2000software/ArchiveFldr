@@ -278,7 +278,10 @@ HRESULT CArchiveDataObject::RenderDescriptor(STGMEDIUM* pmed)
                                                    : FILE_ATTRIBUTE_NORMAL;
         fd.ftLastWriteTime  = it.entry.modifiedTime;
 
-        if (!it.entry.isDirectory)
+        // Only claim a size the archive actually reported. A .bz2 or raw
+        // .lz4 records none, and declaring FD_FILESIZE with the zero we
+        // use for "unknown" tells the shell to expect an empty file.
+        if (!it.entry.isDirectory && it.entry.sizeKnown)
         {
             fd.dwFlags |= FD_FILESIZE;
             fd.nFileSizeLow  = (DWORD)(it.entry.uncompressedSize & 0xFFFFFFFFull);

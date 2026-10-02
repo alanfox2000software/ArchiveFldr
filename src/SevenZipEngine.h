@@ -75,4 +75,9 @@ private:
     ComPtr<IInArchive7z>      m_archive;
     std::vector<ArchiveEntry> m_allEntries; // flat list, directories synthesized
     std::wstring              m_lastError;
+    // Name to give the payload of a single-stream container (.bz2, .gz,
+    // .xz), which carries no name of its own. Empty for every other
+    // archive. Both the listing and the extract callback read this, so
+    // the two cannot disagree about what the file is called.
+    std::wstring              m_innerName;
 };

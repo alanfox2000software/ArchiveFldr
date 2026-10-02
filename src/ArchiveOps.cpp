@@ -308,15 +308,14 @@ std::wstring FormatRatio(uint64_t uncompressed, uint64_t packed)
     if (uncompressed == 0) return L"";        // folders, empty files
     if (packed == 0)       return L"\u2014";  // not reported for this item
 
-    double r = 100.0 * (1.0 - (double)packed / (double)uncompressed);
-    if (r < -999.0 || r > 100.0) return L"\u2014";   // not a usable figure
-
-    // Containers that do not compress — tar, stored zip entries — report a
-    // packed size a shade larger than the file, because it includes the
-    // format's own padding (tar rounds every member up to 512 bytes). That
-    // lands just below zero and "%.0f" renders it as "-0%", which reads
-    // like a bug. Anything inside a percent of zero is zero.
-    if (r > -1.0 && r < 0.0) r = 0.0;
+    // Packed size as a percentage of the original, which is what every
+    // other archiver means by "ratio": 7-Zip and WinRAR both show 85% for
+    // a file that still takes 85% of its original room. This used to
+    // report the space saved instead, so that same file was labelled
+    // "15%" — a figure that reads like excellent compression and meant
+    // very nearly the opposite.
+    double r = 100.0 * (double)packed / (double)uncompressed;
+    if (r < 0.0 || r > 9999.0) return L"\u2014";   // not a usable figure
 
     wchar_t buf[32];
     swprintf_s(buf, 32, L"%.0f%%", r);

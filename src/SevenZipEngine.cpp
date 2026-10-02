@@ -431,6 +431,102 @@ private:
 };
 
 // ═════════════════════════════════════════════════════════
+// Method names
+// ═════════════════════════════════════════════════════════
+// kpidMethod is a human-readable coder chain ("LZMA2:24", "BCJ2") only
+// for the codecs the loaded 7z.dll knows by name. Anything else — every
+// external codec, in particular — comes back as the raw method ID in
+// hex, which is what put "04F71101" in the Method column instead of
+// "ZSTD". IDs are from DOC/Methods.txt in the 7-Zip source.
+struct MethodId { const wchar_t* id; const wchar_t* name; };
+static const MethodId kMethodIds[] = {
+    { L"00",       L"Copy"       },
+    { L"03",       L"Delta"      },
+    { L"04",       L"BCJ"        },
+    { L"05",       L"PPC"        },
+    { L"06",       L"IA64"       },
+    { L"07",       L"ARM"        },
+    { L"08",       L"ARMT"       },
+    { L"09",       L"SPARC"      },
+    { L"0A",       L"ARM64"      },
+    { L"0B",       L"RISCV"      },
+    { L"21",       L"LZMA2"      },
+    { L"030101",   L"LZMA"       },
+    { L"03030103", L"BCJ"        },
+    { L"0303011B", L"BCJ2"       },
+    { L"030401",   L"PPMd"       },
+    { L"040108",   L"Deflate"    },
+    { L"040109",   L"Deflate64"  },
+    { L"04015D",   L"ZSTD"       },
+    { L"04015F",   L"XZ"         },
+    { L"040162",   L"PPMd"       },
+    { L"040163",   L"WinZip AES" },
+    { L"040202",   L"BZip2"      },
+    { L"040301",   L"RAR1"       },
+    { L"040302",   L"RAR2"       },
+    { L"040303",   L"RAR3"       },
+    { L"040305",   L"RAR5"       },
+    { L"04F71101", L"ZSTD"       },
+    { L"04F71102", L"Brotli"     },
+    { L"04F71104", L"LZ4"        },
+    { L"04F71105", L"LZ5"        },
+    { L"04F71106", L"Lizard"     },
+    { L"06F10101", L"ZipCrypto"  },
+    { L"06F10303", L"RAR AES-128"},
+    { L"06F10701", L"AES-256"    },
+};
+
+// A raw ID is an even number of hex digits and nothing else. No codec
+// 7-Zip names in text is spellable in hex ("BCJ", "AES", "LZMA" and the
+// rest all contain non-hex letters), so there is nothing to collide with.
+static bool LooksLikeMethodId(const std::wstring& tok)
+{
+    if (tok.empty() || tok.size() > 16 || (tok.size() % 2) != 0) return false;
+    for (wchar_t c : tok)
+    {
+        const bool hex = (c >= L'0' && c <= L'9') ||
+                         (c >= L'A' && c <= L'F') ||
+                         (c >= L'a' && c <= L'f');
+        if (!hex) return false;
+    }
+    return true;
+}
+
+// Rewrite the hex members of a coder chain, leaving everything else —
+// names, ":24" dictionary suffixes, separators — exactly as reported.
+static std::wstring PrettifyMethod(const std::wstring& raw)
+{
+    if (raw.empty()) return raw;
+
+    std::wstring out;
+    size_t pos = 0;
+    while (pos <= raw.size())
+    {
+        size_t sp = raw.find(L' ', pos);
+        if (sp == std::wstring::npos) sp = raw.size();
+        std::wstring tok = raw.substr(pos, sp - pos);
+
+        if (LooksLikeMethodId(tok))
+        {
+            std::wstring upper = tok;
+            for (auto& c : upper)
+                if (c >= L'a' && c <= L'f') c = (wchar_t)(c - (L'a' - L'A'));
+            for (const auto& m : kMethodIds)
+                if (upper == m.id) { tok = m.name; break; }
+        }
+
+        if (!tok.empty())
+        {
+            if (!out.empty()) out += L' ';
+            out += tok;
+        }
+        if (sp >= raw.size()) break;
+        pos = sp + 1;
+    }
+    return out;
+}
+
+// ═════════════════════════════════════════════════════════
 // CArchiveExtractCallback
 // ═════════════════════════════════════════════════════════
 class CArchiveExtractCallback final : public IArchiveExtractCallback7z,
@@ -438,9 +534,11 @@ class CArchiveExtractCallback final : public IArchiveExtractCallback7z,
 {
 public:
     CArchiveExtractCallback(IInArchive7z* archive, std::wstring destDir,
-                             UINT32 totalCount, ProgressFn cb)
+                             UINT32 totalCount, ProgressFn cb,
+                             std::wstring fallbackName = std::wstring())
         : m_archive(archive), m_destDir(std::move(destDir)),
-          m_total(totalCount ? totalCount : 1), m_cb(std::move(cb)) {}
+          m_total(totalCount ? totalCount : 1), m_cb(std::move(cb)),
+          m_fallbackName(std::move(fallbackName)) {}
 
     bool HadError() const { return m_hadError; }
 
@@ -478,6 +576,13 @@ public:
         m_curDiskPath.clear();
 
         std::wstring path = PropGetString(m_archive, index, k7zPidPath);
+        // The payload of a single-stream container has no name of its
+        // own. The listing shows it named after the archive; extraction
+        // has to agree. Without this the destination path was the output
+        // directory itself, CreateFile failed, the item was skipped, and
+        // dragging the file out of the folder died as E_FAIL —
+        // "Error Copying File or Folder: Unspecified error".
+        if (path.empty()) path = m_fallbackName;
         for (auto& ch : path) if (ch == L'\\') ch = L'/';
         bool isDir = PropGetBool(m_archive, index, k7zPidIsDir, false);
         m_curMTime  = PropGetFileTime(m_archive, index, k7zPidMTime);
@@ -487,6 +592,10 @@ public:
 
         if (askExtractMode != N7zExtract::kExtract)
             return S_OK; // test / skip / read-external — no output stream needed
+
+        // Nothing to build a path out of: skip the item rather than
+        // writing to the directory itself.
+        if (path.empty()) return S_FALSE;
 
         std::wstring diskPath = m_destDir;
         if (!diskPath.empty() && diskPath.back() != L'\\') diskPath += L'\\';
@@ -584,6 +693,9 @@ private:
     UINT32         m_done = 0;
     ProgressFn     m_cb;
     bool           m_hadError = false;
+    // What to call the payload of a single-stream container, which
+    // reports no path of its own. Empty for every other archive.
+    std::wstring   m_fallbackName;
 
     bool                           m_curIsDir = false;
     std::wstring                   m_curPath;
@@ -792,6 +904,7 @@ void C7zArchiveEngine::Close()
 {
     if (m_archive) { m_archive->Close(); m_archive.Reset(); }
     m_allEntries.clear();
+    m_innerName.clear();
     m_open = false;
 }
 
@@ -802,6 +915,19 @@ void C7zArchiveEngine::BuildEntryList()
 
     UINT32 numItems = 0;
     m_archive->GetNumberOfItems(&numItems);
+
+    // A lone nameless payload is named after the archive. Decided here,
+    // once, so the extract callback can use the same answer.
+    m_innerName = (numItems == 1) ? Formats::InnerNameFor(m_filePath)
+                                  : std::wstring();
+
+    // Single-stream containers record almost nothing about what they
+    // hold: no name, usually no size, often no packed size and no
+    // timestamp. What the container itself can answer for, it should.
+    WIN32_FILE_ATTRIBUTE_DATA fad{};
+    const bool haveStat = GetFileAttributesExW(m_filePath.c_str(),
+                                               GetFileExInfoStandard,
+                                               &fad) != FALSE;
 
     std::unordered_map<std::wstring, bool> known;
     // index into m_allEntries -> solid block it belongs to
@@ -841,11 +967,11 @@ void C7zArchiveEngine::BuildEntryList()
             // used to skip the only item there was, leaving Explorer to
             // say "This folder is empty". Name it after the archive with
             // the suffix removed, which is what 7-Zip's own UI does.
-            if (path.empty())
+            const bool lonePayload = path.empty();
+            if (lonePayload)
             {
-                if (numItems != 1) continue;     // genuinely unnamed, skip
-                path = Formats::InnerNameFor(m_filePath);
-                if (path.empty()) continue;
+                path = m_innerName;              // empty unless numItems == 1
+                if (path.empty()) continue;      // genuinely unnamed, skip
             }
             size_t slash = path.rfind(L'/');
             std::wstring parent = (slash == std::wstring::npos) ? L"" : path.substr(0, slash + 1);
@@ -863,15 +989,51 @@ void C7zArchiveEngine::BuildEntryList()
                                                    k7zPidCRC, &e.crc32);
             e.modifiedTime       = PropGetFileTime(m_archive.Get(), i, k7zPidMTime);
             e.isEncrypted        = PropGetBool(m_archive.Get(), i, k7zPidEncrypted, false);
-            // kpidMethod is the per-item coder chain ("LZMA2:24", "Copy", …).
-            // Older engines leave it empty for some archives, hence the
-            // fallback — the details view shows this verbatim.
-            e.compressionMethod  = PropGetString(m_archive.Get(), i, k7zPidMethod);
+            // kpidMethod is the per-item coder chain ("LZMA2:24", "Copy", …),
+            // except for codecs the loaded 7z.dll has no name for, which
+            // arrive as a bare hex method ID — hence the lookup.
+            e.compressionMethod  = PrettifyMethod(
+                PropGetString(m_archive.Get(), i, k7zPidMethod));
             // Only .7z used to reach this engine, so an unreported method
             // was labelled "7z". Now that tar, zip, iso and the rest come
             // through here that would be a plain lie — a tar member is
             // stored, not 7z-compressed. Leave it empty and let the view
-            // show "Store", which is what an unreported method means.
+            // show "Store", which is what an unreported method means. The
+            // single-stream containers below are the one exception.
+
+            if (lonePayload)
+            {
+                // .bz2 and friends hold exactly one stream, compressed
+                // with the one codec the format is named after, so an
+                // unreported method here is not "stored" — it is BZip2.
+                if (e.compressionMethod.empty())
+                {
+                    const Formats::Format* f =
+                        Formats::Find(PathFindExtensionW(m_filePath.c_str()));
+                    e.compressionMethod = f ? std::wstring(f->name)
+                                            : m_formatName;
+                }
+                // bzip2 and xz record no original size. A handler that
+                // answers "0" for a stream plainly holding data has not
+                // reported a size at all, and the view must say so
+                // rather than print "0 KB" for a 2 MB file.
+                if (e.sizeKnown && e.uncompressedSize == 0 &&
+                    e.compressedSize > 0)
+                    e.sizeKnown = false;
+                // The whole file is the packed stream, so its size on
+                // disk is the packed size. Reporting 0 made the view
+                // print "0 KB" for a 1.9 MB file.
+                if (e.compressedSize == 0 && haveStat)
+                    e.compressedSize = ((uint64_t)fad.nFileSizeHigh << 32) |
+                                        fad.nFileSizeLow;
+                // Likewise the timestamp: gzip keeps one, bzip2 and xz
+                // do not, and the container's own is closer to the truth
+                // than a blank cell.
+                if (!e.modifiedTime.dwLowDateTime &&
+                    !e.modifiedTime.dwHighDateTime && haveStat)
+                    e.modifiedTime = fad.ftLastWriteTime;
+            }
+
             if (e.isEncrypted)
             {
                 e.compressionMethod = e.compressionMethod.empty()
@@ -1005,7 +1167,8 @@ bool C7zArchiveEngine::ExtractIndices(const std::vector<UINT32>& indices,
     SHCreateDirectoryExW(nullptr, destDir.c_str(), nullptr);
 
     auto* cbRaw = new CArchiveExtractCallback(m_archive.Get(), destDir,
-                                               (UINT32)indices.size(), cb);
+                                               (UINT32)indices.size(), cb,
+                                               m_innerName);
     ComPtr<IArchiveExtractCallback7z> extractCb;
     extractCb.Attach(cbRaw);
 
@@ -1078,7 +1241,8 @@ bool C7zArchiveEngine::Test(ProgressFn cb)
     UINT32 numItems = 0;
     m_archive->GetNumberOfItems(&numItems);
 
-    auto* cbRaw = new CArchiveExtractCallback(m_archive.Get(), L"", numItems, cb);
+    auto* cbRaw = new CArchiveExtractCallback(m_archive.Get(), L"", numItems, cb,
+                                               m_innerName);
     ComPtr<IArchiveExtractCallback7z> extractCb;
     extractCb.Attach(cbRaw);
 

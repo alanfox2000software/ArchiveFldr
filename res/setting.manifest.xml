@@ -12,14 +12,15 @@
 
   <description>
     ArchiveFldr Settings — preferences for the ArchiveFldr shell
-    extension. Runs as an ordinary program so the shell extension
-    does not have to carry a settings window into every process
-    that loads it.
+    extension. A separate program so the shell extension does not
+    have to carry a settings window into every process that loads
+    it, and so it can ask for the rights its machine-wide settings
+    need without the shell asking too.
   </description>
 
   <!-- ── Common Controls 6.0 (visual styles) ───────────── -->
-  <!-- Without this the tree view and the page controls fall back to
-       the Windows 95 look, and the dialog font comes out wrong. -->
+  <!-- Without this the tab strip and the list views fall back to the
+       Windows 95 look, and the dialog font comes out wrong. -->
   <dependency>
     <dependentAssembly>
       <assemblyIdentity
@@ -34,17 +35,16 @@
   </dependency>
 
   <!-- ── UAC ───────────────────────────────────────────── -->
-  <!-- asInvoker on purpose. Reading and changing preferences needs no
-       elevation, and demanding it would put a UAC prompt in front of
-       every visit to this window. Register / Unregister write to HKLM
-       and will fail without it; the Integration page says so when they
-       do, and the user can start this program as administrator (or use
-       regsvr32) for that one job. -->
+  <!-- requireAdministrator, because every setting this program owns is
+       machine-wide: preferences live in HKLM\SOFTWARE\ArchiveFldr and
+       the Install / Uninstall buttons register a shell extension for
+       every account. Asking once at launch is honest; the alternative
+       is a window that opens happily and then fails on save. -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>
         <requestedExecutionLevel
-          level             = "asInvoker"
+          level             = "requireAdministrator"
           uiAccess          = "false"
         />
       </requestedPrivileges>

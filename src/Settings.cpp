@@ -42,13 +42,61 @@ void Settings::WriteStr(HKEY hk, const wchar_t* n, const std::wstring& v) {
         (BYTE*)v.c_str(), (DWORD)((v.size()+1)*sizeof(wchar_t)));
 }
 
+// A ";"-separated extension list. The sentinel means "never written",
+// in which case the default is every registrable format -- the same list
+// registration itself uses, so a fresh install claims what it says it
+// claims rather than nothing.
+static void LoadAssoc(HKEY hk, const wchar_t* value,
+                      std::set<std::wstring>& out)
+{
+    wchar_t buf[8192] = {};
+    DWORD sz = sizeof(buf);
+    out.clear();
+    if (RegQueryValueExW(hk, value, nullptr, nullptr, (BYTE*)buf, &sz)
+            != ERROR_SUCCESS)
+    {
+        for (const auto* f : Formats::Registrable()) out.insert(f->ext);
+        return;
+    }
+
+    const std::wstring packed = buf;
+    size_t at = 0;
+    while (at <= packed.size())
+    {
+        size_t sep = packed.find(L';', at);
+        if (sep == std::wstring::npos) sep = packed.size();
+        if (sep > at)
+        {
+            std::wstring e = packed.substr(at, sep - at);
+            if (!e.empty() && e[0] != L'.') e = L"." + e;
+            for (auto& ch : e) ch = (wchar_t)towlower(ch);
+            out.insert(e);
+        }
+        if (sep == packed.size()) break;
+        at = sep + 1;
+    }
+}
+
+static std::wstring PackAssoc(const std::set<std::wstring>& in)
+{
+    std::wstring packed;
+    for (const auto& e : in)
+    {
+        if (!packed.empty()) packed += L';';
+        packed += e;
+    }
+    return packed;
+}
+
 // ── Load ──────────────────────────────────────────────────
 void Settings::Load()
 {
     HKEY hk = nullptr;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegKeySettings,
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, kRegKeySettings,
         0, nullptr, 0, KEY_READ, nullptr, &hk, nullptr) != ERROR_SUCCESS)
         return;
+
+    language            = ReadStr (hk, L"Language",        language.c_str());
 
     // General
     showPreviewPane     = ReadBool(hk, L"ShowPreview",      showPreviewPane);
@@ -63,49 +111,25 @@ void Settings::Load()
     createSolidArchive  = ReadBool(hk, L"SolidArchive",    createSolidArchive);
     encryptFileNames    = ReadBool(hk, L"EncryptNames",     encryptFileNames);
 
-    // Formats
-    // Associations: one REG_SZ holding ";"-separated extensions. The
-    // default, when the value has never been written, is every
-    // registrable format -- the same list registration uses.
-    {
-        const std::wstring packed = ReadStr(hk, L"Associations", L"\x01");
-        associatedExts.clear();
-        if (packed == L"\x01")
-        {
-            for (const auto* f : Formats::Registrable())
-                associatedExts.insert(f->ext);
-        }
-        else
-        {
-            size_t at = 0;
-            while (at <= packed.size())
-            {
-                size_t sep = packed.find(L';', at);
-                if (sep == std::wstring::npos) sep = packed.size();
-                if (sep > at)
-                {
-                    std::wstring e = packed.substr(at, sep - at);
-                    if (!e.empty() && e[0] != L'.') e = L"." + e;
-                    for (auto& ch : e) ch = (wchar_t)towlower(ch);
-                    associatedExts.insert(e);
-                }
-                if (sep == packed.size()) break;
-                at = sep + 1;
-            }
-        }
-    }
+    // Formats. Two REG_SZ values, each a ";"-separated extension list;
+    // absent means "never written", which defaults to every registrable
+    // format -- the same list registration itself uses.
+    LoadAssoc(hk, L"Associations32", assoc32);
+    LoadAssoc(hk, L"Associations64", assoc64);
     registerAsDefaultApp = ReadBool(hk, L"RegisterAsDefaultApp", registerAsDefaultApp);
 
     // Context menu
     ctxExtract       = ReadBool(hk, L"CtxExtract",      ctxExtract);
     ctxExtractHere   = ReadBool(hk, L"CtxExtractHere",  ctxExtractHere);
     ctxAddToArchive  = ReadBool(hk, L"CtxAdd",          ctxAddToArchive);
+    ctxCompressHere  = ReadBool(hk, L"CtxCompressHere",  ctxCompressHere);
     ctxCompressEmail = ReadBool(hk, L"CtxEmail",        ctxCompressEmail);
     ctxOpenInShell   = ReadBool(hk, L"CtxOpen",         ctxOpenInShell);
     ctxTestArchive   = ReadBool(hk, L"CtxTest",         ctxTestArchive);
     ctxArchiveInfo   = ReadBool(hk, L"CtxInfo",         ctxArchiveInfo);
     ctxSettings      = ReadBool(hk, L"CtxSettings",     ctxSettings);
     ctxUseSubMenu    = ReadBool(hk, L"CtxSubmenu",      ctxUseSubMenu);
+    ctxMenuIcons     = ReadBool(hk, L"CtxMenuIcons",    ctxMenuIcons);
     ctxSubMenuTitle  = ReadStr (hk, L"CtxSubmenuTitle", ctxSubMenuTitle.c_str());
 
     // Appearance
@@ -134,7 +158,7 @@ void Settings::Load()
 void Settings::Save() const
 {
     HKEY hk = nullptr;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegKeySettings,
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, kRegKeySettings,
         0, nullptr, 0, KEY_WRITE, nullptr, &hk, nullptr) != ERROR_SUCCESS)
         return;
 
@@ -152,29 +176,23 @@ void Settings::Save() const
     WriteBool (hk, L"EncryptNames",    encryptFileNames);
 
     // Formats
-    {
-        std::wstring packed;
-        for (const auto& e : associatedExts)
-        {
-            if (!packed.empty()) packed += L';';
-            packed += e;
-        }
-        RegSetValueExW(hk, L"Associations", 0, REG_SZ,
-                       (const BYTE*)packed.c_str(),
-                       (DWORD)((packed.size() + 1) * sizeof(wchar_t)));
-    }
+    WriteStr(hk, L"Associations32", PackAssoc(assoc32));
+    WriteStr(hk, L"Associations64", PackAssoc(assoc64));
     WriteBool(hk, L"RegisterAsDefaultApp", registerAsDefaultApp);
 
     // Context menu
+    WriteStr (hk, L"Language",        language);
     WriteBool(hk, L"CtxExtract",      ctxExtract);
     WriteBool(hk, L"CtxExtractHere",  ctxExtractHere);
     WriteBool(hk, L"CtxAdd",          ctxAddToArchive);
+    WriteBool(hk, L"CtxCompressHere", ctxCompressHere);
     WriteBool(hk, L"CtxEmail",        ctxCompressEmail);
     WriteBool(hk, L"CtxOpen",         ctxOpenInShell);
     WriteBool(hk, L"CtxTest",         ctxTestArchive);
     WriteBool(hk, L"CtxInfo",         ctxArchiveInfo);
     WriteBool(hk, L"CtxSettings",     ctxSettings);
     WriteBool(hk, L"CtxSubmenu",      ctxUseSubMenu);
+    WriteBool(hk, L"CtxMenuIcons",    ctxMenuIcons);
     WriteStr (hk, L"CtxSubmenuTitle", ctxSubMenuTitle);
 
     // Appearance
@@ -215,14 +233,21 @@ void Settings::Reset()
     encryptFileNames     = false;
 
     // ── Formats ───────────────────────────────────────────
-    associatedExts.clear();
+    assoc32.clear();
+    assoc64.clear();
     for (const auto* f : Formats::Registrable())
-        associatedExts.insert(f->ext);
+    {
+        assoc32.insert(f->ext);
+        assoc64.insert(f->ext);
+    }
     registerAsDefaultApp = false;
 
     // ── Context menu ──────────────────────────────────────
     ctxExtract       = true;
     ctxExtractHere   = true;
+    ctxCompressHere  = true;
+    ctxMenuIcons     = true;
+    language         = L"en";
     ctxAddToArchive  = true;
     ctxCompressEmail = true;
     ctxOpenInShell   = true;

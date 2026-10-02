@@ -522,7 +522,7 @@ static bool ExtensionIsWanted(const wchar_t* ext)
 {
     std::wstring low = ext ? ext : L"";
     for (auto& ch : low) ch = (wchar_t)towlower(ch);
-    const std::set<std::wstring>& wanted = Settings::Get().associatedExts;
+    const std::set<std::wstring>& wanted = Settings::Get().AssociatedHere();
     return wanted.find(low) != wanted.end();
 }
 
@@ -767,7 +767,7 @@ HRESULT CRegistry::RegisterCapabilities(const wchar_t* dllPath)
     // Windows reads this key to build the per-type list in Settings >
     // Default apps, so an unticked type simply never appears there.
     const std::wstring assoc = std::wstring(kCapabilitiesKey) + L"\\FileAssociations";
-    const std::set<std::wstring>& wanted = Settings::Get().associatedExts;
+    const std::set<std::wstring>& wanted = Settings::Get().AssociatedHere();
 
     // Clear first: an extension that was ticked last time and is not now
     // has to lose its value, not keep it.

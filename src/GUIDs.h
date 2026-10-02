@@ -65,7 +65,11 @@ static inline bool IsArchiveExtension(const wchar_t* ext) {
 }
 
 // ── Registry Key Paths ────────────────────────────────────
-static constexpr wchar_t kRegKeySettings[]  = L"Software\\ArchiveFldr\\Settings";
+// Machine-wide, per the project's design: one configuration for every
+// account, which is also where the shell extension's own registration
+// lives. Writing it needs administrator rights, so ArchiveFldrSetting.exe
+// asks for them in its manifest.
+static constexpr wchar_t kRegKeySettings[]  = L"SOFTWARE\\ArchiveFldr";
 static constexpr wchar_t kRegKeyClasses[]   = L"Software\\Classes";
 static constexpr wchar_t kRegKeyCLSID[]     = L"Software\\Classes\\CLSID";
 static constexpr wchar_t kRegKeyApproved[]  =

@@ -80,6 +80,7 @@
     <ClCompile Include="src\SysInfo.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\BrowseTo.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\Formats.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\Lang.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\Settings.cpp">
       <Filter>Source Files\Settings</Filter>
     </ClCompile>
@@ -107,6 +108,7 @@
     <ClInclude Include="src\UnrarEngine.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\SysInfo.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\Formats.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\Lang.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\Settings.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\BrowseTo.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="res\resource.h"><Filter>Header Files</Filter></ClInclude>

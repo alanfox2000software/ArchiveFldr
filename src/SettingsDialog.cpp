@@ -1,928 +1,1210 @@
-// SettingsDialog.cpp
+// SettingsDialog.cpp — see SettingsDialog.h
 #include "stdafx.h"
 #include "SettingsDialog.h"
-#include "Registry.h"
+#include "Settings.h"
 #include "Formats.h"
+#include "Registry.h"
 #include "GUIDs.h"
-#include "../res/resource.h"
+#include "Lang.h"
+#include <shlobj.h>
 
-// ═════════════════════════════════════════════════════════
-// Where things live
+// ─────────────────────────────────────────────────────────
+// Language keys that are not control ids
 //
-// This file used to be compiled into the shell extension, where the
-// module holding the dialog resources and the module Windows has to
-// register were the same file. In ArchiveFldrSetting.exe they are two
-// different files in the same folder, so the two uses have to be told
-// apart: resources come from this executable, registration acts on the
-// DLL next to it.
-// ═════════════════════════════════════════════════════════
+// Rows in a list control have no window of their own, so Lang::Apply
+// cannot reach them. They get ids of their own in the 2000 block and are
+// looked up by hand. Keep these in step with Lang\en.txt.
+// ─────────────────────────────────────────────────────────
+enum : UINT {
+    LNG_CTX_OPEN      = 2000,
+    LNG_CTX_EXTRACT   = 2001,
+    LNG_CTX_EXTHERE   = 2002,
+    LNG_CTX_TEST      = 2003,
+    LNG_CTX_ADD       = 2004,
+    LNG_CTX_ADDHERE   = 2005,
+    LNG_CTX_EMAIL     = 2006,
+    LNG_CTX_INFO      = 2007,
+    LNG_CTX_SETTINGS  = 2008,
+
+    LNG_COL_TYPE      = 2020,
+    LNG_COL_32        = 2021,
+    LNG_COL_64        = 2022,
+    LNG_COL_LANGUAGE  = 2023,
+    LNG_COL_LANG_EN   = 2024,
+
+    LNG_STATE_YES     = 2040,
+    LNG_STATE_NO      = 2041,
+    LNG_STATE_PARTIAL = 2042,
+    LNG_INSTALL_NOTE  = 2043,
+    LNG_INSTALL_OK    = 2044,
+    LNG_INSTALL_FAIL  = 2045,
+    LNG_UNINSTALL_OK  = 2046,
+    LNG_BROWSE_WORK   = 2047,
+    LNG_RESTART_SHELL = 2048,
+};
+
 namespace {
 
-HINSTANCE UiModule()
+// ── small helpers ────────────────────────────────────────
+
+HINSTANCE SelfInstance()
 {
-    return GetModuleHandleW(nullptr);
+    HMODULE h = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCWSTR)&SelfInstance, &h);
+    return (HINSTANCE)h;
 }
 
-std::wstring OwnFolder()
+std::wstring ExeDir()
 {
     wchar_t path[MAX_PATH] = {};
-    if (!GetModuleFileNameW(UiModule(), path, ARRAYSIZE(path))) return L"";
-    PathRemoveFileSpecW(path);
+    if (!GetModuleFileNameW(nullptr, path, ARRAYSIZE(path))) return L"";
+    wchar_t* slash = wcsrchr(path, L'\\');
+    if (!slash) return L"";
+    slash[1] = 0;
     return path;
 }
 
-// The shell extension this settings program belongs to. Both bitnesses
-// build into one folder, so the DLL carries the same tag the exe does;
-// a 64-bit settings program registers the 64-bit DLL.
-std::wstring ShellExtensionPath()
+// The pages live on the Options dialog, which keeps the C++ object in
+// DWLP_USER. Any control change routes through here to light up Apply.
+void MarkDirty(HWND page)
 {
-    const std::wstring dir = OwnFolder();
-    if (dir.empty()) return L"";
-    const wchar_t* tag = (sizeof(void*) == 8) ? L"64" : L"32";
-    std::wstring dll = dir + L"\\ArchiveFldr." + tag + L".dll";
-    if (!PathFileExistsW(dll.c_str()))
-        dll = dir + L"\\ArchiveFldr.dll";
-    return dll;
+    HWND owner = GetParent(page);
+    if (!owner) return;
+    auto* dlg = (CSettingsDialog*)GetWindowLongPtrW(owner, DWLP_USER);
+    if (dlg) dlg->EnableApply(true);
+}
+
+// Two 16x16 images, an empty check box and a ticked one, drawn by the
+// theme so they match every other check box on the dialog. Used for the
+// per-bitness columns on the System page, where LVS_EX_CHECKBOXES cannot
+// help: that style only ever draws in column zero.
+HIMAGELIST MakeCheckImages()
+{
+    const int cx = GetSystemMetrics(SM_CXMENUCHECK);
+    const int cy = GetSystemMetrics(SM_CYMENUCHECK);
+    const int w  = (cx > 0 ? cx : 13) + 2;
+    const int h  = (cy > 0 ? cy : 13) + 2;
+
+    HIMAGELIST il = ImageList_Create(w, h, ILC_COLOR32 | ILC_MASK, 2, 0);
+    if (!il) return nullptr;
+
+    HDC screen = GetDC(nullptr);
+    for (int checked = 0; checked < 2; ++checked)
+    {
+        HDC     dc  = CreateCompatibleDC(screen);
+        HBITMAP bmp = CreateCompatibleBitmap(screen, w, h);
+        HGDIOBJ old = SelectObject(dc, bmp);
+
+        RECT rc{ 0, 0, w, h };
+        // Magenta is the transparency key; nothing in a check box uses it.
+        HBRUSH key = CreateSolidBrush(RGB(255, 0, 255));
+        FillRect(dc, &rc, key);
+        DeleteObject(key);
+
+        RECT box{ 1, 1, w - 1, h - 1 };
+        DrawFrameControl(dc, &box, DFC_BUTTON,
+                         DFCS_BUTTONCHECK | DFCS_FLAT |
+                         (checked ? DFCS_CHECKED : 0));
+
+        SelectObject(dc, old);
+        DeleteDC(dc);
+        ImageList_AddMasked(il, bmp, RGB(255, 0, 255));
+        DeleteObject(bmp);
+    }
+    ReleaseDC(nullptr, screen);
+    return il;
+}
+
+void AddColumn(HWND list, int index, const wchar_t* text, int width, int fmt = LVCFMT_LEFT)
+{
+    LVCOLUMNW c{};
+    c.mask    = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
+    c.fmt     = fmt;
+    c.cx      = width;
+    c.iSubItem= index;
+    c.pszText = (LPWSTR)text;
+    ListView_InsertColumn(list, index, &c);
+}
+
+int AddRow(HWND list, int index, const wchar_t* text)
+{
+    LVITEMW it{};
+    it.mask     = LVIF_TEXT;
+    it.iItem    = index;
+    it.pszText  = (LPWSTR)text;
+    return ListView_InsertItem(list, &it);
+}
+
+void SetSub(HWND list, int row, int col, const wchar_t* text)
+{
+    ListView_SetItemText(list, row, col, (LPWSTR)text);
+}
+
+// Both shell extension DLLs, by the names the build produces.
+std::wstring DllPath(bool x64)
+{
+    return ExeDir() + (x64 ? L"ArchiveFldr.64.dll" : L"ArchiveFldr.32.dll");
+}
+
+bool DllPresent(bool x64)
+{
+    return PathFileExistsW(DllPath(x64).c_str());
+}
+
+// Is that DLL the one currently behind our CLSID?
+bool DllRegistered(bool x64)
+{
+    wchar_t clsid[64] = {};
+    if (!StringFromGUID2(CLSID_ArchiveFldrFolder, clsid, ARRAYSIZE(clsid)))
+        return false;
+
+    const std::wstring key =
+        std::wstring(L"SOFTWARE\\Classes\\CLSID\\") + clsid +
+        L"\\InProcServer32";
+
+    HKEY hk = nullptr;
+    const REGSAM view = x64 ? KEY_WOW64_64KEY : KEY_WOW64_32KEY;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key.c_str(), 0,
+                      KEY_QUERY_VALUE | view, &hk) != ERROR_SUCCESS)
+        return false;
+
+    wchar_t buf[MAX_PATH * 2] = {};
+    DWORD sz = sizeof(buf);
+    const bool got = RegQueryValueExW(hk, nullptr, nullptr, nullptr,
+                                      (BYTE*)buf, &sz) == ERROR_SUCCESS;
+    RegCloseKey(hk);
+    return got && buf[0] && PathFileExistsW(buf);
+}
+
+// regsvr32 for a given bitness. From a 64-bit process System32 is the
+// 64-bit tree and SysWOW64 the 32-bit one; from a 32-bit process on a
+// 32-bit Windows there is only System32. Either way this picks a
+// regsvr32 whose bitness matches the DLL, which is the whole point —
+// the wrong one fails with "the module is not compatible".
+bool RunRegsvr32(bool x64, bool unregister, DWORD* exitCode)
+{
+    wchar_t win[MAX_PATH] = {};
+    if (!GetWindowsDirectoryW(win, ARRAYSIZE(win))) return false;
+
+    std::wstring tool = win;
+    if (!tool.empty() && tool.back() != L'\\') tool += L'\\';
+#ifdef _WIN64
+    tool += x64 ? L"System32\\regsvr32.exe" : L"SysWOW64\\regsvr32.exe";
+#else
+    if (x64) return false;                 // a 32-bit build never does this
+    tool += L"System32\\regsvr32.exe";
+#endif
+    if (!PathFileExistsW(tool.c_str())) return false;
+
+    std::wstring args = L"\"" + tool + L"\" /s ";
+    if (unregister) args += L"/u ";
+    args += L"\"" + DllPath(x64) + L"\"";
+
+    STARTUPINFOW si{ sizeof(si) };
+    si.dwFlags     = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi{};
+
+    std::vector<wchar_t> cmd(args.begin(), args.end());
+    cmd.push_back(L'\0');
+
+    if (!CreateProcessW(tool.c_str(), cmd.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+        return false;
+
+    WaitForSingleObject(pi.hProcess, 60 * 1000);
+    DWORD code = (DWORD)-1;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    if (exitCode) *exitCode = code;
+    return code == 0;
+}
+
+std::wstring L(UINT id, const wchar_t* fallback)
+{
+    return Lang::Str(id, fallback);
 }
 
 } // namespace
 
 // ═════════════════════════════════════════════════════════
-// Helper: create a child dialog from a template ID
+// CPageSystem
 // ═════════════════════════════════════════════════════════
-static HWND CreatePageDialog(UINT idd, DLGPROC proc,
-                              LPARAM lParam, HWND hParent)
+CPageSystem::~CPageSystem()
 {
-    return CreateDialogParamW(UiModule(),
-        MAKEINTRESOURCEW(idd), hParent, proc, lParam);
+    if (m_imgs) ImageList_Destroy(m_imgs);
 }
 
-// ─────────────────────────────────────────────────────────
-// Helper: set checkbox state
-// ─────────────────────────────────────────────────────────
-static inline void SetChk(HWND hDlg, int id, bool v)
-    { CheckDlgButton(hDlg, id, v?BST_CHECKED:BST_UNCHECKED); }
-static inline bool GetChk(HWND hDlg, int id)
-    { return IsDlgButtonChecked(hDlg,id)==BST_CHECKED; }
-
-// ═════════════════════════════════════════════════════════
-// CPageGeneral
-// ═════════════════════════════════════════════════════════
-HWND CPageGeneral::Create(HWND hParent)
+HWND CPageSystem::Create(HWND parent)
 {
-    m_hwnd = CreatePageDialog(IDD_PAGE_GENERAL, DlgProc,
-        (LPARAM)this, hParent);
+    m_hwnd = CreateDialogParamW(SelfInstance(),
+                MAKEINTRESOURCEW(IDD_PAGE_SYSTEM), parent,
+                DlgProc, (LPARAM)this);
     return m_hwnd;
 }
-void CPageGeneral::Show(bool show)
-    { if(m_hwnd) ShowWindow(m_hwnd, show?SW_SHOW:SW_HIDE); }
-void CPageGeneral::Resize(const RECT& rc) {
-    if (m_hwnd) SetWindowPos(m_hwnd,nullptr,
-        rc.left,rc.top,rc.right-rc.left,rc.bottom-rc.top,
-        SWP_NOZORDER|SWP_NOACTIVATE);
-}
 
-void CPageGeneral::Load()
+void CPageSystem::Show(bool show)
 {
-    if (!m_hwnd) return;
-    auto& s = Settings::Get();
-    SetChk(m_hwnd, IDC_CHK_SHOW_PREVIEW,       s.showPreviewPane);
-    SetChk(m_hwnd, IDC_CHK_SHOW_THUMBNAILS,     s.showThumbnails);
-    SetChk(m_hwnd, IDC_CHK_CONTEXT_MENU,        s.showContextMenu);
-    CheckRadioButton(m_hwnd, IDC_CHK_OPEN_ON_DBLCLICK,
-                     IDC_CHK_EXTRACT_ON_DBLCLICK,
-                     s.openArchiveOnDblClk ? IDC_CHK_OPEN_ON_DBLCLICK
-                                           : IDC_CHK_EXTRACT_ON_DBLCLICK);
-    SetChk(m_hwnd, IDC_CHK_PROMPT_PATH,         s.promptForPath);
-    SetChk(m_hwnd, IDC_CHK_REMEMBER_PATH,       s.rememberLastPath);
-    SetChk(m_hwnd, IDC_CHK_SOLID_ARCHIVE,       s.createSolidArchive);
-    SetChk(m_hwnd, IDC_CHK_ENCRYPT_NAMES,       s.encryptFileNames);
-    SetDlgItemTextW(m_hwnd, IDC_EDIT_DEFAULT_PATH,
-        s.defaultExtractPath.c_str());
-    // Compression level combo
-    HWND hCombo = GetDlgItem(m_hwnd, IDC_COMBO_COMP_LEVEL);
-    SendMessageW(hCombo, CB_RESETCONTENT, 0, 0);
-    const wchar_t* lvls[] = {L"Store (0)",L"Fastest (1)",
-        L"Fast (3)",L"Normal (5)",L"Maximum (7)",L"Ultra (9)"};
-    int idxMap[] = {0,1,3,5,7,9};
-    for (auto lv : lvls)
-        SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)lv);
-    // Select current
-    int curLvl = (int)s.defaultCompLevel;
-    for (int i=0;i<6;i++) if(idxMap[i]==curLvl){ ComboBox_SetCurSel(hCombo,i); break; }
-
-    // Format combo
-    HWND hFmt = GetDlgItem(m_hwnd, IDC_COMBO_DEFAULT_FORMAT);
-    SendMessageW(hFmt, CB_RESETCONTENT, 0, 0);
-    const wchar_t* fmts[] = {L"ZIP",L"7-Zip",L"TAR",L"TAR+GZ",L"TAR+BZ2"};
-    for (auto f : fmts) SendMessageW(hFmt,CB_ADDSTRING,0,(LPARAM)f);
-    ComboBox_SetCurSel(hFmt, 0);
+    if (m_hwnd) ShowWindow(m_hwnd, show ? SW_SHOW : SW_HIDE);
 }
 
-void CPageGeneral::Save()
+void CPageSystem::Place(const RECT& rc)
 {
-    if (!m_hwnd) return;
-    auto& s = Settings::Get();
-    s.showPreviewPane    = GetChk(m_hwnd, IDC_CHK_SHOW_PREVIEW);
-    s.showThumbnails     = GetChk(m_hwnd, IDC_CHK_SHOW_THUMBNAILS);
-    s.showContextMenu    = GetChk(m_hwnd, IDC_CHK_CONTEXT_MENU);
-    s.openArchiveOnDblClk= GetChk(m_hwnd, IDC_CHK_OPEN_ON_DBLCLICK);
-    s.promptForPath      = GetChk(m_hwnd, IDC_CHK_PROMPT_PATH);
-    s.rememberLastPath   = GetChk(m_hwnd, IDC_CHK_REMEMBER_PATH);
-    s.createSolidArchive = GetChk(m_hwnd, IDC_CHK_SOLID_ARCHIVE);
-    s.encryptFileNames   = GetChk(m_hwnd, IDC_CHK_ENCRYPT_NAMES);
-    wchar_t buf[MAX_PATH]={};
-    GetDlgItemTextW(m_hwnd,IDC_EDIT_DEFAULT_PATH,buf,MAX_PATH);
-    s.defaultExtractPath = buf;
-    int lvlIdx[] = {0,1,3,5,7,9};
-    int sel = ComboBox_GetCurSel(GetDlgItem(m_hwnd,IDC_COMBO_COMP_LEVEL));
-    if (sel>=0&&sel<6) s.defaultCompLevel=(CompLevel)lvlIdx[sel];
-    m_dirty = false;
+    if (m_hwnd)
+        SetWindowPos(m_hwnd, HWND_TOP, rc.left, rc.top,
+                     rc.right - rc.left, rc.bottom - rc.top, SWP_NOZORDER);
 }
 
-INT_PTR CALLBACK CPageGeneral::DlgProc(
-    HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
+void CPageSystem::BuildList()
 {
-    CPageGeneral* p = nullptr;
-    if (msg==WM_INITDIALOG) {
-        p=(CPageGeneral*)lp;
-        SetWindowLongPtrW(hDlg,DWLP_USER,(LONG_PTR)p);
-        p->m_hwnd=hDlg; p->Load();
-        return TRUE;
-    }
-    p=(CPageGeneral*)GetWindowLongPtrW(hDlg,DWLP_USER);
-    if (!p) return FALSE;
+    m_list = GetDlgItem(m_hwnd, IDC_LIST_ASSOC);
+    if (!m_list) return;
 
-    if (msg==WM_COMMAND) {
-        WORD ctrl=LOWORD(wp), notif=HIWORD(wp);
-        if (notif==BN_CLICKED||notif==CBN_SELCHANGE||notif==EN_CHANGE)
-            p->m_dirty=true;
-        if (ctrl==IDC_BTN_BROWSE_PATH) {
-            wchar_t buf[MAX_PATH]={};
-            BROWSEINFOW bi{hDlg,nullptr,buf,
-                L"Default extract path:",
-                BIF_RETURNONLYFSDIRS|BIF_NEWDIALOGSTYLE};
-            LPITEMIDLIST pidl=SHBrowseForFolderW(&bi);
-            if (pidl) {
-                SHGetPathFromIDListW(pidl,buf);
-                CoTaskMemFree(pidl);
-                SetDlgItemTextW(hDlg,IDC_EDIT_DEFAULT_PATH,buf);
-                p->m_dirty=true;
-            }
-        }
-    }
-    return FALSE;
-}
+    ListView_SetExtendedListViewStyle(m_list,
+        LVS_EX_FULLROWSELECT | LVS_EX_SUBITEMIMAGES | LVS_EX_GRIDLINES);
 
-// ═════════════════════════════════════════════════════════
-// CPageFormats
-// ═════════════════════════════════════════════════════════
-HWND CPageFormats::Create(HWND hParent) {
-    m_hwnd = CreatePageDialog(IDD_PAGE_FORMATS, DlgProc,
-        (LPARAM)this, hParent);
-    return m_hwnd;
-}
-void CPageFormats::Show(bool show)
-    { if(m_hwnd) ShowWindow(m_hwnd, show?SW_SHOW:SW_HIDE); }
-void CPageFormats::Resize(const RECT& rc) {
-    if(m_hwnd) SetWindowPos(m_hwnd,nullptr,
-        rc.left,rc.top,rc.right-rc.left,rc.bottom-rc.top,
-        SWP_NOZORDER|SWP_NOACTIVATE);
-}
+    m_imgs = MakeCheckImages();
+    if (m_imgs) ListView_SetImageList(m_list, m_imgs, LVSIL_SMALL);
 
-void CPageFormats::BuildRows() {
-    // One row per registrable format, taken from Formats.cpp -- the same
-    // table registration walks. The old hand-written list of sixteen was
-    // both shorter than the real one (21) and wired to booleans nothing
-    // ever read.
-    m_rows.clear();
-    for (const auto* f : Formats::Registrable())
-        m_rows.push_back({ f->ext, f->name });
-}
+    int col = 0;
+    AddColumn(m_list, col++, L(LNG_COL_TYPE, L"File type").c_str(), 180);
 
-void CPageFormats::Load() {
-    if (!m_hwnd) return;
-    BuildRows();
-    HWND hList = GetDlgItem(m_hwnd, IDC_LIST_FORMATS);
-    ListView_DeleteAllItems(hList);
-    // Add columns if not yet added
-    if (Header_GetItemCount(ListView_GetHeader(hList))==0) {
-        LVCOLUMNW c{LVCF_TEXT|LVCF_WIDTH,LVCFMT_LEFT,240,(LPWSTR)L"Extension"};
-        ListView_InsertColumn(hList,0,&c);
-        c.pszText=(LPWSTR)L"Description"; c.cx=200;
-        ListView_InsertColumn(hList,1,&c);
-        ListView_SetExtendedListViewStyle(hList,
-            LVS_EX_CHECKBOXES|LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER);
-    }
-    const auto& assoc = Settings::Get().associatedExts;
-    for (int i=0;i<(int)m_rows.size();i++) {
-        LVITEMW item{LVIF_TEXT,(int)i,0,0,0,(LPWSTR)m_rows[i].ext};
-        ListView_InsertItem(hList,&item);
-        ListView_SetItemText(hList,i,1,(LPWSTR)m_rows[i].desc);
-        std::wstring e = m_rows[i].ext;
-        for (auto& ch : e) ch = (wchar_t)towlower(ch);
-        ListView_SetCheckState(hList,i, assoc.count(e) ? TRUE : FALSE);
-    }
-}
+#ifdef _WIN64
+    // A 64-bit settings program manages both DLLs; a 32-bit one runs on a
+    // 32-bit Windows, where there is no 64-bit shell to register into.
+    m_col32 = col; AddColumn(m_list, col++, L(LNG_COL_32, L"32-bit").c_str(), 60, LVCFMT_LEFT);
+    m_col64 = col; AddColumn(m_list, col++, L(LNG_COL_64, L"64-bit").c_str(), 60, LVCFMT_LEFT);
+#else
+    m_col32 = col; AddColumn(m_list, col++, L(LNG_COL_32, L"32-bit").c_str(), 60, LVCFMT_LEFT);
+#endif
 
-void CPageFormats::Save() {
-    if (!m_hwnd) return;
-    HWND hList = GetDlgItem(m_hwnd, IDC_LIST_FORMATS);
-    auto& assoc = Settings::Get().associatedExts;
-    assoc.clear();
-    for (int i=0;i<(int)m_rows.size();i++) {
-        if (!ListView_GetCheckState(hList,i)) continue;
-        std::wstring e = m_rows[i].ext;
-        for (auto& ch : e) ch = (wchar_t)towlower(ch);
-        assoc.insert(e);
-    }
-    m_dirty = false;
-}
-
-INT_PTR CALLBACK CPageFormats::DlgProc(
-    HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
-{
-    CPageFormats* p = nullptr;
-    if (msg==WM_INITDIALOG) {
-        p=(CPageFormats*)lp;
-        SetWindowLongPtrW(hDlg,DWLP_USER,(LONG_PTR)p);
-        p->m_hwnd=hDlg; p->Load();
-        return TRUE;
-    }
-    p=(CPageFormats*)GetWindowLongPtrW(hDlg,DWLP_USER);
-    if (!p) return FALSE;
-
-    if (msg==WM_COMMAND) {
-        HWND hList=GetDlgItem(hDlg,IDC_LIST_FORMATS);
-        int n=ListView_GetItemCount(hList);
-        if (LOWORD(wp)==IDC_BTN_CHECKALL_FMT) {
-            for(int i=0;i<n;i++) ListView_SetCheckState(hList,i,TRUE);
-            p->m_dirty=true;
-        }
-        if (LOWORD(wp)==IDC_BTN_UNCHECKALL_FMT) {
-            for(int i=0;i<n;i++) ListView_SetCheckState(hList,i,FALSE);
-            p->m_dirty=true;
-        }
-    }
-    if (msg==WM_NOTIFY) {
-        auto* nm=(NMHDR*)lp;
-        if (nm->code==LVN_ITEMCHANGED) p->m_dirty=true;
-    }
-    return FALSE;
-}
-
-// ═════════════════════════════════════════════════════════
-// CPageIntegration
-// ═════════════════════════════════════════════════════════
-HWND CPageIntegration::Create(HWND hParent) {
-    m_hwnd = CreatePageDialog(IDD_PAGE_INTEGRATION, DlgProc,
-        (LPARAM)this, hParent);
-    return m_hwnd;
-}
-void CPageIntegration::Show(bool show)
-    { if(m_hwnd) ShowWindow(m_hwnd,show?SW_SHOW:SW_HIDE); }
-void CPageIntegration::Resize(const RECT& rc) {
-    if(m_hwnd) SetWindowPos(m_hwnd,nullptr,
-        rc.left,rc.top,rc.right-rc.left,rc.bottom-rc.top,
-        SWP_NOZORDER|SWP_NOACTIVATE);
-}
-// Read one string value; empty when the key or value is absent.
-static std::wstring ReadRegString(HKEY root, const std::wstring& key,
-                                  const wchar_t* value)
-{
-    HKEY hk = nullptr;
-    if (RegOpenKeyExW(root, key.c_str(), 0, KEY_QUERY_VALUE, &hk)
-            != ERROR_SUCCESS)
-        return L"";
-    wchar_t buf[1024] = {};
-    DWORD cb = sizeof(buf), type = 0;
-    const LONG rc = RegQueryValueExW(hk, value, nullptr, &type,
-                                     reinterpret_cast<BYTE*>(buf), &cb);
-    RegCloseKey(hk);
-    if (rc != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ))
-        return L"";
-    return buf;
-}
-
-// What Windows runs for the open verb of the first file type ArchiveFldr
-// registers. Shown on the Integration page because "nothing happens when I
-// double-click" is otherwise unanswerable from outside the registry: this
-// says whether the file type is wired to Explorer at all.
-static std::wstring RegisteredOpenCommand()
-{
+    m_exts.clear();
+    int row = 0;
     for (const auto* f : Formats::Registrable())
     {
-        const std::wstring cmd = ReadRegString(HKEY_LOCAL_MACHINE,
-            std::wstring(L"Software\\Classes\\") + f->progId +
-            L"\\shell\\open\\command", nullptr);
-        if (!cmd.empty()) return cmd;
+        std::wstring label = std::wstring(f->ext + 1);   // drop the dot
+        for (auto& ch : label) ch = (wchar_t)towupper(ch);
+        label += L"   (" + std::wstring(f->name) + L")";
+
+        AddRow(m_list, row, label.c_str());
+        m_exts.push_back(f->ext);
+        ++row;
     }
-    return L"(nothing registered)";
 }
 
-void CPageIntegration::Load() {
-    if (!m_hwnd) return;
-    auto& s = Settings::Get();
-    SetChk(m_hwnd, IDC_CHK_CONTEXT_MENU_MASTER, s.showContextMenu);
-    SetChk(m_hwnd, IDC_CHK_DEFAULT_APP,         s.registerAsDefaultApp);
-    SetChk(m_hwnd, IDC_CHK_CTX_EXTRACT,        s.ctxExtract);
-    SetChk(m_hwnd, IDC_CHK_CTX_EXTRACTHERE,    s.ctxExtractHere);
-    SetChk(m_hwnd, IDC_CHK_CTX_ADDTOARCH,      s.ctxAddToArchive);
-    SetChk(m_hwnd, IDC_CHK_CTX_COMPRESSEMAIL,  s.ctxCompressEmail);
-    SetChk(m_hwnd, IDC_CHK_CTX_OPENINSH,       s.ctxOpenInShell);
-    SetChk(m_hwnd, IDC_CHK_CTX_TESTARCH,       s.ctxTestArchive);
-    SetChk(m_hwnd, IDC_CHK_CTX_ARCHINFO,       s.ctxArchiveInfo);
-    SetChk(m_hwnd, IDC_CHK_CTX_SETTINGS,       s.ctxSettings);
-    SetChk(m_hwnd, IDC_CHK_CTX_SUBMENU,        s.ctxUseSubMenu);
-    SetDlgItemTextW(m_hwnd, IDC_EDIT_SUBMENU_TITLE, s.ctxSubMenuTitle.c_str());
-
-    // Registration status.
-    //
-    // This used to report "Registered" whenever the Approved key could be
-    // opened — a key that exists on every Windows install, so the answer
-    // was always yes. Ask the question that actually matters instead: is
-    // the namespace extension's COM server registered, and is the file it
-    // names still there?
-    const std::wstring dllPath = ShellExtensionPath();
-    const bool registered = []{
-        wchar_t sid[64] = {};
-        StringFromGUID2(CLSID_ArchiveFldrFolder, sid, ARRAYSIZE(sid));
-        const std::wstring key = std::wstring(L"Software\\Classes\\CLSID\\") +
-                                 sid + L"\\InProcServer32";
-        const std::wstring server = ReadRegString(HKEY_LOCAL_MACHINE, key, nullptr);
-        return !server.empty() && PathFileExistsW(server.c_str());
-    }();
-    // What the registry actually says, which is not necessarily what the
-    // checkboxes were left at: writing needs admin and can have failed.
-    const bool advertised = []{
-        HKEY hk = nullptr;
-        bool ok = false;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-                          L"Software\\RegisteredApplications", 0,
-                          KEY_QUERY_VALUE, &hk) == ERROR_SUCCESS)
-        {
-            ok = RegQueryValueExW(hk, L"ArchiveFldr", nullptr, nullptr,
-                                  nullptr, nullptr) == ERROR_SUCCESS;
-            RegCloseKey(hk);
-        }
-        return ok;
-    }();
-
-    std::wstring status = registered ? L"\u2713 Registered"
-                                     : L"\u2717 Not registered";
-    status += advertised ? L"  \u2022  listed in Default apps"
-                         : L"  \u2022  not listed in Default apps";
-
-    // Second line: the command Windows runs when an archive is opened. It
-    // should name Explorer.exe with /idlist, the same verb the built-in zip
-    // folder uses; anything else means another program owns the type.
-    status += L"\r\n";
-    status += L"Opens with: " + RegisteredOpenCommand();
-
-    SetDlgItemTextW(m_hwnd, IDC_LBL_STATUS_REG, status.c_str());
+bool CPageSystem::Ticked(int row, int col) const
+{
+    if (col < 0) return false;
+    LVITEMW it{};
+    it.mask     = LVIF_IMAGE;
+    it.iItem    = row;
+    it.iSubItem = col;
+    if (!ListView_GetItem(m_list, &it)) return false;
+    return it.iImage == 1;
 }
-void CPageIntegration::Save() {
-    if (!m_hwnd) return;
-    auto& s = Settings::Get();
-    s.showContextMenu     = GetChk(m_hwnd, IDC_CHK_CONTEXT_MENU_MASTER);
-    s.registerAsDefaultApp= GetChk(m_hwnd, IDC_CHK_DEFAULT_APP);
-    s.ctxExtract      = GetChk(m_hwnd, IDC_CHK_CTX_EXTRACT);
-    s.ctxExtractHere  = GetChk(m_hwnd, IDC_CHK_CTX_EXTRACTHERE);
-    s.ctxAddToArchive = GetChk(m_hwnd, IDC_CHK_CTX_ADDTOARCH);
-    s.ctxCompressEmail= GetChk(m_hwnd, IDC_CHK_CTX_COMPRESSEMAIL);
-    s.ctxOpenInShell  = GetChk(m_hwnd, IDC_CHK_CTX_OPENINSH);
-    s.ctxTestArchive  = GetChk(m_hwnd, IDC_CHK_CTX_TESTARCH);
-    s.ctxArchiveInfo  = GetChk(m_hwnd, IDC_CHK_CTX_ARCHINFO);
-    s.ctxSettings     = GetChk(m_hwnd, IDC_CHK_CTX_SETTINGS);
-    s.ctxUseSubMenu   = GetChk(m_hwnd, IDC_CHK_CTX_SUBMENU);
-    wchar_t buf[128]={};
-    GetDlgItemTextW(m_hwnd,IDC_EDIT_SUBMENU_TITLE,buf,128);
-    s.ctxSubMenuTitle = buf;
+
+void CPageSystem::SetTick(int row, int col, bool on)
+{
+    if (col < 0) return;
+    LVITEMW it{};
+    it.mask     = LVIF_IMAGE;
+    it.iItem    = row;
+    it.iSubItem = col;
+    it.iImage   = on ? 1 : 0;
+    ListView_SetItem(m_list, &it);
+}
+
+void CPageSystem::Toggle(int row, int col)
+{
+    if (col < 0 || row < 0) return;
+    SetTick(row, col, !Ticked(row, col));
+    m_dirty = true;
+    MarkDirty(m_hwnd);
+}
+
+void CPageSystem::SetAll(int col, bool on)
+{
+    if (col < 0) return;
+    for (size_t i = 0; i < m_exts.size(); ++i) SetTick((int)i, col, on);
+    m_dirty = true;
+    MarkDirty(m_hwnd);
+}
+
+void CPageSystem::Load()
+{
+    if (!m_list) return;
+    const Settings& s = Settings::Get();
+    for (size_t i = 0; i < m_exts.size(); ++i)
+    {
+        SetTick((int)i, m_col32, s.assoc32.count(m_exts[i]) != 0);
+        SetTick((int)i, m_col64, s.assoc64.count(m_exts[i]) != 0);
+    }
     m_dirty = false;
 }
-INT_PTR CALLBACK CPageIntegration::DlgProc(
-    HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
+
+void CPageSystem::Save()
 {
-    CPageIntegration* p=nullptr;
-    if (msg==WM_INITDIALOG) {
-        p=(CPageIntegration*)lp;
-        SetWindowLongPtrW(hDlg,DWLP_USER,(LONG_PTR)p);
-        p->m_hwnd=hDlg; p->Load(); return TRUE;
+    if (!m_list) return;
+    Settings& s = Settings::Get();
+    if (m_col32 >= 0) s.assoc32.clear();
+    if (m_col64 >= 0) s.assoc64.clear();
+
+    for (size_t i = 0; i < m_exts.size(); ++i)
+    {
+        if (m_col32 >= 0 && Ticked((int)i, m_col32)) s.assoc32.insert(m_exts[i]);
+        if (m_col64 >= 0 && Ticked((int)i, m_col64)) s.assoc64.insert(m_exts[i]);
     }
-    p=(CPageIntegration*)GetWindowLongPtrW(hDlg,DWLP_USER);
-    if (!p) return FALSE;
-
-    if (msg==WM_COMMAND) {
-        WORD ctrl=LOWORD(wp);
-        if (ctrl==IDC_BTN_REGISTER) {
-            const std::wstring path = ShellExtensionPath();
-            HRESULT hr = path.empty() || !PathFileExistsW(path.c_str())
-                       ? HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
-                       : CRegistry::RegisterAll(path.c_str());
-            SetDlgItemTextW(hDlg, IDC_LBL_STATUS_REG,
-                SUCCEEDED(hr) ? L"✓ Registered successfully"
-                              : L"✗ Registration failed (run as admin)");
-        }
-        if (ctrl==IDC_BTN_UNREGISTER) {
-            HRESULT hr = CRegistry::UnregisterAll();
-            SetDlgItemTextW(hDlg, IDC_LBL_STATUS_REG,
-                SUCCEEDED(hr) ? L"\u2717 Unregistered"
-                              : L"\u2717 Unregister failed (run as admin)");
-        }
-        // Ticking the box takes effect immediately: the point of it is
-        // to appear in Default apps, and waiting for the next
-        // registration would make it look broken.
-        if (ctrl==IDC_CHK_DEFAULT_APP) {
-            p->Save();
-            const bool want = Settings::Get().registerAsDefaultApp;
-            const std::wstring dll = ShellExtensionPath();
-            HRESULT hr = want ? CRegistry::RegisterCapabilities(dll.c_str())
-                              : CRegistry::UnregisterCapabilities();
-            if (FAILED(hr))
-            {
-                MessageBoxW(hDlg,
-                    L"That setting is stored in HKEY_LOCAL_MACHINE, which "
-                    L"needs administrator rights.\n\nYour choice has been "
-                    L"saved and will be applied the next time ArchiveFldr "
-                    L"is registered from an elevated prompt.",
-                    L"ArchiveFldr", MB_ICONINFORMATION | MB_OK);
-            }
-            p->Load();
-        }
-        if (ctrl==IDC_BTN_OPEN_DEFAULTAPPS) {
-            // Windows 10/11 settings page; older releases get the
-            // control-panel applet that does the same job.
-            SHELLEXECUTEINFOW sei{ sizeof(sei) };
-            sei.fMask  = SEE_MASK_FLAG_NO_UI;
-            sei.hwnd   = hDlg;
-            sei.lpVerb = L"open";
-            sei.lpFile = L"ms-settings:defaultapps";
-            sei.nShow  = SW_SHOWNORMAL;
-            if (!ShellExecuteExW(&sei))
-                ShellExecuteW(hDlg, L"open", L"control.exe",
-                              L"/name Microsoft.DefaultPrograms "
-                              L"/page pageDefaultProgram",
-                              nullptr, SW_SHOWNORMAL);
-        }
-        if (HIWORD(wp)==BN_CLICKED||HIWORD(wp)==EN_CHANGE)
-            p->m_dirty=true;
-    }
-    return FALSE;
+    m_dirty = false;
 }
 
-// ═════════════════════════════════════════════════════════
-// CPageAppearance
-// ═════════════════════════════════════════════════════════
-HWND CPageAppearance::Create(HWND hParent) {
-    m_hwnd = CreatePageDialog(IDD_PAGE_APPEARANCE, DlgProc,
-        (LPARAM)this, hParent);
-    return m_hwnd;
-}
-void CPageAppearance::Show(bool show)
-    { if(m_hwnd) ShowWindow(m_hwnd,show?SW_SHOW:SW_HIDE); }
-void CPageAppearance::Resize(const RECT& rc) {
-    if(m_hwnd) SetWindowPos(m_hwnd,nullptr,
-        rc.left,rc.top,rc.right-rc.left,rc.bottom-rc.top,
-        SWP_NOZORDER|SWP_NOACTIVATE);
-}
-void CPageAppearance::Load() {
-    if (!m_hwnd) return;
-    auto& s = Settings::Get();
-    SetChk(m_hwnd, IDC_CHK_SHOW_SIZE_COL,    s.showSizeColumn);
-    SetChk(m_hwnd, IDC_CHK_SHOW_DATE_COL,    s.showDateColumn);
-    SetChk(m_hwnd, IDC_CHK_SHOW_RATIO_COL,   s.showRatioColumn);
-    SetChk(m_hwnd, IDC_CHK_SHOW_METHOD_COL,  s.showMethodColumn);
-    SetChk(m_hwnd, IDC_CHK_SHOW_CRC_COL,     s.showCrcColumn);
-    SetChk(m_hwnd, IDC_CHK_ALTERNATE_ROWS,   s.alternateRowColors);
-
-    HWND hDateCombo = GetDlgItem(m_hwnd, IDC_COMBO_DATE_FORMAT);
-    SendMessageW(hDateCombo,CB_RESETCONTENT,0,0);
-    const wchar_t* dfmts[]={L"ISO 8601 (2024-12-31)",
-        L"DD/MM/YYYY",L"MM/DD/YYYY",L"Relative (2 hrs ago)"};
-    for (auto d:dfmts) SendMessageW(hDateCombo,CB_ADDSTRING,0,(LPARAM)d);
-    ComboBox_SetCurSel(hDateCombo,(int)s.dateFormat);
-
-    // Font preview
-    wchar_t fontDesc[64];
-    swprintf_s(fontDesc,64,L"%s %dpt",s.fontFace.c_str(),s.fontSize);
-    SetDlgItemTextW(m_hwnd,IDC_STATIC_FONT_PREVIEW,fontDesc);
-}
-void CPageAppearance::Save() {
-    if (!m_hwnd) return;
-    auto& s = Settings::Get();
-    s.showSizeColumn   = GetChk(m_hwnd, IDC_CHK_SHOW_SIZE_COL);
-    s.showDateColumn   = GetChk(m_hwnd, IDC_CHK_SHOW_DATE_COL);
-    s.showRatioColumn  = GetChk(m_hwnd, IDC_CHK_SHOW_RATIO_COL);
-    s.showMethodColumn = GetChk(m_hwnd, IDC_CHK_SHOW_METHOD_COL);
-    s.showCrcColumn    = GetChk(m_hwnd, IDC_CHK_SHOW_CRC_COL);
-    s.alternateRowColors=GetChk(m_hwnd, IDC_CHK_ALTERNATE_ROWS);
-    int sel=ComboBox_GetCurSel(GetDlgItem(m_hwnd,IDC_COMBO_DATE_FORMAT));
-    if (sel>=0) s.dateFormat=(DateFmt)sel;
-    m_dirty=false;
-}
-INT_PTR CALLBACK CPageAppearance::DlgProc(
-    HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
+void CPageSystem::Retranslate()
 {
-    CPageAppearance* p=nullptr;
-    if (msg==WM_INITDIALOG) {
-        p=(CPageAppearance*)lp;
-        SetWindowLongPtrW(hDlg,DWLP_USER,(LONG_PTR)p);
-        p->m_hwnd=hDlg; p->Load(); return TRUE;
-    }
-    p=(CPageAppearance*)GetWindowLongPtrW(hDlg,DWLP_USER);
-    if (!p) return FALSE;
-
-    if (msg==WM_COMMAND) {
-        if (LOWORD(wp)==IDC_BTN_FONT) {
-            CHOOSEFONTW cf{sizeof(cf)};
-            LOGFONTW lf{}; wcscpy_s(lf.lfFaceName,
-                Settings::Get().fontFace.c_str());
-            lf.lfHeight = -Settings::Get().fontSize;
-            cf.lpLogFont=&lf; cf.Flags=CF_SCREENFONTS|CF_INITTOLOGFONTSTRUCT;
-            if (ChooseFontW(&cf)) {
-                Settings::Get().fontFace = lf.lfFaceName;
-                Settings::Get().fontSize = abs(lf.lfHeight);
-                wchar_t fd[64];
-                swprintf_s(fd,64,L"%s %dpt",lf.lfFaceName,abs(lf.lfHeight));
-                SetDlgItemTextW(hDlg,IDC_STATIC_FONT_PREVIEW,fd);
-                p->m_dirty=true;
-            }
-        }
-        if (HIWORD(wp)==BN_CLICKED||HIWORD(wp)==CBN_SELCHANGE)
-            p->m_dirty=true;
-    }
-    return FALSE;
-}
-
-// ═════════════════════════════════════════════════════════
-// CPageAdvanced
-// ═════════════════════════════════════════════════════════
-HWND CPageAdvanced::Create(HWND hParent) {
-    m_hwnd = CreatePageDialog(IDD_PAGE_ADVANCED, DlgProc,
-        (LPARAM)this, hParent);
-    return m_hwnd;
-}
-void CPageAdvanced::Show(bool show)
-    { if(m_hwnd) ShowWindow(m_hwnd,show?SW_SHOW:SW_HIDE); }
-void CPageAdvanced::Resize(const RECT& rc) {
-    if(m_hwnd) SetWindowPos(m_hwnd,nullptr,
-        rc.left,rc.top,rc.right-rc.left,rc.bottom-rc.top,
-        SWP_NOZORDER|SWP_NOACTIVATE);
-}
-void CPageAdvanced::Load() {
     if (!m_hwnd) return;
-    auto& s = Settings::Get();
-    SetChk(m_hwnd, IDC_CHK_MULTITHREADED, s.multiThreaded);
-    SetChk(m_hwnd, IDC_CHK_USE_TEMP_DIR,  s.useTempDir);
-    SetChk(m_hwnd, IDC_CHK_LOG_ERRORS,    s.logErrors);
-    SetDlgItemInt (m_hwnd, IDC_EDIT_THREAD_COUNT, s.threadCount, FALSE);
-    SetDlgItemTextW(m_hwnd, IDC_EDIT_TEMP_DIR,  s.tempDirPath.c_str());
-    SetDlgItemTextW(m_hwnd, IDC_EDIT_LOG_PATH,  s.logFilePath.c_str());
+    Lang::Apply(m_hwnd, IDD_PAGE_SYSTEM);
+    if (!m_list) return;
 
-    // Spin control: 0 means "let 7-Zip decide", so the range starts there.
-    SendDlgItemMessageW(m_hwnd, IDC_SPIN_THREAD_COUNT,
-        UDM_SETRANGE32, 0, 64);
-    SendDlgItemMessageW(m_hwnd, IDC_SPIN_THREAD_COUNT,
-        UDM_SETPOS32, 0, s.threadCount);
-}
-void CPageAdvanced::Save() {
-    if (!m_hwnd) return;
-    auto& s = Settings::Get();
-    s.multiThreaded  = GetChk(m_hwnd, IDC_CHK_MULTITHREADED);
-    s.useTempDir     = GetChk(m_hwnd, IDC_CHK_USE_TEMP_DIR);
-    s.logErrors      = GetChk(m_hwnd, IDC_CHK_LOG_ERRORS);
-    s.threadCount    = GetDlgItemInt(m_hwnd,IDC_EDIT_THREAD_COUNT,nullptr,FALSE);
-    wchar_t buf[MAX_PATH]={};
-    GetDlgItemTextW(m_hwnd,IDC_EDIT_TEMP_DIR,buf,MAX_PATH);
-    s.tempDirPath=buf;
-    GetDlgItemTextW(m_hwnd,IDC_EDIT_LOG_PATH,buf,MAX_PATH);
-    s.logFilePath=buf;
-    m_dirty=false;
-}
-INT_PTR CALLBACK CPageAdvanced::DlgProc(
-    HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
-{
-    CPageAdvanced* p=nullptr;
-    if (msg==WM_INITDIALOG) {
-        p=(CPageAdvanced*)lp;
-        SetWindowLongPtrW(hDlg,DWLP_USER,(LONG_PTR)p);
-        p->m_hwnd=hDlg; p->Load(); return TRUE;
+    LVCOLUMNW c{};
+    c.mask = LVCF_TEXT;
+    std::wstring t = L(LNG_COL_TYPE, L"File type");
+    c.pszText = (LPWSTR)t.c_str();
+    ListView_SetColumn(m_list, 0, &c);
+    if (m_col32 >= 0) {
+        std::wstring a = L(LNG_COL_32, L"32-bit");
+        c.pszText = (LPWSTR)a.c_str();
+        ListView_SetColumn(m_list, m_col32, &c);
     }
-    p=(CPageAdvanced*)GetWindowLongPtrW(hDlg,DWLP_USER);
-    if (!p) return FALSE;
-
-    if (msg==WM_COMMAND) {
-        auto browsePath = [&](int editId) {
-            wchar_t buf[MAX_PATH]={};
-            BROWSEINFOW bi{hDlg,nullptr,buf,L"Select folder:",
-                BIF_RETURNONLYFSDIRS|BIF_NEWDIALOGSTYLE};
-            LPITEMIDLIST pidl=SHBrowseForFolderW(&bi);
-            if (pidl) {
-                SHGetPathFromIDListW(pidl,buf);
-                CoTaskMemFree(pidl);
-                SetDlgItemTextW(hDlg,editId,buf);
-                p->m_dirty=true;
-            }
-        };
-        WORD ctrl=LOWORD(wp);
-        if (ctrl==IDC_BTN_BROWSE_TEMP) browsePath(IDC_EDIT_TEMP_DIR);
-        if (ctrl==IDC_BTN_BROWSE_LOG)  browsePath(IDC_EDIT_LOG_PATH);
-        if (HIWORD(wp)==BN_CLICKED||HIWORD(wp)==EN_CHANGE)
-            p->m_dirty=true;
+    if (m_col64 >= 0) {
+        std::wstring b = L(LNG_COL_64, L"64-bit");
+        c.pszText = (LPWSTR)b.c_str();
+        ListView_SetColumn(m_list, m_col64, &c);
     }
-    return FALSE;
 }
 
-// ═════════════════════════════════════════════════════════
-// CPageAbout
-// ═════════════════════════════════════════════════════════
-HWND CPageAbout::Create(HWND hParent) {
-    m_hwnd = CreatePageDialog(IDD_PAGE_ABOUT, DlgProc,
-        (LPARAM)this, hParent);
-    return m_hwnd;
-}
-void CPageAbout::Show(bool show)
-    { if(m_hwnd) ShowWindow(m_hwnd,show?SW_SHOW:SW_HIDE); }
-void CPageAbout::Resize(const RECT& rc) {
-    if(m_hwnd) SetWindowPos(m_hwnd,nullptr,
-        rc.left,rc.top,rc.right-rc.left,rc.bottom-rc.top,
-        SWP_NOZORDER|SWP_NOACTIVATE);
-}
-INT_PTR CALLBACK CPageAbout::DlgProc(
-    HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
+INT_PTR CALLBACK CPageSystem::DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
 {
-    CPageAbout* p=nullptr;
-    if (msg==WM_INITDIALOG) {
-        p=(CPageAbout*)lp;
-        SetWindowLongPtrW(hDlg,DWLP_USER,(LONG_PTR)p);
-        p->m_hwnd=hDlg;
-        SetDlgItemTextW(hDlg,IDC_STATIC_NAME,    L"ArchiveFldr");
-        SetDlgItemTextW(hDlg,IDC_STATIC_VERSION, L"Version 1.0.0");
-        SetDlgItemTextW(hDlg,IDC_STATIC_DESC,
-            L"Windows Shell Namespace Extension\r\n"
-            L"Browse archives like folders in Explorer.\r\n\r\n"
-            L"Supports ZIP, 7Z, RAR, TAR, GZ, BZ2, XZ,\r\n"
-            L"ZST, ISO, CAB, LZH, WIM, MSI and more.");
-        SetDlgItemTextW(hDlg,IDC_STATIC_COPYRIGHT,
-            L"© 2024  Open Source  |  MIT License");
+    CPageSystem* p = nullptr;
+    if (msg == WM_INITDIALOG)
+    {
+        p = (CPageSystem*)lp;
+        SetWindowLongPtrW(hDlg, DWLP_USER, (LONG_PTR)p);
+        p->m_hwnd = hDlg;
+        p->BuildList();
+        Lang::Apply(hDlg, IDD_PAGE_SYSTEM);
+        p->Load();
+#ifndef _WIN64
+        // Nothing 64-bit to manage on a 32-bit Windows.
+        ShowWindow(GetDlgItem(hDlg, IDC_LBL_BITS64),        SW_HIDE);
+        ShowWindow(GetDlgItem(hDlg, IDC_BTN_ASSOC_ALL_64),  SW_HIDE);
+        ShowWindow(GetDlgItem(hDlg, IDC_BTN_ASSOC_NONE_64), SW_HIDE);
+#endif
         return TRUE;
     }
-    p=(CPageAbout*)GetWindowLongPtrW(hDlg,DWLP_USER);
+
+    p = (CPageSystem*)GetWindowLongPtrW(hDlg, DWLP_USER);
     if (!p) return FALSE;
 
-    if (msg==WM_COMMAND) {
-        if (LOWORD(wp)==IDC_LINK_WEBSITE)
-            ShellExecuteW(hDlg,L"open",
-                L"https://github.com/ArchiveFldr",nullptr,nullptr,SW_SHOW);
-            MessageBoxW(hDlg,L"ArchiveFldr v1.0.0 is up to date.",
-                L"Check for Updates",MB_ICONINFORMATION);
-    }
-    return FALSE;
-}
-
-// ═════════════════════════════════════════════════════════
-// CSettingsDialog — main dialog
-// ═════════════════════════════════════════════════════════
-CSettingsDialog::CSettingsDialog()
-{
-    m_pages.push_back(std::make_unique<CPageGeneral>());
-    m_pages.push_back(std::make_unique<CPageFormats>());
-    m_pages.push_back(std::make_unique<CPageIntegration>());
-    m_pages.push_back(std::make_unique<CPageAppearance>());
-    m_pages.push_back(std::make_unique<CPageAdvanced>());
-    m_pages.push_back(std::make_unique<CPageAbout>());
-}
-CSettingsDialog::~CSettingsDialog() = default;
-
-bool CSettingsDialog::Show(HWND hwndParent)
-{
-    EnsureCommonControls();
-    INT_PTR r = DialogBoxParamW(UiModule(),
-        MAKEINTRESOURCEW(IDD_SETTINGS_MAIN),
-        hwndParent, DlgProc, (LPARAM)this);
-    return (r == IDOK);
-}
-
-INT_PTR CALLBACK CSettingsDialog::DlgProc(
-    HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
-{
-    CSettingsDialog* p=nullptr;
-    if (msg==WM_INITDIALOG) {
-        p=(CSettingsDialog*)lp;
-        SetWindowLongPtrW(hDlg,DWLP_USER,(LONG_PTR)p);
-        p->m_hDlg=hDlg;
-        p->OnInit(hDlg);
-        return TRUE;
-    }
-    p=(CSettingsDialog*)GetWindowLongPtrW(hDlg,DWLP_USER);
-    if (!p) return FALSE;
-    return p->WndProc(hDlg,msg,wp,lp);
-}
-
-INT_PTR CSettingsDialog::WndProc(
-    HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
-{
-    switch (msg) {
+    switch (msg)
+    {
     case WM_COMMAND:
-        switch (LOWORD(wp)) {
-        case IDC_BTN_OK:     OnOK();     EndDialog(hDlg,IDOK);    return TRUE;
-        case IDC_BTN_CANCEL: OnCancel(); EndDialog(hDlg,IDCANCEL);return TRUE;
-        case IDC_BTN_APPLY:  OnApply();                            return TRUE;
-        case IDC_BTN_HELP:
-            ShellExecuteW(hDlg,L"open",
-                L"https://github.com/ArchiveFldr/wiki",
-                nullptr,nullptr,SW_SHOW);
+        switch (LOWORD(wp))
+        {
+        case IDC_BTN_ASSOC_ALL_32:  p->SetAll(p->m_col32, true);  return TRUE;
+        case IDC_BTN_ASSOC_NONE_32: p->SetAll(p->m_col32, false); return TRUE;
+        case IDC_BTN_ASSOC_ALL_64:  p->SetAll(p->m_col64, true);  return TRUE;
+        case IDC_BTN_ASSOC_NONE_64: p->SetAll(p->m_col64, false); return TRUE;
+        }
+        break;
+
+    case WM_NOTIFY:
+    {
+        auto* nm = (LPNMHDR)lp;
+        if (nm->idFrom != IDC_LIST_ASSOC) break;
+
+        // A click anywhere in a tick column toggles that cell. Clicking
+        // the name column selects the row and changes nothing, which is
+        // what the equivalent list in 7-Zip does.
+        if (nm->code == NM_CLICK)
+        {
+            auto* ia = (LPNMITEMACTIVATE)lp;
+            LVHITTESTINFO ht{};
+            ht.pt = ia->ptAction;
+            ListView_SubItemHitTest(p->m_list, &ht);
+            if (ht.iItem >= 0 && ht.iSubItem > 0)
+                p->Toggle(ht.iItem, ht.iSubItem);
             return TRUE;
         }
-        return FALSE;
-
-    case WM_NOTIFY: {
-        auto* nm=(NMHDR*)lp;
-        if (nm->hwndFrom==m_hTree &&
-            (nm->code==TVN_SELCHANGEDW||nm->code==TVN_SELCHANGEDA)) {
-            NMTREEVIEWW* ntv=(NMTREEVIEWW*)lp;
-            OnTreeSel(ntv->itemNew.hItem);
+        // Space toggles the first tick column of the focused row, so the
+        // page is usable without a mouse.
+        if (nm->code == LVN_KEYDOWN)
+        {
+            auto* kd = (LPNMLVKEYDOWN)lp;
+            if (kd->wVKey == VK_SPACE)
+            {
+                const int row = ListView_GetNextItem(p->m_list, -1, LVNI_FOCUSED);
+                if (row >= 0) p->Toggle(row, p->m_col32);
+                return TRUE;
+            }
         }
-        return FALSE; }
-
-    case WM_SIZE:
-        OnResize(); return FALSE;
-
-    case WM_GETMINMAXINFO: {
-        auto* mm=(MINMAXINFO*)lp;
-        mm->ptMinTrackSize={640,500};
-        return FALSE; }
-
-    case WM_CLOSE:
-        EndDialog(hDlg,IDCANCEL); return TRUE;
+        break;
+    }
     }
     return FALSE;
 }
 
-void CSettingsDialog::OnInit(HWND hDlg)
+// ═════════════════════════════════════════════════════════
+// CPageArchiveFldr
+// ═════════════════════════════════════════════════════════
+namespace {
+
+struct CtxRow
 {
-    SetWindowTextW(hDlg, L"ArchiveFldr Settings");
+    UINT          lang;
+    const wchar_t* fallback;
+    bool Settings::* field;
+};
 
-    // Title bar and Alt-Tab. LoadIconW picks one size for both; LoadImage
-    // asks for the two the shell actually wants, so neither is a stretched
-    // copy of the other.
-    HINSTANCE hInst = (HINSTANCE)GetWindowLongPtrW(hDlg, GWLP_HINSTANCE);
-    if (HANDLE small_ = LoadImageW(hInst, MAKEINTRESOURCEW(IDI_ARCHIVEFLDR),
-                                   IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
-                                   GetSystemMetrics(SM_CYSMICON), 0))
-        SendMessageW(hDlg, WM_SETICON, ICON_SMALL, (LPARAM)small_);
-    if (HANDLE big = LoadImageW(hInst, MAKEINTRESOURCEW(IDI_ARCHIVEFLDR),
-                                IMAGE_ICON, GetSystemMetrics(SM_CXICON),
-                                GetSystemMetrics(SM_CYICON), 0))
-        SendMessageW(hDlg, WM_SETICON, ICON_BIG, (LPARAM)big);
+// Exactly the entries CContextMenu::QueryContextMenu can add, in the
+// order it adds them, labelled with the same language ids — so a row
+// here reads exactly as the menu entry it governs. A tick removes a
+// real menu item, which is the only honest way to present this list.
+const CtxRow kCtxRows[] = {
+    { LNG_CTX_OPEN,     L"Open archive",            &Settings::ctxOpenInShell   },
+    { LNG_CTX_EXTRACT,  L"Extract files...",        &Settings::ctxExtract       },
+    { LNG_CTX_EXTHERE,  L"Extract Here",            &Settings::ctxExtractHere   },
+    { LNG_CTX_TEST,     L"Test archive",            &Settings::ctxTestArchive   },
+    { LNG_CTX_ADD,      L"Add to archive...",       &Settings::ctxAddToArchive  },
+    { LNG_CTX_ADDHERE,  L"Add to \"%s\"",           &Settings::ctxCompressHere  },
+    { LNG_CTX_EMAIL,    L"Compress and email...",   &Settings::ctxCompressEmail },
+    { LNG_CTX_INFO,     L"Archive information",     &Settings::ctxArchiveInfo   },
+    { LNG_CTX_SETTINGS, L"ArchiveFldr settings...", &Settings::ctxSettings      },
+};
 
-    m_hTree     = GetDlgItem(hDlg, IDC_TREE_PAGES);
-    m_hFrame    = GetDlgItem(hDlg, IDC_FRAME_PAGE);
-    m_hBtnOK    = GetDlgItem(hDlg, IDC_BTN_OK);
-    m_hBtnCancel= GetDlgItem(hDlg, IDC_BTN_CANCEL);
-    m_hBtnApply = GetDlgItem(hDlg, IDC_BTN_APPLY);
-
-    EnableWindow(m_hBtnApply, FALSE);
-
-    // Create all pages (hidden)
-    RECT rcFrame; GetWindowRect(m_hFrame, &rcFrame);
-    ScreenToClient(hDlg,(POINT*)&rcFrame);
-    ScreenToClient(hDlg,(POINT*)&rcFrame.right);
-    rcFrame.left+=2; rcFrame.top+=2;
-    rcFrame.right-=2; rcFrame.bottom-=2;
-
-    for (auto& pg : m_pages) {
-        HWND hw = pg->Create(hDlg);
-        if (hw) {
-            SetWindowPos(hw,nullptr,
-                rcFrame.left, rcFrame.top,
-                rcFrame.right-rcFrame.left,
-                rcFrame.bottom-rcFrame.top,
-                SWP_NOZORDER);
-        }
-        pg->Show(false);
-    }
-
-    BuildTree();
-    ShowPage(0);
+// Row text. "Add to ..." names the archive the menu would really
+// create, using the default format from the General settings, so the
+// row is a preview rather than a description of one.
+std::wstring CtxRowText(int i)
+{
+    const CtxRow& r = kCtxRows[i];
+    if (r.lang != LNG_CTX_ADDHERE)
+        return L(r.lang, r.fallback);
+    return Lang::Format1(r.lang, r.fallback,
+                         L"archive." + Settings::Get().defaultFormat);
 }
 
-void CSettingsDialog::BuildTree()
+} // namespace
+
+HWND CPageArchiveFldr::Create(HWND parent)
 {
-    TreeView_DeleteAllItems(m_hTree);
-    m_treeItems.clear();
+    m_hwnd = CreateDialogParamW(SelfInstance(),
+                MAKEINTRESOURCEW(IDD_PAGE_ARCHIVEFLDR), parent,
+                DlgProc, (LPARAM)this);
+    return m_hwnd;
+}
 
-    // Icons for tree items
-    HIMAGELIST hIml = ImageList_Create(16,16,ILC_COLOR32|ILC_MASK,8,2);
-    TreeView_SetImageList(m_hTree, hIml, TVSIL_NORMAL);
+void CPageArchiveFldr::Show(bool show)
+{
+    if (m_hwnd) ShowWindow(m_hwnd, show ? SW_SHOW : SW_HIDE);
+}
 
-    for (int i=0;i<(int)m_pages.size();i++) {
-        TVINSERTSTRUCT tvis{};
-        tvis.hParent      = TVI_ROOT;
-        tvis.hInsertAfter = TVI_LAST;
-        tvis.item.mask    = TVIF_TEXT|TVIF_PARAM;
-        tvis.item.pszText = (LPWSTR)m_pages[i]->Title();
-        tvis.item.lParam  = (LPARAM)i;
-        HTREEITEM h = TreeView_InsertItem(m_hTree, &tvis);
-        m_treeItems.push_back(h);
+void CPageArchiveFldr::Place(const RECT& rc)
+{
+    if (m_hwnd)
+        SetWindowPos(m_hwnd, HWND_TOP, rc.left, rc.top,
+                     rc.right - rc.left, rc.bottom - rc.top, SWP_NOZORDER);
+}
+
+void CPageArchiveFldr::FillItems()
+{
+    m_list = GetDlgItem(m_hwnd, IDC_LIST_CTXITEMS);
+    if (!m_list) return;
+
+    ListView_SetExtendedListViewStyle(m_list,
+        LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
+
+    RECT rc{};
+    GetClientRect(m_list, &rc);
+    AddColumn(m_list, 0, L"", rc.right - rc.left - GetSystemMetrics(SM_CXVSCROLL));
+
+    for (int i = 0; i < (int)ARRAYSIZE(kCtxRows); ++i)
+        AddRow(m_list, i, CtxRowText(i).c_str());
+}
+
+void CPageArchiveFldr::SyncEnabled()
+{
+    const bool on = IsDlgButtonChecked(m_hwnd, IDC_CHK_INTEGRATE) == BST_CHECKED;
+    EnableWindow(GetDlgItem(m_hwnd, IDC_CHK_CASCADED),  on);
+    EnableWindow(GetDlgItem(m_hwnd, IDC_CHK_MENUICONS), on);
+    EnableWindow(GetDlgItem(m_hwnd, IDC_LBL_CTXITEMS),  on);
+    EnableWindow(GetDlgItem(m_hwnd, IDC_LIST_CTXITEMS), on);
+}
+
+void CPageArchiveFldr::Load()
+{
+    const Settings& s = Settings::Get();
+    CheckDlgButton(m_hwnd, IDC_CHK_INTEGRATE, s.showContextMenu ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(m_hwnd, IDC_CHK_CASCADED,  s.ctxUseSubMenu   ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(m_hwnd, IDC_CHK_MENUICONS, s.ctxMenuIcons    ? BST_CHECKED : BST_UNCHECKED);
+
+    if (m_list)
+        for (int i = 0; i < (int)ARRAYSIZE(kCtxRows); ++i)
+            ListView_SetCheckState(m_list, i, s.*(kCtxRows[i].field));
+
+    SyncEnabled();
+    m_dirty = false;
+}
+
+void CPageArchiveFldr::Save()
+{
+    Settings& s = Settings::Get();
+    s.showContextMenu = IsDlgButtonChecked(m_hwnd, IDC_CHK_INTEGRATE) == BST_CHECKED;
+    s.ctxUseSubMenu   = IsDlgButtonChecked(m_hwnd, IDC_CHK_CASCADED)  == BST_CHECKED;
+    s.ctxMenuIcons    = IsDlgButtonChecked(m_hwnd, IDC_CHK_MENUICONS) == BST_CHECKED;
+
+    if (m_list)
+        for (int i = 0; i < (int)ARRAYSIZE(kCtxRows); ++i)
+            s.*(kCtxRows[i].field) = ListView_GetCheckState(m_list, i) != FALSE;
+
+    m_dirty = false;
+}
+
+void CPageArchiveFldr::Retranslate()
+{
+    if (!m_hwnd) return;
+    Lang::Apply(m_hwnd, IDD_PAGE_ARCHIVEFLDR);
+    if (!m_list) return;
+    for (int i = 0; i < (int)ARRAYSIZE(kCtxRows); ++i)
+        SetSub(m_list, i, 0, CtxRowText(i).c_str());
+}
+
+INT_PTR CALLBACK CPageArchiveFldr::DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    CPageArchiveFldr* p = nullptr;
+    if (msg == WM_INITDIALOG)
+    {
+        p = (CPageArchiveFldr*)lp;
+        SetWindowLongPtrW(hDlg, DWLP_USER, (LONG_PTR)p);
+        p->m_hwnd = hDlg;
+        p->FillItems();
+        p->Retranslate();     // Lang::Apply plus the list row captions
+        p->Load();
+        return TRUE;
     }
-    TreeView_SelectItem(m_hTree, m_treeItems[0]);
+
+    p = (CPageArchiveFldr*)GetWindowLongPtrW(hDlg, DWLP_USER);
+    if (!p) return FALSE;
+
+    switch (msg)
+    {
+    case WM_COMMAND:
+        if (HIWORD(wp) == BN_CLICKED)
+        {
+            if (LOWORD(wp) == IDC_CHK_INTEGRATE) p->SyncEnabled();
+            p->m_dirty = true;
+            MarkDirty(hDlg);
+            return TRUE;
+        }
+        break;
+
+    case WM_NOTIFY:
+    {
+        auto* nm = (LPNMHDR)lp;
+        if (nm->idFrom == IDC_LIST_CTXITEMS && nm->code == LVN_ITEMCHANGED)
+        {
+            auto* lv = (LPNMLISTVIEW)lp;
+            // Only a state change that moves the check box counts; the
+            // selection moving around is not an edit.
+            if ((lv->uChanged & LVIF_STATE) &&
+                ((lv->uOldState ^ lv->uNewState) & LVIS_STATEIMAGEMASK))
+            {
+                p->m_dirty = true;
+                MarkDirty(hDlg);
+            }
+        }
+        break;
+    }
+    }
+    return FALSE;
+}
+
+// ═════════════════════════════════════════════════════════
+// CPageFolders
+// ═════════════════════════════════════════════════════════
+HWND CPageFolders::Create(HWND parent)
+{
+    m_hwnd = CreateDialogParamW(SelfInstance(),
+                MAKEINTRESOURCEW(IDD_PAGE_FOLDERS), parent,
+                DlgProc, (LPARAM)this);
+    return m_hwnd;
+}
+
+void CPageFolders::Show(bool show)
+{
+    if (m_hwnd) ShowWindow(m_hwnd, show ? SW_SHOW : SW_HIDE);
+}
+
+void CPageFolders::Place(const RECT& rc)
+{
+    if (m_hwnd)
+        SetWindowPos(m_hwnd, HWND_TOP, rc.left, rc.top,
+                     rc.right - rc.left, rc.bottom - rc.top, SWP_NOZORDER);
+}
+
+void CPageFolders::SyncEnabled()
+{
+    const bool spec = IsDlgButtonChecked(m_hwnd, IDC_RAD_TEMP_SPEC) == BST_CHECKED;
+    EnableWindow(GetDlgItem(m_hwnd, IDC_EDIT_WORKDIR), spec);
+    EnableWindow(GetDlgItem(m_hwnd, IDC_BTN_WORKDIR),  spec);
+}
+
+void CPageFolders::Browse()
+{
+    wchar_t current[MAX_PATH] = {};
+    GetDlgItemTextW(m_hwnd, IDC_EDIT_WORKDIR, current, ARRAYSIZE(current));
+
+    BROWSEINFOW bi{};
+    const std::wstring title = L(LNG_BROWSE_WORK, L"Choose the working folder:");
+    bi.hwndOwner = m_hwnd;
+    bi.lpszTitle = title.c_str();
+    bi.ulFlags   = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
+
+    LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
+    if (!pidl) return;
+
+    wchar_t picked[MAX_PATH] = {};
+    if (SHGetPathFromIDListW(pidl, picked))
+    {
+        SetDlgItemTextW(m_hwnd, IDC_EDIT_WORKDIR, picked);
+        m_dirty = true;
+        MarkDirty(m_hwnd);
+    }
+    CoTaskMemFree(pidl);
+}
+
+void CPageFolders::Load()
+{
+    const Settings& s = Settings::Get();
+    const bool spec = (s.WorkDir() == WorkDirMode::Specified);
+    CheckDlgButton(m_hwnd, IDC_RAD_TEMP_SYSTEM, spec ? BST_UNCHECKED : BST_CHECKED);
+    CheckDlgButton(m_hwnd, IDC_RAD_TEMP_SPEC,   spec ? BST_CHECKED : BST_UNCHECKED);
+    SetDlgItemTextW(m_hwnd, IDC_EDIT_WORKDIR, s.tempDirPath.c_str());
+    SyncEnabled();
+    m_dirty = false;
+}
+
+void CPageFolders::Save()
+{
+    Settings& s = Settings::Get();
+    s.useTempDir = IsDlgButtonChecked(m_hwnd, IDC_RAD_TEMP_SPEC) == BST_CHECKED;
+
+    wchar_t buf[MAX_PATH * 2] = {};
+    GetDlgItemTextW(m_hwnd, IDC_EDIT_WORKDIR, buf, ARRAYSIZE(buf));
+    s.tempDirPath = buf;
+    m_dirty = false;
+}
+
+void CPageFolders::Retranslate()
+{
+    if (m_hwnd) Lang::Apply(m_hwnd, IDD_PAGE_FOLDERS);
+}
+
+INT_PTR CALLBACK CPageFolders::DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    CPageFolders* p = nullptr;
+    if (msg == WM_INITDIALOG)
+    {
+        p = (CPageFolders*)lp;
+        SetWindowLongPtrW(hDlg, DWLP_USER, (LONG_PTR)p);
+        p->m_hwnd = hDlg;
+        Lang::Apply(hDlg, IDD_PAGE_FOLDERS);
+        p->Load();
+        return TRUE;
+    }
+
+    p = (CPageFolders*)GetWindowLongPtrW(hDlg, DWLP_USER);
+    if (!p) return FALSE;
+
+    if (msg == WM_COMMAND)
+    {
+        switch (LOWORD(wp))
+        {
+        case IDC_BTN_WORKDIR:
+            if (HIWORD(wp) == BN_CLICKED) { p->Browse(); return TRUE; }
+            break;
+
+        case IDC_RAD_TEMP_SYSTEM:
+        case IDC_RAD_TEMP_SPEC:
+            if (HIWORD(wp) == BN_CLICKED)
+            {
+                p->SyncEnabled();
+                p->m_dirty = true;
+                MarkDirty(hDlg);
+                return TRUE;
+            }
+            break;
+
+        case IDC_EDIT_WORKDIR:
+            if (HIWORD(wp) == EN_CHANGE)
+            {
+                p->m_dirty = true;
+                MarkDirty(hDlg);
+                return TRUE;
+            }
+            break;
+        }
+    }
+    return FALSE;
+}
+
+// ═════════════════════════════════════════════════════════
+// CPageInstall
+// ═════════════════════════════════════════════════════════
+HWND CPageInstall::Create(HWND parent)
+{
+    m_hwnd = CreateDialogParamW(SelfInstance(),
+                MAKEINTRESOURCEW(IDD_PAGE_SETTINGS), parent,
+                DlgProc, (LPARAM)this);
+    return m_hwnd;
+}
+
+void CPageInstall::Show(bool show)
+{
+    if (m_hwnd) ShowWindow(m_hwnd, show ? SW_SHOW : SW_HIDE);
+}
+
+void CPageInstall::Place(const RECT& rc)
+{
+    if (m_hwnd)
+        SetWindowPos(m_hwnd, HWND_TOP, rc.left, rc.top,
+                     rc.right - rc.left, rc.bottom - rc.top, SWP_NOZORDER);
+}
+
+void CPageInstall::RefreshState()
+{
+    if (!m_hwnd) return;
+
+    std::wstring text;
+    auto line = [&](bool x64) {
+        const wchar_t* which = x64 ? L"64-bit" : L"32-bit";
+        if (!DllPresent(x64))
+        {
+            text += std::wstring(which) + L": " +
+                    PathFindFileNameW(DllPath(x64).c_str()) +
+                    L" not found next to this program\r\n";
+            return;
+        }
+        text += std::wstring(which) + L": " +
+                (DllRegistered(x64) ? L(LNG_STATE_YES, L"registered")
+                                    : L(LNG_STATE_NO,  L"not registered")) +
+                L"\r\n";
+    };
+
+#ifdef _WIN64
+    line(true);
+    line(false);
+#else
+    line(false);
+#endif
+
+    SetDlgItemTextW(m_hwnd, IDC_LBL_INSTALL_STATE, text.c_str());
+
+    SetDlgItemTextW(m_hwnd, IDC_LBL_INSTALL_NOTE,
+        L(LNG_INSTALL_NOTE,
+          L"Install registers the shell extension so Explorer can browse "
+          L"archives as folders, and lists ArchiveFldr in Settings > "
+          L"Default apps for the file types ticked on the System page.\r\n\r\n"
+          L"Uninstall removes both, leaving the files on disk.\r\n\r\n"
+          L"Explorer caches shell extensions, so sign out and back in — or "
+          L"restart Explorer — for a change to take effect everywhere.")
+        .c_str());
+
+#ifdef _WIN64
+    const bool any = DllPresent(true) || DllPresent(false);
+#else
+    const bool any = DllPresent(false);
+#endif
+    EnableWindow(GetDlgItem(m_hwnd, IDC_BTN_INSTALL),   any);
+    EnableWindow(GetDlgItem(m_hwnd, IDC_BTN_UNINSTALL), any);
+}
+
+void CPageInstall::Run(bool install)
+{
+    // The settings themselves have to be on disk first: registration
+    // reads the association ticks straight out of HKLM, so running it
+    // against stale values would register the wrong set of file types.
+    Settings& s = Settings::Get();
+    s.registerAsDefaultApp = install;
+    s.Save();
+
+    std::wstring report;
+    bool allOk = true;
+
+    auto one = [&](bool x64) {
+        if (!DllPresent(x64)) return;
+        DWORD code = 0;
+        const bool ok = RunRegsvr32(x64, !install, &code);
+        allOk = allOk && ok;
+        report += std::wstring(x64 ? L"64-bit" : L"32-bit") + L": " +
+                  (ok ? L"OK" : (L"failed (regsvr32 exit code " +
+                                 std::to_wstring((int)code) + L")")) +
+                  L"\r\n";
+    };
+
+    HCURSOR prev = SetCursor(LoadCursorW(nullptr, IDC_WAIT));
+#ifdef _WIN64
+    one(true);
+    one(false);
+#else
+    one(false);
+#endif
+    SetCursor(prev);
+
+    const std::wstring head = allOk
+        ? (install ? L(LNG_INSTALL_OK,   L"ArchiveFldr was installed.")
+                   : L(LNG_UNINSTALL_OK, L"ArchiveFldr was removed."))
+        : L(LNG_INSTALL_FAIL, L"Some parts could not be changed.");
+
+    MessageBoxW(m_hwnd, (head + L"\r\n\r\n" + report).c_str(), L"ArchiveFldr",
+                MB_OK | (allOk ? MB_ICONINFORMATION : MB_ICONWARNING));
+
+    // Tell the shell the association table moved, so open icons and verbs
+    // refresh without a sign-out where the shell is willing.
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+    RefreshState();
+}
+
+void CPageInstall::Load() { RefreshState(); }
+
+void CPageInstall::Retranslate()
+{
+    if (!m_hwnd) return;
+    Lang::Apply(m_hwnd, IDD_PAGE_SETTINGS);
+    RefreshState();
+}
+
+INT_PTR CALLBACK CPageInstall::DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    CPageInstall* p = nullptr;
+    if (msg == WM_INITDIALOG)
+    {
+        p = (CPageInstall*)lp;
+        SetWindowLongPtrW(hDlg, DWLP_USER, (LONG_PTR)p);
+        p->m_hwnd = hDlg;
+        Lang::Apply(hDlg, IDD_PAGE_SETTINGS);
+        p->RefreshState();
+        return TRUE;
+    }
+
+    p = (CPageInstall*)GetWindowLongPtrW(hDlg, DWLP_USER);
+    if (!p) return FALSE;
+
+    if (msg == WM_COMMAND && HIWORD(wp) == BN_CLICKED)
+    {
+        if (LOWORD(wp) == IDC_BTN_INSTALL)   { p->Run(true);  return TRUE; }
+        if (LOWORD(wp) == IDC_BTN_UNINSTALL) { p->Run(false); return TRUE; }
+    }
+    return FALSE;
+}
+
+// ═════════════════════════════════════════════════════════
+// CPageLanguage
+// ═════════════════════════════════════════════════════════
+HWND CPageLanguage::Create(HWND parent)
+{
+    m_hwnd = CreateDialogParamW(SelfInstance(),
+                MAKEINTRESOURCEW(IDD_PAGE_LANGUAGE), parent,
+                DlgProc, (LPARAM)this);
+    return m_hwnd;
+}
+
+void CPageLanguage::Show(bool show)
+{
+    if (m_hwnd) ShowWindow(m_hwnd, show ? SW_SHOW : SW_HIDE);
+}
+
+void CPageLanguage::Place(const RECT& rc)
+{
+    if (m_hwnd)
+        SetWindowPos(m_hwnd, HWND_TOP, rc.left, rc.top,
+                     rc.right - rc.left, rc.bottom - rc.top, SWP_NOZORDER);
+}
+
+void CPageLanguage::Load()
+{
+    m_list = GetDlgItem(m_hwnd, IDC_LIST_LANG);
+    if (!m_list) return;
+
+    ListView_SetExtendedListViewStyle(m_list, LVS_EX_FULLROWSELECT);
+    ListView_DeleteAllItems(m_list);
+    while (ListView_DeleteColumn(m_list, 0)) {}
+
+    AddColumn(m_list, 0, L(LNG_COL_LANGUAGE, L"Language").c_str(),  160);
+    AddColumn(m_list, 1, L(LNG_COL_LANG_EN,  L"English name").c_str(), 150);
+
+    m_codes.clear();
+    const std::wstring cur = Settings::Get().language;
+
+    int row = 0, sel = 0;
+    for (const auto& e : Lang::Available())
+    {
+        AddRow(m_list, row, e.native.c_str());
+        SetSub(m_list, row, 1, e.english.c_str());
+        m_codes.push_back(e.code);
+        if (_wcsicmp(e.code.c_str(), cur.c_str()) == 0) sel = row;
+        ++row;
+    }
+
+    if (!m_codes.empty())
+    {
+        ListView_SetItemState(m_list, sel, LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_EnsureVisible(m_list, sel, FALSE);
+    }
+    m_dirty = false;
+}
+
+std::wstring CPageLanguage::Selected() const
+{
+    if (!m_list) return Settings::Get().language;
+    const int sel = ListView_GetNextItem(m_list, -1, LVNI_SELECTED);
+    if (sel < 0 || (size_t)sel >= m_codes.size())
+        return Settings::Get().language;
+    return m_codes[(size_t)sel];
+}
+
+void CPageLanguage::Save()
+{
+    Settings::Get().language = Selected();
+    m_dirty = false;
+}
+
+void CPageLanguage::Retranslate()
+{
+    if (!m_hwnd) return;
+    Lang::Apply(m_hwnd, IDD_PAGE_LANGUAGE);
+    Load();
+}
+
+INT_PTR CALLBACK CPageLanguage::DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    CPageLanguage* p = nullptr;
+    if (msg == WM_INITDIALOG)
+    {
+        p = (CPageLanguage*)lp;
+        SetWindowLongPtrW(hDlg, DWLP_USER, (LONG_PTR)p);
+        p->m_hwnd = hDlg;
+        Lang::Apply(hDlg, IDD_PAGE_LANGUAGE);
+        p->Load();
+        return TRUE;
+    }
+
+    p = (CPageLanguage*)GetWindowLongPtrW(hDlg, DWLP_USER);
+    if (!p) return FALSE;
+
+    if (msg == WM_NOTIFY)
+    {
+        auto* nm = (LPNMHDR)lp;
+        if (nm->idFrom == IDC_LIST_LANG && nm->code == LVN_ITEMCHANGED)
+        {
+            auto* lv = (LPNMLISTVIEW)lp;
+            if ((lv->uChanged & LVIF_STATE) &&
+                (lv->uNewState & LVIS_SELECTED) &&
+                !(lv->uOldState & LVIS_SELECTED))
+            {
+                p->m_dirty = true;
+                MarkDirty(hDlg);
+            }
+        }
+    }
+    return FALSE;
+}
+
+// ═════════════════════════════════════════════════════════
+// CSettingsDialog
+// ═════════════════════════════════════════════════════════
+CSettingsDialog::CSettingsDialog()  = default;
+CSettingsDialog::~CSettingsDialog() = default;
+
+bool CSettingsDialog::Show(HWND parent)
+{
+    return DialogBoxParamW(SelfInstance(), MAKEINTRESOURCEW(IDD_OPTIONS),
+                           parent, DlgProc, (LPARAM)this) == IDOK;
+}
+
+void CSettingsDialog::EnableApply(bool en)
+{
+    if (m_hDlg) EnableWindow(GetDlgItem(m_hDlg, IDC_BTN_APPLY), en);
+}
+
+void CSettingsDialog::PlacePages()
+{
+    if (!m_hTab) return;
+
+    RECT rc{};
+    GetWindowRect(m_hTab, &rc);
+    MapWindowPoints(nullptr, m_hDlg, (LPPOINT)&rc, 2);
+    TabCtrl_AdjustRect(m_hTab, FALSE, &rc);
+
+    for (auto& pg : m_pages) pg->Place(rc);
 }
 
 void CSettingsDialog::ShowPage(int idx)
 {
     if (idx < 0 || idx >= (int)m_pages.size()) return;
-
-    // Compute frame rect
-    RECT rcFrame; GetWindowRect(m_hFrame, &rcFrame);
-    ScreenToClient(m_hDlg,(POINT*)&rcFrame);
-    ScreenToClient(m_hDlg,(POINT*)&rcFrame.right);
-    rcFrame.left+=2; rcFrame.top+=2;
-    rcFrame.right-=2; rcFrame.bottom-=2;
-
-    for (int i=0;i<(int)m_pages.size();i++) {
-        m_pages[i]->Show(i==idx);
-        if (i==idx) m_pages[i]->Resize(rcFrame);
-    }
-    m_curPage = idx;
-
-    // All page dialogs share the exact same rectangle inside the frame.
-    // Explicitly raise the newly-active one to the top of the Z-order and
-    // force it to repaint immediately, so it can never be left hidden
-    // behind a previously-shown sibling page or a stale host repaint.
-    HWND hActive = m_pages[idx]->GetHwnd();
-    if (hActive) {
-        SetWindowPos(hActive, HWND_TOP, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        InvalidateRect(hActive, nullptr, TRUE);
-        UpdateWindow(hActive);
-    }
+    for (int i = 0; i < (int)m_pages.size(); ++i)
+        m_pages[(size_t)i]->Show(i == idx);
+    m_cur = idx;
 }
 
-void CSettingsDialog::OnTreeSel(HTREEITEM hItem)
+void CSettingsDialog::Retranslate()
 {
-    TVITEMW tv{TVIF_PARAM, hItem};
-    TreeView_GetItem(m_hTree, &tv);
-    ShowPage((int)tv.lParam);
-}
+    Lang::Apply(m_hDlg, IDD_OPTIONS);
+    for (auto& pg : m_pages) pg->Retranslate();
 
-void CSettingsDialog::OnResize()
-{
-    if (!m_hDlg) return;
-    RECT rcClient; GetClientRect(m_hDlg, &rcClient);
-
-    // Reposition tree (left strip, 160px wide)
-    if (m_hTree)
-        SetWindowPos(m_hTree,nullptr,8,8,
-            160, rcClient.bottom-50,SWP_NOZORDER);
-
-    // Reposition frame
-    if (m_hFrame)
-        SetWindowPos(m_hFrame,nullptr,
-            174, 8,
-            rcClient.right-182, rcClient.bottom-50,
-            SWP_NOZORDER);
-
-    // Reposition buttons (bottom row)
-    int btnY = rcClient.bottom - 36;
-    if (m_hBtnOK)
-        SetWindowPos(m_hBtnOK,nullptr,
-            rcClient.right-264, btnY, 80, 24, SWP_NOZORDER);
-    if (m_hBtnCancel)
-        SetWindowPos(m_hBtnCancel,nullptr,
-            rcClient.right-176, btnY, 80, 24, SWP_NOZORDER);
-    if (m_hBtnApply)
-        SetWindowPos(m_hBtnApply,nullptr,
-            rcClient.right-88,  btnY, 80, 24, SWP_NOZORDER);
-
-    // Resize current page
-    if (m_hFrame && m_curPage < (int)m_pages.size()) {
-        RECT rcFrame; GetWindowRect(m_hFrame,&rcFrame);
-        ScreenToClient(m_hDlg,(POINT*)&rcFrame);
-        ScreenToClient(m_hDlg,(POINT*)&rcFrame.right);
-        rcFrame.left+=2; rcFrame.top+=2;
-        rcFrame.right-=2; rcFrame.bottom-=2;
-        m_pages[m_curPage]->Resize(rcFrame);
+    // Tab captions are keyed on each page's dialog id.
+    for (int i = 0; i < (int)m_pages.size(); ++i)
+    {
+        std::wstring t = Lang::Str(m_pages[(size_t)i]->DialogId(),
+                                   m_pages[(size_t)i]->Title());
+        TCITEMW ti{};
+        ti.mask    = TCIF_TEXT;
+        ti.pszText = (LPWSTR)t.c_str();
+        TabCtrl_SetItem(m_hTab, i, &ti);
     }
 }
 
-void CSettingsDialog::EnableApply(bool en)
-    { EnableWindow(m_hBtnApply, en?TRUE:FALSE); }
+void CSettingsDialog::OnInit(HWND hDlg)
+{
+    m_hDlg = hDlg;
+    SetWindowLongPtrW(hDlg, DWLP_USER, (LONG_PTR)this);
+
+    HINSTANCE inst = SelfInstance();
+    if (HANDLE sm = LoadImageW(inst, MAKEINTRESOURCEW(IDI_ARCHIVEFLDR),
+                               IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                               GetSystemMetrics(SM_CYSMICON), 0))
+        SendMessageW(hDlg, WM_SETICON, ICON_SMALL, (LPARAM)sm);
+    if (HANDLE big = LoadImageW(inst, MAKEINTRESOURCEW(IDI_ARCHIVEFLDR),
+                                IMAGE_ICON, GetSystemMetrics(SM_CXICON),
+                                GetSystemMetrics(SM_CYICON), 0))
+        SendMessageW(hDlg, WM_SETICON, ICON_BIG, (LPARAM)big);
+
+    m_hTab = GetDlgItem(hDlg, IDC_TAB_PAGES);
+
+    auto lang = std::make_unique<CPageLanguage>();
+    m_langPage = lang.get();
+
+    m_pages.push_back(std::make_unique<CPageSystem>());
+    m_pages.push_back(std::make_unique<CPageArchiveFldr>());
+    m_pages.push_back(std::make_unique<CPageFolders>());
+    m_pages.push_back(std::make_unique<CPageInstall>());
+    m_pages.push_back(std::move(lang));
+
+    for (int i = 0; i < (int)m_pages.size(); ++i)
+    {
+        std::wstring t = Lang::Str(m_pages[(size_t)i]->DialogId(),
+                                   m_pages[(size_t)i]->Title());
+        TCITEMW ti{};
+        ti.mask    = TCIF_TEXT;
+        ti.pszText = (LPWSTR)t.c_str();
+        TabCtrl_InsertItem(m_hTab, i, &ti);
+
+        m_pages[(size_t)i]->Create(hDlg);
+    }
+
+    Lang::Apply(hDlg, IDD_OPTIONS);
+    PlacePages();
+    ShowPage(0);
+    EnableApply(false);
+}
+
+bool CSettingsDialog::OnApply()
+{
+    const std::wstring before = Settings::Get().language;
+
+    for (auto& pg : m_pages) pg->Save();
+    Settings::Get().Save();
+
+    // Associations changed? Rewrite the per-extension OpenWithProgids and
+    // the Capabilities key so the ticks on the System page mean something
+    // without a full re-register. Needs the DLL's own path, which is what
+    // the Capabilities icon points at.
+#ifdef _WIN64
+    const std::wstring dll = DllPath(true);
+#else
+    const std::wstring dll = DllPath(false);
+#endif
+    if (PathFileExistsW(dll.c_str()))
+        CRegistry::RegisterCapabilities(dll.c_str());
+
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+
+    if (_wcsicmp(before.c_str(), Settings::Get().language.c_str()) != 0)
+    {
+        Lang::Load(Settings::Get().language);
+        Retranslate();
+    }
+
+    for (auto& pg : m_pages) pg->ClearDirty();
+    EnableApply(false);
+    return true;
+}
 
 void CSettingsDialog::OnOK()
 {
-    for (auto& pg : m_pages) pg->Save();
-    Settings::Get().Save();
-    m_applied = true;
+    OnApply();
+    EndDialog(m_hDlg, IDOK);
 }
+
 void CSettingsDialog::OnCancel()
 {
-    if (!m_applied) Settings::Get().Load(); // restore
+    EndDialog(m_hDlg, IDCANCEL);
 }
-void CSettingsDialog::OnApply()
+
+INT_PTR CALLBACK CSettingsDialog::DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
 {
-    for (auto& pg : m_pages) if (pg->Dirty()) pg->Save();
-    Settings::Get().Save();
-    EnableApply(false);
-    m_applied = true;
+    CSettingsDialog* p = nullptr;
+    if (msg == WM_INITDIALOG)
+    {
+        p = (CSettingsDialog*)lp;
+        p->OnInit(hDlg);
+        return TRUE;
+    }
+    p = (CSettingsDialog*)GetWindowLongPtrW(hDlg, DWLP_USER);
+    if (!p) return FALSE;
+    return p->WndProc(hDlg, msg, wp, lp);
+}
+
+INT_PTR CSettingsDialog::WndProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg)
+    {
+    case WM_COMMAND:
+        switch (LOWORD(wp))
+        {
+        case IDC_BTN_OK:
+        case IDOK:     OnOK();     return TRUE;
+        case IDC_BTN_CANCEL:
+        case IDCANCEL: OnCancel(); return TRUE;
+        case IDC_BTN_APPLY: OnApply(); return TRUE;
+        }
+        break;
+
+    case WM_NOTIFY:
+    {
+        auto* nm = (LPNMHDR)lp;
+        if (nm->idFrom == IDC_TAB_PAGES && nm->code == TCN_SELCHANGE)
+        {
+            ShowPage(TabCtrl_GetCurSel(m_hTab));
+            return TRUE;
+        }
+        break;
+    }
+
+    case WM_CLOSE:
+        OnCancel();
+        return TRUE;
+    }
+    return FALSE;
 }

@@ -229,6 +229,7 @@
     </Link>
     <PostBuildEvent>
       <Command>if exist "$(ProjectDir)thirdparty\" xcopy /y /i /e /s "$(ProjectDir)thirdparty\*.dll" "$(OutDir)thirdparty\" &gt;nul 2&gt;nul
+if exist "$(ProjectDir)Lang\" xcopy /y /i "$(ProjectDir)Lang\*.txt" "$(OutDir)Lang\" &gt;nul 2&gt;nul
 regsvr32 /s "$(TargetPath)"
 echo [ArchiveFldr] Registered Debug x86: $(TargetFileName)</Command>
       <Message>Registering Shell Extension (Debug x86)...</Message>
@@ -297,6 +298,7 @@ echo [ArchiveFldr] Registered Debug x86: $(TargetFileName)</Command>
     </Link>
     <PostBuildEvent>
       <Command>if exist "$(ProjectDir)thirdparty\" xcopy /y /i /e /s "$(ProjectDir)thirdparty\*.dll" "$(OutDir)thirdparty\" &gt;nul 2&gt;nul
+if exist "$(ProjectDir)Lang\" xcopy /y /i "$(ProjectDir)Lang\*.txt" "$(OutDir)Lang\" &gt;nul 2&gt;nul
 regsvr32 /s "$(TargetPath)"
 echo [ArchiveFldr] Registered Release x86: $(TargetFileName)</Command>
       <Message>Registering Shell Extension (Release x86)...</Message>
@@ -361,6 +363,7 @@ echo [ArchiveFldr] Registered Release x86: $(TargetFileName)</Command>
     </Link>
     <PostBuildEvent>
       <Command>if exist "$(ProjectDir)thirdparty\" xcopy /y /i /e /s "$(ProjectDir)thirdparty\*.dll" "$(OutDir)thirdparty\" &gt;nul 2&gt;nul
+if exist "$(ProjectDir)Lang\" xcopy /y /i "$(ProjectDir)Lang\*.txt" "$(OutDir)Lang\" &gt;nul 2&gt;nul
 regsvr32 /s "$(TargetPath)"
 echo [ArchiveFldr] Registered Debug x64: $(TargetFileName)</Command>
       <Message>Registering Shell Extension (Debug x64)...</Message>
@@ -429,6 +432,7 @@ echo [ArchiveFldr] Registered Debug x64: $(TargetFileName)</Command>
     </Link>
     <PostBuildEvent>
       <Command>if exist "$(ProjectDir)thirdparty\" xcopy /y /i /e /s "$(ProjectDir)thirdparty\*.dll" "$(OutDir)thirdparty\" &gt;nul 2&gt;nul
+if exist "$(ProjectDir)Lang\" xcopy /y /i "$(ProjectDir)Lang\*.txt" "$(OutDir)Lang\" &gt;nul 2&gt;nul
 regsvr32 /s "$(TargetPath)"
 echo [ArchiveFldr] Registered Release x64: $(TargetFileName)</Command>
       <Message>Registering Shell Extension (Release x64)...</Message>
@@ -469,6 +473,7 @@ echo [ArchiveFldr] Registered Release x64: $(TargetFileName)</Command>
     <ClCompile Include="src\UnrarEngine.cpp" />
     <ClCompile Include="src\SysInfo.cpp" />
     <ClCompile Include="src\Formats.cpp" />
+    <ClCompile Include="src\Lang.cpp" />
     <ClCompile Include="src\Settings.cpp" />
     <ClCompile Include="src\BrowseTo.cpp" />
   </ItemGroup>
@@ -497,6 +502,7 @@ echo [ArchiveFldr] Registered Release x64: $(TargetFileName)</Command>
     <ClInclude Include="src\UnrarEngine.h" />
     <ClInclude Include="src\SysInfo.h" />
     <ClInclude Include="src\Formats.h" />
+    <ClInclude Include="src\Lang.h" />
     <ClInclude Include="src\Settings.h" />
     <ClInclude Include="src\BrowseTo.h" />
     <ClInclude Include="res\resource.h" />
@@ -516,6 +522,7 @@ echo [ArchiveFldr] Registered Release x64: $(TargetFileName)</Command>
   <ItemGroup>
     <None Include="src\ArchiveFldr.def" />
     <None Include="res\manifest.xml" />
+    <None Include="Lang\en.txt" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

@@ -11,6 +11,7 @@
 #include "ArchiveWriter.h"
 #include "Settings.h"
 #include "GUIDs.h"
+#include "Lang.h"
 #include "../res/resource.h"
 
 // ─────────────────────────────────────────────────────────
@@ -18,6 +19,77 @@
 // Order must match the Cmd enum in ContextMenu.h.
 // ─────────────────────────────────────────────────────────
 namespace {
+
+// Language ids for the menu captions. The same ids back the item list
+// on the settings page, so what the user ticks there is labelled with
+// the exact text the menu will show. See Lang\en.txt.
+enum : UINT {
+    LNG_CTX_OPEN     = 2000,
+    LNG_CTX_EXTRACT  = 2001,
+    LNG_CTX_EXTHERE  = 2002,
+    LNG_CTX_TEST     = 2003,
+    LNG_CTX_ADD      = 2004,
+    LNG_CTX_ADDHERE  = 2005,   // carries one %s: the archive name
+    LNG_CTX_EMAIL    = 2006,
+    LNG_CTX_INFO     = 2007,
+    LNG_CTX_SETTINGS = 2008,
+};
+
+// Shorthand for a menu caption: the language file's text, or the
+// English baked in right here when it has none.
+std::wstring CtxText(UINT id, const wchar_t* fallback)
+{
+    return Lang::Str(id, fallback);
+}
+
+// The menu bitmap for "Icons in context menu".
+//
+// MIIM_BITMAP wants an HBITMAP, not an HICON, and a menu is drawn over
+// whatever colour the theme picked — so the icon has to keep its alpha.
+// That means a 32-bit top-down DIB section cleared to zero, with
+// DrawIconEx compositing the icon's own alpha into it. Built once and
+// kept: a context menu handler is created and destroyed on every
+// right-click, and re-rasterising each time would be wasteful.
+HBITMAP MenuIconBitmap()
+{
+    static HBITMAP cached = nullptr;
+    static bool    tried  = false;
+    if (tried) return cached;
+    tried = true;
+
+    const int cx = GetSystemMetrics(SM_CXSMICON);
+    const int cy = GetSystemMetrics(SM_CYSMICON);
+
+    HICON ico = (HICON)LoadImageW(g_hDllInstance,
+                                  MAKEINTRESOURCEW(IDI_ARCHIVEFLDR),
+                                  IMAGE_ICON, cx, cy, LR_DEFAULTCOLOR);
+    if (!ico) return nullptr;
+
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize        = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth       = cx;
+    bi.bmiHeader.biHeight      = -cy;          // top-down
+    bi.bmiHeader.biPlanes      = 1;
+    bi.bmiHeader.biBitCount    = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+
+    void*   bits = nullptr;
+    HDC     screen = GetDC(nullptr);
+    HBITMAP bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (bmp)
+    {
+        HDC     dc  = CreateCompatibleDC(screen);
+        HGDIOBJ old = SelectObject(dc, bmp);
+        DrawIconEx(dc, 0, 0, ico, cx, cy, 0, nullptr, DI_NORMAL);
+        SelectObject(dc, old);
+        DeleteDC(dc);
+    }
+    ReleaseDC(nullptr, screen);
+    DestroyIcon(ico);
+
+    cached = bmp;
+    return cached;
+}
 
 struct VerbDef {
     const wchar_t* verbW;
@@ -188,15 +260,21 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
 
     auto& s = Settings::Get();
 
-    // "Compress to <name>" names its own result. Built here because both
-    // the archive-file and plain-file menus show it.
+    // The shell loads this DLL into Explorer once and keeps it, so the
+    // language file is read on the first right-click and then reused.
+    static bool langLoaded = false;
+    if (!langLoaded) { langLoaded = true; Lang::Load(s.language); }
+
+    // "Add to <name>" names its own result. Built here because both the
+    // archive-file and plain-file menus show it.
     if (m_mode == ModeArchiveFile || m_mode == ModePlainFile)
     {
         const std::wstring ext = L"." + s.defaultFormat;
         const std::wstring out = ArchiveWriter::SuggestOutputPath(m_paths, ext);
-        m_quickName = out.empty()
-            ? std::wstring(L"Compress")
-            : L"Compress to \"" + std::wstring(PathFindFileNameW(out.c_str())) + L"\"";
+        m_quickName = Lang::Format1(LNG_CTX_ADDHERE, L"Add to \"%s\"",
+                                    out.empty()
+                                        ? (L"archive" + ext)
+                                        : std::wstring(PathFindFileNameW(out.c_str())));
     }
 
     // The "collect everything under one ArchiveFldr sub-menu" preference only
@@ -208,11 +286,17 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
     UINT  pos     = m_useSubMenu ? 0 : indexMenu;
     UINT  used    = 0;
 
+    // One bitmap shared by every entry, created on first use and kept
+    // for the life of the process. Null when the user turned icons off,
+    // in which case MIIM_BITMAP is simply not requested.
+    HBITMAP hIcon = s.ctxMenuIcons ? MenuIconBitmap() : nullptr;
+
     auto addItem = [&](UINT cmd, const wchar_t* text, bool enabled = true) {
         MENUITEMINFOW mi{sizeof(mi), MIIM_STRING | MIIM_ID | MIIM_STATE};
         mi.wID        = idCmdFirst + cmd;
         mi.dwTypeData = (LPWSTR)text;
         mi.fState     = enabled ? MFS_ENABLED : MFS_GRAYED;
+        if (hIcon) { mi.fMask |= MIIM_BITMAP; mi.hbmpItem = hIcon; }
         InsertMenuItemW(hTarget, pos++, TRUE, &mi);
         if (cmd + 1 > used) used = cmd + 1;
     };
@@ -259,10 +343,10 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
     // right-clicks in Explorer. Only compression applies.
     case ModePlainFile:
     {
-        if (s.ctxAddToArchive)  addItem(CMD_ADD, L"Add to Archive...");
-        if (s.ctxAddToArchive)  addItem(CMD_COMPRESS_HERE, m_quickName.c_str());
-        if (s.ctxCompressEmail) addItem(CMD_COMPRESS_EMAIL, L"Compress and E-mail...");
-        if (s.ctxSettings) { addSep(); addItem(CMD_SETTINGS, L"ArchiveFldr Settings..."); }
+        if (s.ctxAddToArchive)  addItem(CMD_ADD, CtxText(LNG_CTX_ADD, L"Add to archive...").c_str());
+        if (s.ctxCompressHere)  addItem(CMD_COMPRESS_HERE, m_quickName.c_str());
+        if (s.ctxCompressEmail) addItem(CMD_COMPRESS_EMAIL, CtxText(LNG_CTX_EMAIL, L"Compress and email...").c_str());
+        if (s.ctxSettings) { addSep(); addItem(CMD_SETTINGS, CtxText(LNG_CTX_SETTINGS, L"ArchiveFldr settings...").c_str()); }
         break;
     }
 
@@ -270,17 +354,17 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
     case ModeArchiveFile:
     default:
     {
-        if (s.ctxExtract)       addItem(CMD_EXTRACT,        L"Extract...");
-        if (s.ctxExtractHere)   addItem(CMD_EXTRACTHERE,    L"Extract Here");
+        if (s.ctxExtract)       addItem(CMD_EXTRACT,        CtxText(LNG_CTX_EXTRACT, L"Extract files...").c_str());
+        if (s.ctxExtractHere)   addItem(CMD_EXTRACTHERE,    CtxText(LNG_CTX_EXTHERE, L"Extract Here").c_str());
         addSep();
-        if (s.ctxAddToArchive)  addItem(CMD_ADD,            L"Add to Archive...");
-        if (s.ctxAddToArchive)  addItem(CMD_COMPRESS_HERE,  m_quickName.c_str());
-        if (s.ctxCompressEmail) addItem(CMD_COMPRESS_EMAIL, L"Compress and E-mail...");
+        if (s.ctxAddToArchive)  addItem(CMD_ADD,            CtxText(LNG_CTX_ADD, L"Add to archive...").c_str());
+        if (s.ctxCompressHere)  addItem(CMD_COMPRESS_HERE,  m_quickName.c_str());
+        if (s.ctxCompressEmail) addItem(CMD_COMPRESS_EMAIL, CtxText(LNG_CTX_EMAIL, L"Compress and email...").c_str());
         addSep();
-        if (s.ctxOpenInShell)   addItem(CMD_OPEN_SHELL,     L"Open with ArchiveFldr");
-        if (s.ctxTestArchive)   addItem(CMD_TEST,           L"Test Archive");
-        if (s.ctxArchiveInfo)   addItem(CMD_INFO,           L"Archive Info...");
-        if (s.ctxSettings)      addItem(CMD_SETTINGS,       L"ArchiveFldr Settings...");
+        if (s.ctxOpenInShell)   addItem(CMD_OPEN_SHELL,     CtxText(LNG_CTX_OPEN, L"Open archive").c_str());
+        if (s.ctxTestArchive)   addItem(CMD_TEST,           CtxText(LNG_CTX_TEST, L"Test archive").c_str());
+        if (s.ctxArchiveInfo)   addItem(CMD_INFO,           CtxText(LNG_CTX_INFO, L"Archive information").c_str());
+        if (s.ctxSettings)      addItem(CMD_SETTINGS,       CtxText(LNG_CTX_SETTINGS, L"ArchiveFldr settings...").c_str());
         break;
     }
     }
@@ -290,6 +374,7 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
         mi.hSubMenu   = hTarget;
         mi.dwTypeData = (LPWSTR)s.ctxSubMenuTitle.c_str();
         mi.fState     = MFS_ENABLED;
+        if (hIcon) { mi.fMask |= MIIM_BITMAP; mi.hbmpItem = hIcon; }
         InsertMenuItemW(hMenu, indexMenu, TRUE, &mi);
     }
 

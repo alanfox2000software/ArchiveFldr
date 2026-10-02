@@ -6,26 +6,27 @@
 // process has no part in that and was only ever in the way.
 //
 // The settings UI used to live inside the shell extension, which meant
-// Explorer loaded the whole dialog — six pages, a tree view, the common
-// controls — into every process that so much as right-clicked a file, and
-// kept it resident for as long as the shell cached the DLL. A settings
-// window has no business inside a shell extension, so it is its own
-// program now. ArchiveFldr launches it and gets out of the way.
+// Explorer loaded the whole dialog into every process that so much as
+// right-clicked a file, and kept it resident for as long as the shell
+// cached the DLL. A settings window has no business inside a shell
+// extension, so it is its own program now. ArchiveFldr launches it and
+// gets out of the way.
 //
-// Registration still writes to HKLM, so the Register / Unregister buttons
-// need an elevated process. This runs asInvoker: starting it normally is
-// enough to read and change preferences, and the registration buttons
-// report the failure rather than the window refusing to open at all.
+// It runs elevated. Everything it writes is machine-wide — preferences
+// under HKLM\\SOFTWARE\\ArchiveFldr, and a shell extension registered
+// for every account — so the manifest asks for administrator and the
+// prompt comes once, at launch, instead of a save failing later.
 
 #include "stdafx.h"
 #include <initguid.h>   // emits storage for the CLSIDs below, as dllmain.cpp
 #include "GUIDs.h"      // does for the shell extension
 #include "SettingsDialog.h"
 #include "Settings.h"
+#include "Lang.h"
 
 // The shell extension gets these from DllMain; a plain program has to
-// supply its own. Common controls must be up before the tree view and
-// the up-down controls on the settings pages are created.
+// supply its own. Common controls must be up before the tab strip and
+// the list views on the settings pages are created.
 void EnsureCommonControls()
 {
     struct Starter {
@@ -97,6 +98,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE,
     // Settings::Get() loads on first touch; do it here so a failure to read
     // the registry surfaces before the window appears rather than midway.
     Settings::Get();
+
+    // The chosen language, before a single window exists — the dialog
+    // templates are in English and Lang::Apply overwrites them as each
+    // page is created, so loading later would show a flash of English.
+    Lang::Load(Settings::Get().language);
 
     CSettingsDialog dlg;
     dlg.Show(nullptr);

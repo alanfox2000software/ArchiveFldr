@@ -21,6 +21,13 @@ enum class ExtractPathMode : int {
     Downloads      = 4
 };
 
+// ── Working folder ────────────────────────────────────────
+// Where an extract-to-temp lands before the shell copies it out.
+enum class WorkDirMode : int {
+    SystemTemp = 0,   // whatever GetTempPath says
+    Specified  = 1    // workDirPath
+};
+
 // ── Date Format ───────────────────────────────────────────
 enum class DateFmt : int {
     ISO8601    = 0,   // 2024-12-31 23:59
@@ -53,6 +60,10 @@ public:
     void Save() const;
     void Reset();
 
+    // ── Language ──────────────────────────────────────────
+    // File stem under Lang\, so "en" means Lang\en.txt.
+    std::wstring  language             = L"en";
+
     // ── General ───────────────────────────────────────────
     bool          showPreviewPane      = true;
     bool          showThumbnails       = true;
@@ -76,7 +87,29 @@ public:
     // It replaces sixteen hard-coded handleXxx booleans that nothing ever
     // read: the format table in Formats.cpp is the real list, and it has
     // 21 registrable entries, not 16.
-    std::set<std::wstring> associatedExts;
+    // Two sets, because the association genuinely is per bitness: a
+    // 64-bit Explorer loads ArchiveFldr.64.dll and a 32-bit host loads
+    // ArchiveFldr.32.dll, each registering in its own view of
+    // HKLM\Software\Classes. One tick could not describe both.
+    std::set<std::wstring> assoc32;
+    std::set<std::wstring> assoc64;
+
+    // The set belonging to the build that is asking. Registration code
+    // wants its own bitness and nothing else.
+    std::set<std::wstring>& AssociatedHere() {
+#ifdef _WIN64
+        return assoc64;
+#else
+        return assoc32;
+#endif
+    }
+    const std::set<std::wstring>& AssociatedHere() const {
+#ifdef _WIN64
+        return assoc64;
+#else
+        return assoc32;
+#endif
+    }
 
     // Listed in HKLM\SOFTWARE\RegisteredApplications, so Windows shows
     // ArchiveFldr in Settings > Default apps. Writing it needs admin, so
@@ -88,12 +121,17 @@ public:
     bool          ctxExtract          = true;
     bool          ctxExtractHere      = true;
     bool          ctxAddToArchive     = true;
+    // "Add to <name>.<ext>", the one-click compress. Separate from
+    // ctxAddToArchive because they are two menu entries and 7-Zip's
+    // options list treats them as two.
+    bool          ctxCompressHere     = true;
     bool          ctxCompressEmail    = true;
     bool          ctxOpenInShell      = true;
     bool          ctxTestArchive      = true;
     bool          ctxArchiveInfo      = true;
     bool          ctxSettings         = true;
-    bool          ctxUseSubMenu       = true;
+    bool          ctxUseSubMenu       = true;   // "Cascaded context menu"
+    bool          ctxMenuIcons        = true;   // "Icons in context menu"
     std::wstring  ctxSubMenuTitle     = L"ArchiveFldr";
 
     // ── Appearance ────────────────────────────────────────
@@ -110,8 +148,13 @@ public:
     // ── Advanced ──────────────────────────────────────────
     bool          multiThreaded       = true;
     int           threadCount         = 0;   // 0 = auto (CPU count)
-    bool          useTempDir          = false;
+    // Working folder (Folders page). useTempDir stays as the on-disk
+    // name of the same switch so existing installs keep their setting.
+    bool          useTempDir          = false;  // true = WorkDirMode::Specified
     std::wstring  tempDirPath;
+    WorkDirMode   WorkDir() const {
+        return useTempDir ? WorkDirMode::Specified : WorkDirMode::SystemTemp;
+    }
     bool          logErrors           = true;
     std::wstring  logFilePath;
 

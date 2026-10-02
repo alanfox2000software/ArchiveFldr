@@ -447,6 +447,7 @@
     <ClCompile Include="src\Settings.cpp" />
     <ClCompile Include="src\Registry.cpp" />
     <ClCompile Include="src\Formats.cpp" />
+    <ClCompile Include="src\Lang.cpp" />
     <ClCompile Include="src\SysInfo.cpp" />
   </ItemGroup>
   <!-- ═══════════════════════════════════════════════════
@@ -458,6 +459,7 @@
     <ClInclude Include="src\SettingsDialog.h" />
     <ClInclude Include="src\Registry.h" />
     <ClInclude Include="src\Formats.h" />
+    <ClInclude Include="src\Lang.h" />
     <ClInclude Include="src\SysInfo.h" />
     <ClInclude Include="src\GUIDs.h" />
     <ClInclude Include="res\resource.h" />

@@ -1,0 +1,109 @@
+;
+; ArchiveFldr — English
+; ─────────────────────────────────────────────────────────────────────
+; One line per string:
+;
+;     <id> = "text"
+;
+; <id> is the resource id of the control, dialog or string the text
+; belongs to, as defined in res\resource.h. Blank lines and lines
+; starting with ';' are ignored. Inside the quotes, \n is a line break,
+; \t a tab and \\ a backslash.
+;
+; This file is the reference: every id ArchiveFldr looks up appears
+; below, and nothing else does — an id missing from this file is an id
+; the program never asks for. To add a language, copy it to <code>.txt — the stem is the
+; language code shown on the Language page — and translate the right
+; hand side only. Never change an id. Any line you leave out simply
+; falls back to the English built into the program, so a partial
+; translation is perfectly usable.
+;
+; Save as UTF-8 (with or without a byte order mark) or UTF-16 LE.
+; ─────────────────────────────────────────────────────────────────────
+
+; ── Language name ────────────────────────────────────────
+; 0 = the name in this language, 1 = the same name in English.
+0 = "English"
+1 = "English"
+
+
+; ═════════════════════════════════════════════════════════
+; Options window
+; ═════════════════════════════════════════════════════════
+
+; The window caption, and the tab captions — a page's tab is keyed on
+; the page's own dialog id.
+100 = "Options"
+101 = "System"
+102 = "ArchiveFldr"
+103 = "Folders"
+104 = "Settings"
+105 = "Language"
+
+1001 = "OK"
+1002 = "Cancel"
+1003 = "Apply"
+
+
+; ── System page ──────────────────────────────────────────
+1010 = "Associate ArchiveFldr with:"
+1012 = "32-bit:"
+1013 = "Select all"
+1014 = "Clear all"
+1015 = "64-bit:"
+1016 = "Select all"
+1017 = "Clear all"
+
+; Column headings of the file type list.
+2020 = "File type"
+2021 = "32-bit"
+2022 = "64-bit"
+
+
+; ── ArchiveFldr page ─────────────────────────────────────
+1020 = "Integrate ArchiveFldr to shell context menu"
+1021 = "Cascaded context menu"
+1022 = "Icons in context menu"
+1023 = "Context menu items:"
+
+; The context menu items themselves. Each one is a real entry in the
+; menu; clearing its tick removes it.
+2000 = "Open archive"
+2001 = "Extract files..."
+2002 = "Extract Here"
+2003 = "Test archive"
+2004 = "Add to archive..."
+; %s becomes the archive the menu would create, e.g. archive.zip
+2005 = "Add to \"%s\""
+2006 = "Compress and email..."
+2007 = "Archive information"
+2008 = "ArchiveFldr settings..."
+
+
+; ── Folders page ─────────────────────────────────────────
+1030 = "Working folder"
+1031 = "System temp folder"
+1032 = "Specified folder:"
+1034 = "..."
+
+2047 = "Choose the working folder:"
+
+
+; ── Settings page ────────────────────────────────────────
+1040 = "Shell extension"
+1042 = "Install"
+1043 = "Uninstall"
+
+2040 = "registered"
+2041 = "not registered"
+
+2043 = "Install registers the shell extension so Explorer can browse archives as folders, and lists ArchiveFldr in Settings > Default apps for the file types ticked on the System page.\n\nUninstall removes both, leaving the files on disk.\n\nExplorer caches shell extensions, so sign out and back in — or restart Explorer — for a change to take effect everywhere."
+2044 = "ArchiveFldr was installed."
+2045 = "Some parts could not be changed."
+2046 = "ArchiveFldr was removed."
+
+
+; ── Language page ────────────────────────────────────────
+1050 = "Language:"
+2023 = "Language"
+2024 = "English name"

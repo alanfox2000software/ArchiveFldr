@@ -230,8 +230,10 @@
     <PostBuildEvent>
       <Command>if exist "$(ProjectDir)thirdparty\" xcopy /y /i /e /s "$(ProjectDir)thirdparty\*.dll" "$(OutDir)thirdparty\" &gt;nul 2&gt;nul
 if exist "$(ProjectDir)Lang\" xcopy /y /i "$(ProjectDir)Lang\*.txt" "$(OutDir)Lang\" &gt;nul 2&gt;nul
-regsvr32 /s "$(TargetPath)"
-echo [ArchiveFldr] Registered Debug x86: $(TargetFileName)</Command>
+set "RS=%SystemRoot%\SysWOW64\regsvr32.exe"
+if not exist "%RS%" set "RS=%SystemRoot%\System32\regsvr32.exe"
+"%RS%" /s "$(TargetPath)" &amp;&amp; echo [ArchiveFldr] Registered Debug x86: $(TargetFileName) || echo [ArchiveFldr] Built Debug x86: $(TargetFileName) - NOT registered, run Visual Studio as administrator
+exit /b 0</Command>
       <Message>Registering Shell Extension (Debug x86)...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -299,8 +301,10 @@ echo [ArchiveFldr] Registered Debug x86: $(TargetFileName)</Command>
     <PostBuildEvent>
       <Command>if exist "$(ProjectDir)thirdparty\" xcopy /y /i /e /s "$(ProjectDir)thirdparty\*.dll" "$(OutDir)thirdparty\" &gt;nul 2&gt;nul
 if exist "$(ProjectDir)Lang\" xcopy /y /i "$(ProjectDir)Lang\*.txt" "$(OutDir)Lang\" &gt;nul 2&gt;nul
-regsvr32 /s "$(TargetPath)"
-echo [ArchiveFldr] Registered Release x86: $(TargetFileName)</Command>
+set "RS=%SystemRoot%\SysWOW64\regsvr32.exe"
+if not exist "%RS%" set "RS=%SystemRoot%\System32\regsvr32.exe"
+"%RS%" /s "$(TargetPath)" &amp;&amp; echo [ArchiveFldr] Registered Release x86: $(TargetFileName) || echo [ArchiveFldr] Built Release x86: $(TargetFileName) - NOT registered, run Visual Studio as administrator
+exit /b 0</Command>
       <Message>Registering Shell Extension (Release x86)...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -364,8 +368,10 @@ echo [ArchiveFldr] Registered Release x86: $(TargetFileName)</Command>
     <PostBuildEvent>
       <Command>if exist "$(ProjectDir)thirdparty\" xcopy /y /i /e /s "$(ProjectDir)thirdparty\*.dll" "$(OutDir)thirdparty\" &gt;nul 2&gt;nul
 if exist "$(ProjectDir)Lang\" xcopy /y /i "$(ProjectDir)Lang\*.txt" "$(OutDir)Lang\" &gt;nul 2&gt;nul
-regsvr32 /s "$(TargetPath)"
-echo [ArchiveFldr] Registered Debug x64: $(TargetFileName)</Command>
+set "RS=%SystemRoot%\Sysnative\regsvr32.exe"
+if not exist "%RS%" set "RS=%SystemRoot%\System32\regsvr32.exe"
+"%RS%" /s "$(TargetPath)" &amp;&amp; echo [ArchiveFldr] Registered Debug x64: $(TargetFileName) || echo [ArchiveFldr] Built Debug x64: $(TargetFileName) - NOT registered, run Visual Studio as administrator
+exit /b 0</Command>
       <Message>Registering Shell Extension (Debug x64)...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -433,8 +439,10 @@ echo [ArchiveFldr] Registered Debug x64: $(TargetFileName)</Command>
     <PostBuildEvent>
       <Command>if exist "$(ProjectDir)thirdparty\" xcopy /y /i /e /s "$(ProjectDir)thirdparty\*.dll" "$(OutDir)thirdparty\" &gt;nul 2&gt;nul
 if exist "$(ProjectDir)Lang\" xcopy /y /i "$(ProjectDir)Lang\*.txt" "$(OutDir)Lang\" &gt;nul 2&gt;nul
-regsvr32 /s "$(TargetPath)"
-echo [ArchiveFldr] Registered Release x64: $(TargetFileName)</Command>
+set "RS=%SystemRoot%\Sysnative\regsvr32.exe"
+if not exist "%RS%" set "RS=%SystemRoot%\System32\regsvr32.exe"
+"%RS%" /s "$(TargetPath)" &amp;&amp; echo [ArchiveFldr] Registered Release x64: $(TargetFileName) || echo [ArchiveFldr] Built Release x64: $(TargetFileName) - NOT registered, run Visual Studio as administrator
+exit /b 0</Command>
       <Message>Registering Shell Extension (Release x64)...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -525,4 +533,60 @@ echo [ArchiveFldr] Registered Release x64: $(TargetFileName)</Command>
     <None Include="Lang\en.txt" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+  <!-- ═══════════════════════════════════════════════════
+       The 32-bit DLL is part of an x64 build
+
+       On 64-bit Windows both DLLs are live at once: a 64-bit Explorer
+       loads ArchiveFldr.64.dll, while 32-bit hosts — the common file
+       dialog in a 32-bit program, an old shell replacement, Office's
+       file browser — load ArchiveFldr.32.dll. The settings program
+       registers and unregisters both, and the System page offers a
+       tick column for each, so an x64 build that produced only the
+       64-bit DLL left half of that pointing at a file that was never
+       built.
+
+       A solution configuration maps each project to exactly one
+       project configuration, so the solution cannot build this
+       project twice. Building Win32 from inside the x64 build is the
+       way round that. Configuration is passed through unchanged and
+       only Platform is swapped, so the nested build carries exactly
+       the global properties the solution would have given its own
+       Win32 build. MSBuild keys project instances on that set, so when
+       a batch build asks for both platforms this still runs once.
+
+       Visual Studio's up-to-date check can skip a project whose
+       outputs are current, and skips these targets with it. Delete
+       the 32-bit DLL and rebuild if you ever need to force it back.
+
+       Recursion stops by construction — the nested build has
+       Platform=Win32, and these targets only run for x64. Set
+       ArchiveFldrBuildWin32Companion=false to turn it off.
+  ═══════════════════════════════════════════════════ -->
+  <PropertyGroup>
+    <ArchiveFldrBuildWin32Companion Condition="'$(ArchiveFldrBuildWin32Companion)' == ''">true</ArchiveFldrBuildWin32Companion>
+    <ArchiveFldrWin32Companion Condition="'$(Platform)' == 'x64' AND '$(ArchiveFldrBuildWin32Companion)' == 'true'">true</ArchiveFldrWin32Companion>
+  </PropertyGroup>
+
+  <Target Name="ArchiveFldrBuildWin32"
+          AfterTargets="Build"
+          Condition="'$(ArchiveFldrWin32Companion)' == 'true'">
+    <Message Importance="high"
+             Text="[ArchiveFldr] $(Configuration)|x64 also builds the 32-bit DLL..." />
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);Platform=Win32" />
+  </Target>
+
+  <!-- Clean x64 without this leaves a stale ArchiveFldr.32.dll in
+       bin\$(Configuration)\, which the settings program would happily
+       register. Rebuild is Clean then Build, so it needs no hook of its
+       own; adding one would build the companion twice. -->
+  <Target Name="ArchiveFldrCleanWin32"
+          AfterTargets="Clean"
+          Condition="'$(ArchiveFldrWin32Companion)' == 'true'">
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="Clean"
+             Properties="Configuration=$(Configuration);Platform=Win32" />
+  </Target>
 </Project>

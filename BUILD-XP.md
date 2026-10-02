@@ -83,23 +83,41 @@ builds normally in VS2026 — the switch only takes effect when you pass it.
 
 ## What gets built
 
-The solution produces two binaries per configuration, both into
-`bin\<Configuration>\`, and they belong in the same folder:
+Everything lands in `bin\<Configuration>\`, and it all belongs in the
+same folder:
 
-| File | What it is |
-|---|---|
-| `ArchiveFldr.64.dll` / `ArchiveFldr.32.dll` | the shell extension — this is the file `regsvr32` registers |
-| `ArchiveFldrSetting.64.exe` / `ArchiveFldrSetting.32.exe` | the settings window, started by "ArchiveFldr settings..." |
+| File | What it is | Built by |
+|---|---|---|
+| `ArchiveFldr.64.dll` | the shell extension, for 64-bit hosts | x64 |
+| `ArchiveFldr.32.dll` | the shell extension, for 32-bit hosts | x64 **and** Win32 |
+| `ArchiveFldrSetting.64.exe` / `ArchiveFldrSetting.32.exe` | the settings window, started by "ArchiveFldr settings..." | x64 / Win32 |
+| `Lang\*.txt` | the language files, copied from `Lang\` | both |
+| `thirdparty\**\*.dll` | the codec engines, copied from `thirdparty\` | both |
 
-Only the DLL is registered. The settings program is an ordinary
-executable that the DLL starts on demand, which keeps a six-page dialog
-out of every process that loads a context menu. It looks for the
-bitness-matched DLL next to itself when you use its Register button, so
-keep the pair together.
+**An x64 build produces both DLLs.** On 64-bit Windows the two are live
+at the same time — a 64-bit Explorer loads `ArchiveFldr.64.dll`, while
+32-bit hosts such as the common file dialog in a 32-bit program load
+`ArchiveFldr.32.dll` — and the settings program registers both. A
+solution configuration can only map a project to one platform, so the
+x64 configuration of `ArchiveFldr.vcxproj` builds Win32 as a nested
+step. Pass `/p:ArchiveFldrBuildWin32Companion=false` to skip it. A
+Win32 build still produces only the 32-bit DLL, which is all a 32-bit
+Windows can use.
 
-Registration writes to HKLM. The settings program runs `asInvoker`, so
-its Register / Unregister buttons only work when it was started as
-administrator; the Integration page says so when they fail.
+Only the DLLs are registered. The settings program is an ordinary
+executable that the DLL starts on demand, which keeps the whole Options
+window out of every process that loads a context menu. Its Install
+button registers whichever of the two DLLs it finds next to itself,
+each with the matching `regsvr32`, so keep them together.
+
+Everything the settings program writes is machine-wide —
+`HKLM\SOFTWARE\ArchiveFldr` for preferences, `HKLM\SOFTWARE\Classes`
+for registration — so it is manifested `requireAdministrator` and asks
+for elevation once, at launch.
+
+The build registers the DLL it just produced as a convenience. That
+needs an elevated Visual Studio; without one the build still succeeds
+and says `NOT registered` instead.
 
 ## What runs where
 
@@ -109,6 +127,7 @@ administrator; the Integration page says so when they fail.
 | Context menus, drag and drop | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Extract / test | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Settings program | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Translated UI from `Lang\` | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Thumbnail provider | — | ✓ | ✓ | ✓ | ✓ |
 | Preview pane | — | ✓ | ✓ | ✓ | ✓ |
 | Listed in Default apps | — | ✓ | ✓ | ✓ | ✓ |

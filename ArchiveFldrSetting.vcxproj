@@ -90,33 +90,40 @@
   <!-- ═══════════════════════════════════════════════════
        Output / Intermediate Directories
   ════════════════════════════════════════════════════ -->
-  <!-- NOTE: both platforms now share one OutDir (bin\$(Configuration)\) so
-       that ArchiveFldr.32.dll and ArchiveFldr.64.dll land side by side, alongside
-       a shared thirdparty\ tree (see PostBuildEvent below) — this is
-       what lets ArchiveFldr locate its bitness-matched engine DLLs relative
-       to its own module path at runtime (see src\ThirdParty.h). IntDir stays per-arch so the two
-       builds' object files never collide. -->
+  <!-- Both platforms share one OutDir (bin\$(Configuration)\) so that
+       ArchiveFldr.32.dll and ArchiveFldr.64.dll land side by side,
+       alongside a shared thirdparty\ tree (see PostBuildEvent below).
+       That is what lets ArchiveFldr find its bitness-matched engine
+       DLLs relative to its own module path at runtime (see
+       src\ThirdParty.h).
+
+       IntDir, by contrast, is per architecture AND per project. Both
+       projects compile res\resource.rc, so a shared IntDir had them
+       writing the same resource.res, and MSBuild's file trackers
+       (CL.*.tlog, link.*.tlog, mt.*.tlog) collided in the same place:
+       that is warning MSB8028, and it makes clean and incremental
+       builds unreliable. -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)obj\$(Configuration)\x86\</IntDir>
+    <IntDir>$(SolutionDir)obj\$(Configuration)\x86\$(ProjectName)\</IntDir>
     <TargetName>ArchiveFldrSetting.32</TargetName>
     <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)obj\$(Configuration)\x86\</IntDir>
+    <IntDir>$(SolutionDir)obj\$(Configuration)\x86\$(ProjectName)\</IntDir>
     <TargetName>ArchiveFldrSetting.32</TargetName>
     <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)obj\$(Configuration)\x64\</IntDir>
+    <IntDir>$(SolutionDir)obj\$(Configuration)\x64\$(ProjectName)\</IntDir>
     <TargetName>ArchiveFldrSetting.64</TargetName>
     <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)obj\$(Configuration)\x64\</IntDir>
+    <IntDir>$(SolutionDir)obj\$(Configuration)\x64\$(ProjectName)\</IntDir>
     <TargetName>ArchiveFldrSetting.64</TargetName>
     <TargetExt>.exe</TargetExt>
   </PropertyGroup>
@@ -223,6 +230,12 @@
         %(AdditionalDependencies)
       </AdditionalDependencies>
       <!-- Do NOT link runtimeobject.lib (WinRT) -->
+      <!-- The UAC level has to be set HERE, not in
+           res\setting.manifest.xml. mt.exe merges that file with a
+           snippet MSBuild generates from this property, and if the two
+           disagree about "level" it stops with authoring error
+           c1010001 and the link fails with LNK1327. -->
+      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
     <Manifest>
       <AdditionalManifestFiles>res\setting.manifest.xml</AdditionalManifestFiles>
@@ -291,6 +304,12 @@
         comdlg32.lib;
         %(AdditionalDependencies)
       </AdditionalDependencies>
+      <!-- The UAC level has to be set HERE, not in
+           res\setting.manifest.xml. mt.exe merges that file with a
+           snippet MSBuild generates from this property, and if the two
+           disagree about "level" it stops with authoring error
+           c1010001 and the link fails with LNK1327. -->
+      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
     <Manifest>
       <AdditionalManifestFiles>res\setting.manifest.xml</AdditionalManifestFiles>
@@ -355,6 +374,12 @@
         comdlg32.lib;
         %(AdditionalDependencies)
       </AdditionalDependencies>
+      <!-- The UAC level has to be set HERE, not in
+           res\setting.manifest.xml. mt.exe merges that file with a
+           snippet MSBuild generates from this property, and if the two
+           disagree about "level" it stops with authoring error
+           c1010001 and the link fails with LNK1327. -->
+      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
     <Manifest>
       <AdditionalManifestFiles>res\setting.manifest.xml</AdditionalManifestFiles>
@@ -423,6 +448,12 @@
         comdlg32.lib;
         %(AdditionalDependencies)
       </AdditionalDependencies>
+      <!-- The UAC level has to be set HERE, not in
+           res\setting.manifest.xml. mt.exe merges that file with a
+           snippet MSBuild generates from this property, and if the two
+           disagree about "level" it stops with authoring error
+           c1010001 and the link fails with LNK1327. -->
+      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
     <Manifest>
       <AdditionalManifestFiles>res\setting.manifest.xml</AdditionalManifestFiles>

@@ -35,21 +35,18 @@
   </dependency>
 
   <!-- ── UAC ───────────────────────────────────────────── -->
-  <!-- requireAdministrator, because every setting this program owns is
-       machine-wide: preferences live in HKLM\SOFTWARE\ArchiveFldr and
+  <!-- There is deliberately no trustInfo here. The level is
+       requireAdministrator, set by UACExecutionLevel in
+       ArchiveFldrSetting.vcxproj, and mt.exe merges this file with the
+       snippet MSBuild generates from that property. Two snippets that
+       disagree about "level" are a hard error, c1010001, which surfaces
+       as LNK1327 at link time, so the value lives in exactly one place.
+
+       Why administrator: every setting this program owns is
+       machine-wide. Preferences live in HKLM\SOFTWARE\ArchiveFldr and
        the Install / Uninstall buttons register a shell extension for
        every account. Asking once at launch is honest; the alternative
        is a window that opens happily and then fails on save. -->
-  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
-    <security>
-      <requestedPrivileges>
-        <requestedExecutionLevel
-          level             = "requireAdministrator"
-          uiAccess          = "false"
-        />
-      </requestedPrivileges>
-    </security>
-  </trustInfo>
 
   <!-- ── Windows 10+ compatibility ────────────────────── -->
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">

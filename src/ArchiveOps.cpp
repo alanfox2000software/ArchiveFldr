@@ -398,10 +398,16 @@ static std::wstring ArchiveLeafName(const EnginePtr& eng)
 bool EnsureOpenPassword(HWND hwnd, const EnginePtr& eng)
 {
     if (!eng) return false;
-    if (!eng->PasswordNeededToOpen()) return true;
+    if (eng->IsOpen()) return true;
+    if (!eng->PasswordNeededToOpen()) return false;
 
     const std::wstring path = eng->GetFilePath();
     if (path.empty()) return false;
+
+    // Another Explorer shell object may already have verified and cached the
+    // password for this archive. Let Open() consume that in-process cache
+    // before showing a duplicate prompt in this object.
+    if (eng->GetPassword().empty() && eng->Open(path)) return true;
 
     for (int attempt = 0; eng->PasswordNeededToOpen() && attempt < 3;
          ++attempt)

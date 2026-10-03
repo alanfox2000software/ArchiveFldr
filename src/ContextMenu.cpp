@@ -1322,13 +1322,19 @@ void CContextMenu::DoInfo()
 void CContextMenu::DoCopy()
 {
     auto eng = AcquireEngine();
+    if (!ArchiveOps::EnsureOpenPassword(m_hwnd, eng)) return;
     if (!ArchiveOps::EnsureCanRead(m_hwnd, eng)) return;
 
     IDataObject* pdo = nullptr;
-    if (FAILED(MakeDataObject(IID_IDataObject, (void**)&pdo)) || !pdo)
+    const HRESULT dataHr = MakeDataObject(IID_IDataObject, (void**)&pdo);
+    if (FAILED(dataHr) || !pdo)
     {
-        MessageBoxW(m_hwnd, L"Nothing could be copied from this selection.",
-                    L"ArchiveFldr", MB_ICONWARNING | MB_OK);
+        if (dataHr == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return;
+        std::wstring msg = L"Nothing could be copied from this selection.";
+        const std::wstring detail = eng->GetLastErrorText();
+        if (!detail.empty()) msg += L"\n\n" + detail;
+        MessageBoxW(m_hwnd, msg.c_str(), L"ArchiveFldr",
+                    MB_ICONWARNING | MB_OK);
         return;
     }
 

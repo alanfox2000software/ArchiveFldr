@@ -85,7 +85,7 @@ public:
     uint64_t     GetPackedSize()  const override;
 
     // Last human-readable error (empty when the previous call succeeded).
-    const std::wstring& GetLastError() const { return m_lastError; }
+    std::wstring GetLastErrorText() const override { return m_lastError; }
 
 private:
     // Display name of the handler that actually opened the file ("tar",

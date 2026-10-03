@@ -143,6 +143,10 @@ public:
     // data still needs a password — a plain encrypted zip.)
     virtual bool HasEncryptedItems() const { return false; }
 
+    // Human-readable detail from the most recent failed operation. Engines
+    // that do not expose one leave this empty.
+    virtual std::wstring GetLastErrorText() const { return L""; }
+
     // Short handler id of the open archive ("zip", "7z", ...), empty when
     // unknown. This is the format key ArchiveWriter's choice lists take,
     // which is what the Add to Archive dialog shows in update mode.

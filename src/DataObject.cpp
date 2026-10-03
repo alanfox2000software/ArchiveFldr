@@ -135,6 +135,12 @@ HRESULT CArchiveDataObject::Create(CShellFolder* folder, HWND owner, UINT cidl,
 
     auto engine = folder->GetEngine();
     if (!engine) return E_FAIL;
+    // Explorer can request IDataObject directly for drag-out, without going
+    // through ArchiveFldr's Copy command. Reopen a header-encrypted sibling
+    // engine (normally from the verified in-process password cache) before
+    // resolving PIDLs or staging any bytes.
+    if (!ArchiveOps::EnsureOpenPassword(owner, engine))
+        return HRESULT_FROM_WIN32(ERROR_CANCELLED);
 
     auto* p = new(std::nothrow) CArchiveDataObject();
     if (!p) return E_OUTOFMEMORY;
@@ -191,8 +197,13 @@ HRESULT CArchiveDataObject::Create(CShellFolder* folder, HWND owner, UINT cidl,
     {
         if (!p->EnsureStaged(item, owner))
         {
+            // A clean failure means the user dismissed the password prompt;
+            // an engine error must reach Copy so it can display the useful
+            // reason instead of the same opaque message for every fault.
+            const HRESULT hr = engine->GetLastErrorText().empty()
+                ? HRESULT_FROM_WIN32(ERROR_CANCELLED) : E_FAIL;
             p->Release();
-            return HRESULT_FROM_WIN32(ERROR_CANCELLED);
+            return hr;
         }
     }
 
@@ -218,7 +229,7 @@ STDMETHODIMP_(ULONG) CArchiveDataObject::Release()
 { ULONG n = InterlockedDecrement(&m_cRef); if (!n) delete this; return n; }
 
 // ─────────────────────────────────────────────────────────
-// Staging (extract on demand into one private temp folder)
+// Staging (extract before OLE transfer into one private temp folder)
 // ─────────────────────────────────────────────────────────
 bool CArchiveDataObject::EnsureTempRoot()
 {
@@ -543,8 +554,8 @@ STDMETHODIMP CArchiveDataObject::EnumFormatEtc(DWORD dwDirection,
 
     const Formats& f = CF();
     std::vector<FORMATETC> list = {
-        // Virtual-file formats first: they stream straight out of the
-        // archive, no up-front extraction of the whole selection.
+        // Virtual-file formats first. Their streams read the files staged
+        // before OLE began, so password UI never appears inside GetData().
         { f.descriptorW,     nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL },
         { f.contents,        nullptr, DVASPECT_CONTENT,  0, TYMED_ISTREAM },
         { f.idList,          nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL },

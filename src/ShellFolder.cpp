@@ -450,7 +450,13 @@ STDMETHODIMP CShellFolder::EnumObjects(HWND hwnd, DWORD grfFlags, IEnumIDList** 
     // through this method. Prompt here, immediately before List(), so an
     // archive with encrypted file names is reopened before either view can
     // mistake its still-hidden entries for an empty archive.
-    ArchiveOps::EnsureOpenPassword(hwnd, m_engine);
+    if (!ArchiveOps::EnsureOpenPassword(hwnd, m_engine))
+    {
+        // Cancellation is not an empty archive. Propagate it to Explorer so
+        // the failed navigation cannot be presented as a valid folder with
+        // no files in it.
+        return HRESULT_FROM_WIN32(ERROR_CANCELLED);
+    }
 
     std::vector<LPITEMIDLIST> items;
     if (m_engine) {
@@ -562,6 +568,13 @@ STDMETHODIMP CShellFolder::CreateViewObject(HWND hwnd, REFIID riid, void** ppv)
     *ppv = nullptr;
 
     if (IsEqualIID(riid, IID_IShellView) || IsEqualIID(riid, IID_IShellView2)) {
+        // This is the last point in navigation at which a failure can stop
+        // Explorer from entering the folder. Prompt before handing back a
+        // view; if the user cancels, return cancellation instead of creating
+        // a view that can only look like a successfully opened empty archive.
+        if (!ArchiveOps::EnsureOpenPassword(hwnd, m_engine))
+            return HRESULT_FROM_WIN32(ERROR_CANCELLED);
+
         // Prefer the Shell's own default folder view (DefView). It is the
         // view Explorer expects to host, and it drives this folder through
         // the IShellFolder2 methods we already implement — columns, sorting,

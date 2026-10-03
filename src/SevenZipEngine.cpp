@@ -33,6 +33,59 @@ Func7z_GetHandlerProperty2 g_pHandlerProp  = nullptr;
 std::wstring               g_enginePath;
 std::once_flag             g_initOnce;
 
+// Explorer can create more than one shell-folder/engine object for the same
+// open view (enumeration, context menu and IDataObject are not guaranteed to
+// use one COM object). Keep a verified password for that archive in process
+// memory so those sibling objects do not immediately forget it. The key also
+// contains the file stamp/size, so replacing an archive at the same path does
+// not inherit the old file's password.
+std::mutex                              g_passwordMutex;
+std::unordered_map<std::wstring, std::wstring> g_passwords;
+
+std::wstring PasswordCacheKey(const std::wstring& path)
+{
+    std::wstring key = path;
+    wchar_t full[32768] = {};
+    const DWORD n = GetFullPathNameW(path.c_str(), ARRAYSIZE(full), full, nullptr);
+    if (n && n < ARRAYSIZE(full)) key.assign(full, n);
+    for (auto& ch : key) ch = (wchar_t)towlower(ch);
+
+    WIN32_FILE_ATTRIBUTE_DATA fad{};
+    if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fad))
+    {
+        wchar_t stamp[80] = {};
+        swprintf_s(stamp, ARRAYSIZE(stamp), L"|%08X%08X|%08X%08X",
+                   fad.ftLastWriteTime.dwHighDateTime,
+                   fad.ftLastWriteTime.dwLowDateTime,
+                   fad.nFileSizeHigh, fad.nFileSizeLow);
+        key += stamp;
+    }
+    return key;
+}
+
+std::wstring RecallPassword(const std::wstring& path)
+{
+    std::lock_guard<std::mutex> lock(g_passwordMutex);
+    const auto it = g_passwords.find(PasswordCacheKey(path));
+    return it == g_passwords.end() ? std::wstring() : it->second;
+}
+
+void RememberPassword(const std::wstring& path, const std::wstring& password)
+{
+    if (password.empty()) return;
+    std::lock_guard<std::mutex> lock(g_passwordMutex);
+    g_passwords[PasswordCacheKey(path)] = password;
+}
+
+void ForgetPassword(const std::wstring& path, const std::wstring& password)
+{
+    if (password.empty()) return;
+    std::lock_guard<std::mutex> lock(g_passwordMutex);
+    const auto it = g_passwords.find(PasswordCacheKey(path));
+    if (it != g_passwords.end() && it->second == password)
+        g_passwords.erase(it);
+}
+
 // Engine discovery is delegated to the universal third-party DLL layout
 // (see ThirdParty.h): thirdparty\7z\7z.64.dll, thirdparty\7z\7z.dll,
 // <ArchiveFldr dir>\7z.64.dll, an installed 7-Zip, ... — one shared search
@@ -737,14 +790,11 @@ public:
         m_passwordRequested    = true;
         m_curPasswordRequested = true;
 
-        // Do not silently try an empty BSTR when the UI has never supplied
-        // a password.  Aborting lets the engine classify this as "password
-        // required" and retry after the shared password prompt.
-        if (m_password.empty())
-        {
-            *password = nullptr;
-            return E_ABORT;
-        }
+        // For extraction, return an empty BSTR rather than E_ABORT when no
+        // password has been supplied yet.  The handler then completes this
+        // item with its normal wrong-password/data result, leaving the open
+        // archive reusable for the prompted retry.  PasswordWasRequested()
+        // still lets the engine distinguish this from corrupt plain data.
         *password = SysAllocString(m_password.c_str());
         return *password ? S_OK : E_OUTOFMEMORY;
     }
@@ -820,6 +870,10 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
     m_filePath = path;
     m_readOnly = true;
 
+    // A sibling Explorer shell object may already have verified this
+    // archive's password. Reuse it before asking 7z.dll to open headers.
+    if (m_password.empty()) m_password = RecallPassword(path);
+
     Func7z_CreateObject createObj = Get7zCreateObjectFunc();
     if (!createObj)
     {
@@ -846,7 +900,8 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
 
     ComPtr<IInArchive7z> archive;
     std::wstring         chosenName;
-    bool                 passwordAsked = false;
+    bool                 passwordAsked          = false;
+    bool                 passwordVerifiedByOpen = false;
 
     auto tryHandler = [&](const GUID& clsid, const std::wstring& name) -> bool
     {
@@ -887,6 +942,7 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
 
         archive    = candidate;
         chosenName = name;
+        passwordVerifiedByOpen = askedThisHandler && !m_password.empty();
         return true;
     };
 
@@ -915,6 +971,7 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
             // The handler recognised the format but could not read the
             // headers with the password it was (or wasn't) given. This is
             // the "ask the user and try again" case, not a diagnostic one.
+            ForgetPassword(path, m_password); // do not seed sibling engines with a bad value
             m_needPasswordToOpen = true;
             m_lastError = m_password.empty()
                 ? L"This archive's headers are encrypted: a password is "
@@ -995,6 +1052,8 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
     m_archive = archive;
     m_open    = true;
     BuildEntryList();
+    if (passwordVerifiedByOpen)
+        RememberPassword(path, m_password);
     return true;
 }
 
@@ -1288,13 +1347,14 @@ bool C7zArchiveEngine::ExtractIndices(const std::vector<UINT32>& indices,
     const bool ok = (hr == S_OK) && !cbRaw->HadError();
     if (!ok)
     {
-        // Returning E_ABORT before any SetOperationResult is normal when an
-        // encrypted item asks for a password we do not have yet.  Once a
-        // password exists, the callback's per-item result distinguishes a
-        // wrong password from unrelated corruption.
+        // A decoder request with an empty engine password is the initial
+        // "password required" case. Once one exists, the callback's per-item
+        // result distinguishes a wrong password from unrelated corruption.
         m_passwordMissing =
             cbRaw->PasswordWasRequested() && m_password.empty();
         m_wrongPassword = cbRaw->WrongPassword() || m_passwordMissing;
+        if (m_wrongPassword && !m_passwordMissing)
+            ForgetPassword(m_filePath, m_password);
         m_lastError = m_wrongPassword
             ? L"One or more items are encrypted and the password is "
               L"missing or wrong."
@@ -1302,6 +1362,8 @@ bool C7zArchiveEngine::ExtractIndices(const std::vector<UINT32>& indices,
     }
     else
     {
+        if (cbRaw->PasswordWasRequested())
+            RememberPassword(m_filePath, m_password);
         m_lastError.clear();
     }
     return ok;
@@ -1389,6 +1451,8 @@ bool C7zArchiveEngine::Test(ProgressFn cb)
         m_passwordMissing =
             cbRaw->PasswordWasRequested() && m_password.empty();
         m_wrongPassword = cbRaw->WrongPassword() || m_passwordMissing;
+        if (m_wrongPassword && !m_passwordMissing)
+            ForgetPassword(m_filePath, m_password);
         m_lastError = m_wrongPassword
             ? L"Encrypted items could not be verified: the password is "
               L"missing or wrong."
@@ -1396,6 +1460,8 @@ bool C7zArchiveEngine::Test(ProgressFn cb)
     }
     else
     {
+        if (cbRaw->PasswordWasRequested())
+            RememberPassword(m_filePath, m_password);
         m_lastError.clear();
     }
     return ok;

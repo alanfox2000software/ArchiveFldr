@@ -14,14 +14,16 @@
 #define IDI_ARCHIVEFLDR             1
 
 // ── Dialogs ───────────────────────────────────────────────
-// The Options window and its five tabs, laid out after 7-Zip's File
+// The Options window and its four tabs, laid out after 7-Zip's File
 // Manager > Tools > Options. Every id below doubles as a language-file
 // key: Lang.cpp retitles a control by looking its id up in Lang\<x>.txt,
 // so these numbers are part of the file format and must not be
 // renumbered casually.
+//
+// 102 was IDD_PAGE_ARCHIVEFLDR, the Explorer context menu integration
+// page. The feature was removed; the id is retired, never reused.
 #define IDD_OPTIONS                 100
 #define IDD_PAGE_SYSTEM             101
-#define IDD_PAGE_ARCHIVEFLDR        102
 #define IDD_PAGE_FOLDERS            103
 #define IDD_PAGE_SETTINGS           104
 #define IDD_PAGE_LANGUAGE           105
@@ -65,21 +67,12 @@
 #define IDC_BTN_ASSOC_ALL_64        1016
 #define IDC_BTN_ASSOC_NONE_64       1017
 
-// ── ArchiveFldr page ──────────────────────────────────────
-// IDC_CHK_INTEGRATE is the master switch: off means the handler is
-// still registered but contributes nothing to any menu. The two ticks
-// below it are the registration itself, one per build of the DLL — a
-// 64-bit Explorer can only load ArchiveFldr.64.dll and a 32-bit host
-// only ArchiveFldr.32.dll, so each has its own COM registration and a
-// single tick would be a lie on x64. Same reasoning as the two columns
-// on the System page.
-#define IDC_CHK_INTEGRATE           1020
-#define IDC_CHK_CASCADED            1021
-#define IDC_CHK_MENUICONS           1022
-#define IDC_LBL_CTXITEMS            1023
-#define IDC_LIST_CTXITEMS           1024
-#define IDC_CHK_INTEGRATE_64        1025
-#define IDC_CHK_INTEGRATE_32        1026
+// ── ArchiveFldr page (removed) ────────────────────────────
+// 1020–1026 were the controls of the Explorer context menu integration
+// page (IDC_CHK_INTEGRATE, IDC_CHK_CASCADED, IDC_CHK_MENUICONS,
+// IDC_LBL_CTXITEMS, IDC_LIST_CTXITEMS, IDC_CHK_INTEGRATE_64,
+// IDC_CHK_INTEGRATE_32). The feature was removed; the ids are retired,
+// never reused — each is a key in every Lang\<x>.txt on disk.
 
 // ── Folders page ──────────────────────────────────────────
 #define IDC_GRP_WORKFOLDER          1030
@@ -89,10 +82,9 @@
 #define IDC_BTN_WORKDIR             1034
 
 // ── Settings page ─────────────────────────────────────────
-// Install and Uninstall are both per bitness, and both act on the base
-// shell extension only: the right-click menu is registered separately
-// by the two ticks on the ArchiveFldr page, and neither button here
-// touches it.
+// Install and Uninstall are both per bitness, and each acts on the
+// whole shell extension: browsing archives as folders, the context
+// menu inside an opened archive, thumbnails, preview, Default apps.
 //
 // 1042 and 1043 were a single "Install" and a single "Uninstall"
 // button covering both bitnesses. They are retired rather than reused:

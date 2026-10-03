@@ -33,9 +33,10 @@
 
 ; The window caption, and the tab captions — a page's tab is keyed on
 ; the page's own dialog id.
+; 102 was the "ArchiveFldr" tab (Explorer context menu integration).
+; The page was removed with the feature; the id is retired, not reused.
 100 = "Options"
 101 = "System"
-102 = "ArchiveFldr"
 103 = "Folders"
 104 = "Settings"
 105 = "Language"
@@ -60,29 +61,10 @@
 2022 = "64-bit"
 
 
-; ── ArchiveFldr page ─────────────────────────────────────
-; 1020 is the master switch. 1025 and 1026 are the registration, one
-; per build of the DLL: a 64-bit Explorer loads ArchiveFldr.64.dll and
-; a 32-bit host ArchiveFldr.32.dll, so each is integrated on its own.
-1020 = "Integrate ArchiveFldr to shell context menu"
-1025 = "Integrate to shell context menu (64-bit)"
-1026 = "Integrate to shell context menu (32-bit)"
-1021 = "Cascaded context menu"
-1022 = "Icons in context menu"
-1023 = "Context menu items:"
-
-; The context menu items themselves. Each one is a real entry in the
-; menu; clearing its tick removes it.
-2000 = "Open archive"
-2001 = "Extract files..."
-2002 = "Extract Here"
-2003 = "Test archive"
-2004 = "Add to archive..."
-; %s becomes the archive the menu would create, e.g. archive.zip
-2005 = "Add to \"%s\""
-2006 = "Compress and email..."
-2007 = "Archive information"
-2008 = "ArchiveFldr settings..."
+; ── ArchiveFldr page (removed) ───────────────────────────
+; 1020-1026 were the controls of the Explorer context menu page, and
+; 2000-2008 the rows of its menu item list. The feature was removed;
+; the ids are retired, never reused.
 
 
 ; ── Folders page ─────────────────────────────────────────
@@ -95,8 +77,9 @@
 
 
 ; ── Settings page ────────────────────────────────────────
-; Install and Uninstall are per bitness and act on the base extension
-; only; the right-click menu is 1025 / 1026 on the ArchiveFldr page.
+; Install and Uninstall are per bitness and act on the whole extension:
+; browsing, the menu inside an opened archive, thumbnails, preview,
+; Default apps.
 ; 1042 and 1043 were the single "Install" and "Uninstall" buttons these
 ; four replaced — the numbers are retired, not reused, so an old
 ; translation cannot put the wrong caption on a new button.
@@ -106,14 +89,13 @@
 1047 = "Uninstall 32-bit"
 1048 = "Uninstall 64-bit"
 
-; State of one bitness, on the line above the buttons. The two halves
-; are installed separately, so there are four answers.
+; State of one bitness, on the line above the buttons.
+; 2049 ("registered, with context menu") and 2050 ("context menu only")
+; are retired with the Explorer context menu feature; never reuse them.
 2040 = "registered"
 2041 = "not registered"
-2049 = "registered, with context menu"
-2050 = "context menu only"
 
-2043 = "Install registers one build of the shell extension so Explorer can browse archives as folders, and lists ArchiveFldr in Settings > Default apps for the file types ticked on the System page. Uninstall takes that same half back out, leaving the files on disk.\n\nNeither touches the right-click menu: that is switched on and off per bitness on the ArchiveFldr page.\n\nExplorer caches shell extensions, so sign out and back in — or restart Explorer — for a change to take effect everywhere."
+2043 = "Install registers one build of the shell extension: Explorer can browse archives as folders, files inside an opened archive get their right-click menu, thumbnails and preview work, and ArchiveFldr is listed in Settings > Default apps for the file types ticked on the System page. Uninstall takes all of that back out, leaving the files on disk.\n\nNeither adds or removes anything in Explorer's own right-click menu on archive files.\n\nExplorer caches shell extensions, so sign out and back in — or restart Explorer — for a change to take effect everywhere."
 2044 = "ArchiveFldr was installed."
 2045 = "Some parts could not be changed."
 2046 = "ArchiveFldr was removed."

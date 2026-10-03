@@ -6,90 +6,14 @@
 #include "DataObject.h"
 #include "ArchiveEngine.h"
 #include "ArchiveOps.h"
-#include "SevenZipEngine.h"   // Is7zEngineAvailable() / Get7zEnginePath()
 #include "ThirdParty.h"
-#include "ArchiveWriter.h"
 #include "Settings.h"
-#include "GUIDs.h"
-#include "Lang.h"
-#include "../res/resource.h"
 
 // ─────────────────────────────────────────────────────────
 // Verb table — ONE source of truth for command id ↔ verb ↔ help text.
 // Order must match the Cmd enum in ContextMenu.h.
 // ─────────────────────────────────────────────────────────
 namespace {
-
-// Language ids for the menu captions. The same ids back the item list
-// on the settings page, so what the user ticks there is labelled with
-// the exact text the menu will show. See Lang\en.txt.
-enum : UINT {
-    LNG_CTX_OPEN     = 2000,
-    LNG_CTX_EXTRACT  = 2001,
-    LNG_CTX_EXTHERE  = 2002,
-    LNG_CTX_TEST     = 2003,
-    LNG_CTX_ADD      = 2004,
-    LNG_CTX_ADDHERE  = 2005,   // carries one %s: the archive name
-    LNG_CTX_EMAIL    = 2006,
-    LNG_CTX_INFO     = 2007,
-    LNG_CTX_SETTINGS = 2008,
-};
-
-// Shorthand for a menu caption: the language file's text, or the
-// English baked in right here when it has none.
-std::wstring CtxText(UINT id, const wchar_t* fallback)
-{
-    return Lang::Str(id, fallback);
-}
-
-// The menu bitmap for "Icons in context menu".
-//
-// MIIM_BITMAP wants an HBITMAP, not an HICON, and a menu is drawn over
-// whatever colour the theme picked — so the icon has to keep its alpha.
-// That means a 32-bit top-down DIB section cleared to zero, with
-// DrawIconEx compositing the icon's own alpha into it. Built once and
-// kept: a context menu handler is created and destroyed on every
-// right-click, and re-rasterising each time would be wasteful.
-HBITMAP MenuIconBitmap()
-{
-    static HBITMAP cached = nullptr;
-    static bool    tried  = false;
-    if (tried) return cached;
-    tried = true;
-
-    const int cx = GetSystemMetrics(SM_CXSMICON);
-    const int cy = GetSystemMetrics(SM_CYSMICON);
-
-    HICON ico = (HICON)LoadImageW(g_hDllInstance,
-                                  MAKEINTRESOURCEW(IDI_ARCHIVEFLDR),
-                                  IMAGE_ICON, cx, cy, LR_DEFAULTCOLOR);
-    if (!ico) return nullptr;
-
-    BITMAPINFO bi{};
-    bi.bmiHeader.biSize        = sizeof(bi.bmiHeader);
-    bi.bmiHeader.biWidth       = cx;
-    bi.bmiHeader.biHeight      = -cy;          // top-down
-    bi.bmiHeader.biPlanes      = 1;
-    bi.bmiHeader.biBitCount    = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-
-    void*   bits = nullptr;
-    HDC     screen = GetDC(nullptr);
-    HBITMAP bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (bmp)
-    {
-        HDC     dc  = CreateCompatibleDC(screen);
-        HGDIOBJ old = SelectObject(dc, bmp);
-        DrawIconEx(dc, 0, 0, ico, cx, cy, 0, nullptr, DI_NORMAL);
-        SelectObject(dc, old);
-        DeleteDC(dc);
-    }
-    ReleaseDC(nullptr, screen);
-    DestroyIcon(ico);
-
-    cached = bmp;
-    return cached;
-}
 
 struct VerbDef {
     const wchar_t* verbW;
@@ -101,17 +25,13 @@ const VerbDef kVerbs[] = {
     { L"open",        "open",        L"Open this item"                        },
     { L"extract",     "extract",     L"Extract to a folder"                   },
     { L"extracthere", "extracthere", L"Extract here"                          },
-    { L"add",         "add",         L"Compress into a new archive"           },
-    { L"compresshere","compresshere",L"Compress using the saved defaults"     },
-    { L"email",       "email",       L"Compress and send by e-mail"           },
-    { L"openshell",   "openshell",   L"Browse this archive in Explorer"       },
     { L"test",        "test",        L"Test archive integrity"                },
     { L"info",        "info",        L"View archive information"              },
     { L"copy",        "copy",        L"Copy to the clipboard"                 },
     { L"paste",       "paste",       L"Add the clipboard's files here"        },
     { L"refresh",     "refresh",     L"Refresh this view"                     },
     { L"properties",  "properties",  L"Show properties"                       },
-    { L"settings",    "settings",    L"Open ArchiveFldr settings"                },
+    { L"settings",    "settings",    L"Open ArchiveFldr settings"             },
 };
 
 // Scoped hourglass for the operations that can take a moment.
@@ -160,8 +80,6 @@ STDMETHODIMP CContextMenu::QueryInterface(REFIID riid, void** ppv)
         IsEqualIID(riid,IID_IContextMenu2)||
         IsEqualIID(riid,IID_IContextMenu3))
     { *ppv=static_cast<IContextMenu3*>(this); AddRef(); return S_OK; }
-    if (IsEqualIID(riid,IID_IShellExtInit))
-    { *ppv=static_cast<IShellExtInit*>(this); AddRef(); return S_OK; }
     if (IsEqualIID(riid,IID_IObjectWithSite))
     { *ppv=static_cast<IObjectWithSite*>(this); AddRef(); return S_OK; }
     return E_NOINTERFACE;
@@ -170,57 +88,6 @@ STDMETHODIMP_(ULONG) CContextMenu::AddRef()
     { return InterlockedIncrement(&m_cRef); }
 STDMETHODIMP_(ULONG) CContextMenu::Release()
     { ULONG n=InterlockedDecrement(&m_cRef); if(!n) delete this; return n; }
-
-// ── IShellExtInit ─────────────────────────────────────────
-STDMETHODIMP CContextMenu::Initialize(LPCITEMIDLIST /*pidlFolder*/,
-                                       IDataObject* pdtobj,
-                                       HKEY /*hkeyProgID*/)
-{
-    if (!pdtobj) return E_INVALIDARG;
-
-    m_paths.clear();
-    m_archivePath.clear();
-
-    FORMATETC fe{CF_HDROP,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL};
-    STGMEDIUM sm{};
-    if (FAILED(pdtobj->GetData(&fe, &sm))) return E_FAIL;
-
-    if (HDROP hDrop = (HDROP)GlobalLock(sm.hGlobal))
-    {
-        // Keep the whole selection. The handler is registered on every
-        // file type now, so "the first file" is no longer a useful
-        // summary of what the user picked — compressing acts on all of it.
-        const UINT count = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
-        m_paths.reserve(count);
-        for (UINT i = 0; i < count; ++i)
-        {
-            const UINT len = DragQueryFileW(hDrop, i, nullptr, 0);
-            if (!len) continue;
-            std::wstring p(len + 1, L'\0');
-            if (DragQueryFileW(hDrop, i, &p[0], len + 1))
-            {
-                p.resize(wcslen(p.c_str()));
-                if (!p.empty()) m_paths.push_back(std::move(p));
-            }
-        }
-        GlobalUnlock(sm.hGlobal);
-    }
-    ReleaseStgMedium(&sm);
-
-    if (m_paths.empty()) return E_FAIL;
-    m_archivePath = m_paths.front();
-
-    // One archive selected: the full archive menu. Anything else — a
-    // folder, an ordinary file, several things at once — only gets the
-    // commands that make sense, which is compression.
-    const bool singleArchive =
-        m_paths.size() == 1 &&
-        !(GetFileAttributesW(m_archivePath.c_str()) & FILE_ATTRIBUTE_DIRECTORY) &&
-        Formats::IsArchiveExtension(PathFindExtensionW(m_archivePath.c_str()));
-
-    m_mode = singleArchive ? ModeArchiveFile : ModePlainFile;
-    return S_OK;
-}
 
 // ── IContextMenu::QueryContextMenu ───────────────────────
 STDMETHODIMP CContextMenu::QueryContextMenu(
@@ -231,22 +98,6 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
                   "verb table and Cmd enum are out of sync");
 
     m_cmdBase = idCmdFirst;
-
-    // Master switch. Off means ArchiveFldr contributes nothing to any
-    // menu — it is registered on every file type now, so there has to be
-    // one place to turn the whole thing off.
-    if (!Settings::Get().showContextMenu)
-        return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
-
-    // ...and the tick for this bitness on the ArchiveFldr page.
-    // Clearing it deregisters the handler, but a registration is not a
-    // guarantee: the keys may still be there because the other bitness
-    // wants them, and a host that already holds this DLL goes on
-    // calling it whatever the registry now says. Checking the flag here
-    // means an un-integrated build stays silent in either case. See
-    // Settings::CtxMenuHere.
-    if (!Settings::Get().CtxMenuHere())
-        return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
 
     // CMF_DEFAULTONLY = "tell me the one command a double-click should run".
     //
@@ -270,44 +121,8 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
         return MAKE_HRESULT(SEVERITY_SUCCESS, 0, CMD_OPEN_ITEM + 1);
     }
 
-    auto& s = Settings::Get();
-
-    // The shell loads this DLL into Explorer once and keeps it, so the
-    // language file is read on the first right-click and then reused.
-    //
-    // A magic static, not a plain flag: Explorer creates context-menu
-    // handlers on more than one thread, and two of them arriving here
-    // together both saw the flag unset and both ran Lang::Load, which
-    // clears and refills the same table the other was reading. The
-    // initialisation of a function-local static is serialised for us.
-    static const bool langLoaded = [&s] { Lang::Load(s.language); return true; }();
-    (void)langLoaded;
-
-    // "Add to <name>" names its own result. Built here because both the
-    // archive-file and plain-file menus show it.
-    if (m_mode == ModeArchiveFile || m_mode == ModePlainFile)
-    {
-        const std::wstring ext = L"." + s.defaultFormat;
-        const std::wstring out = ArchiveWriter::SuggestOutputPath(m_paths, ext);
-        m_quickName = Lang::Format1(LNG_CTX_ADDHERE, L"Add to \"%s\"",
-                                    out.empty()
-                                        ? (L"archive" + ext)
-                                        : std::wstring(PathFindFileNameW(out.c_str())));
-    }
-
-    // The "collect everything under one ArchiveFldr sub-menu" preference only
-    // applies to the crowded file menu in a normal Explorer folder.
-    m_useSubMenu = s.ctxUseSubMenu &&
-                   (m_mode == ModeArchiveFile || m_mode == ModePlainFile);
-
-    HMENU hTarget = m_useSubMenu ? CreatePopupMenu() : hMenu;
-    UINT  pos     = m_useSubMenu ? 0 : indexMenu;
-    UINT  used    = 0;
-
-    // One bitmap shared by every entry, created on first use and kept
-    // for the life of the process. Null when the user turned icons off,
-    // in which case MIIM_BITMAP is simply not requested.
-    HBITMAP hIcon = s.ctxMenuIcons ? MenuIconBitmap() : nullptr;
+    UINT pos  = indexMenu;
+    UINT used = 0;
 
     auto addItem = [&](UINT cmd, const wchar_t* text, bool enabled = true) {
         // idCmdFirst..idCmdLast is the range the shell lends us, and it
@@ -320,12 +135,11 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
         mi.wID        = idCmdFirst + cmd;
         mi.dwTypeData = (LPWSTR)text;
         mi.fState     = enabled ? MFS_ENABLED : MFS_GRAYED;
-        if (hIcon) { mi.fMask |= MIIM_BITMAP; mi.hbmpItem = hIcon; }
-        InsertMenuItemW(hTarget, pos++, TRUE, &mi);
+        InsertMenuItemW(hMenu, pos++, TRUE, &mi);
         if (cmd + 1 > used) used = cmd + 1;
     };
     auto addSep = [&] {
-        InsertMenuW(hTarget, pos++, MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
+        InsertMenuW(hMenu, pos++, MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
     };
 
     switch (m_mode)
@@ -335,7 +149,7 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
     {
         const bool single = (m_pidls.size() == 1);
         addItem(CMD_OPEN_ITEM, single ? L"&Open" : L"&Open items");
-        SetMenuDefaultItem(hTarget, idCmdFirst + CMD_OPEN_ITEM, FALSE);
+        SetMenuDefaultItem(hMenu, idCmdFirst + CMD_OPEN_ITEM, FALSE);
         addSep();
         addItem(CMD_EXTRACT,     L"E&xtract selected...");
         addItem(CMD_EXTRACTHERE, L"Extract selected &here");
@@ -349,6 +163,7 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
 
     // ── Empty space in an archive's view ─────────────────
     case ModeBackground:
+    default:
     {
         addItem(CMD_EXTRACT,     L"E&xtract all...");
         addItem(CMD_EXTRACTHERE, L"Extract all &here");
@@ -361,45 +176,6 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
         addItem(CMD_SETTINGS,    L"ArchiveFldr &settings...");
         break;
     }
-
-    // ── Ordinary files and folders ───────────────────────
-    // The handler is registered on every file type, so this runs on most
-    // right-clicks in Explorer. Only compression applies.
-    case ModePlainFile:
-    {
-        if (s.ctxAddToArchive)  addItem(CMD_ADD, CtxText(LNG_CTX_ADD, L"Add to archive...").c_str());
-        if (s.ctxCompressHere)  addItem(CMD_COMPRESS_HERE, m_quickName.c_str());
-        if (s.ctxCompressEmail) addItem(CMD_COMPRESS_EMAIL, CtxText(LNG_CTX_EMAIL, L"Compress and email...").c_str());
-        if (s.ctxSettings) { addSep(); addItem(CMD_SETTINGS, CtxText(LNG_CTX_SETTINGS, L"ArchiveFldr settings...").c_str()); }
-        break;
-    }
-
-    // ── An archive file in a normal Explorer folder ──────
-    case ModeArchiveFile:
-    default:
-    {
-        if (s.ctxExtract)       addItem(CMD_EXTRACT,        CtxText(LNG_CTX_EXTRACT, L"Extract files...").c_str());
-        if (s.ctxExtractHere)   addItem(CMD_EXTRACTHERE,    CtxText(LNG_CTX_EXTHERE, L"Extract Here").c_str());
-        addSep();
-        if (s.ctxAddToArchive)  addItem(CMD_ADD,            CtxText(LNG_CTX_ADD, L"Add to archive...").c_str());
-        if (s.ctxCompressHere)  addItem(CMD_COMPRESS_HERE,  m_quickName.c_str());
-        if (s.ctxCompressEmail) addItem(CMD_COMPRESS_EMAIL, CtxText(LNG_CTX_EMAIL, L"Compress and email...").c_str());
-        addSep();
-        if (s.ctxOpenInShell)   addItem(CMD_OPEN_SHELL,     CtxText(LNG_CTX_OPEN, L"Open archive").c_str());
-        if (s.ctxTestArchive)   addItem(CMD_TEST,           CtxText(LNG_CTX_TEST, L"Test archive").c_str());
-        if (s.ctxArchiveInfo)   addItem(CMD_INFO,           CtxText(LNG_CTX_INFO, L"Archive information").c_str());
-        if (s.ctxSettings)      addItem(CMD_SETTINGS,       CtxText(LNG_CTX_SETTINGS, L"ArchiveFldr settings...").c_str());
-        break;
-    }
-    }
-
-    if (m_useSubMenu) {
-        MENUITEMINFOW mi{sizeof(mi),MIIM_STRING|MIIM_SUBMENU|MIIM_STATE};
-        mi.hSubMenu   = hTarget;
-        mi.dwTypeData = (LPWSTR)s.ctxSubMenuTitle.c_str();
-        mi.fState     = MFS_ENABLED;
-        if (hIcon) { mi.fMask |= MIIM_BITMAP; mi.hbmpItem = hIcon; }
-        InsertMenuItemW(hMenu, indexMenu, TRUE, &mi);
     }
 
     return MAKE_HRESULT(SEVERITY_SUCCESS, 0, used);
@@ -444,19 +220,16 @@ STDMETHODIMP CContextMenu::InvokeCommand(LPCMINVOKECOMMANDINFO pici)
     }
     else
     {
-        // No verb at all: run the default command for this menu.
-        cmd = (m_mode == ModeItem) ? (UINT)CMD_OPEN_ITEM : (UINT)CMD_OPEN_SHELL;
+        // No verb at all: run the default command for this menu. Only
+        // the item menu has one; DoOpenItem() is a no-op without a
+        // selection, so this stays harmless for the background menu.
+        cmd = (UINT)CMD_OPEN_ITEM;
     }
 
     if (!verb.empty())
     {
         for (UINT i = 0; i < CMD_COUNT; ++i)
             if (_wcsicmp(verb.c_str(), kVerbs[i].verbW) == 0) { cmd = i; break; }
-
-        // "open" means different things in different menus: browse the
-        // archive when invoked on the file, open the entry when invoked
-        // inside it.
-        if (cmd == CMD_OPEN_ITEM && m_mode != ModeItem) cmd = CMD_OPEN_SHELL;
     }
 
     if (cmd >= CMD_COUNT) return E_INVALIDARG;
@@ -465,10 +238,6 @@ STDMETHODIMP CContextMenu::InvokeCommand(LPCMINVOKECOMMANDINFO pici)
     case CMD_OPEN_ITEM:     DoOpenItem();     break;
     case CMD_EXTRACT:       DoExtract(false); break;
     case CMD_EXTRACTHERE:   DoExtract(true);  break;
-    case CMD_ADD:           DoCompress(false);break;
-    case CMD_COMPRESS_HERE: DoCompress(true); break;
-    case CMD_COMPRESS_EMAIL:DoCompressEmail();break;
-    case CMD_OPEN_SHELL:    DoOpenShell();    break;
     case CMD_TEST:          DoTest();         break;
     case CMD_INFO:          DoInfo();         break;
     case CMD_COPY:          DoCopy();         break;
@@ -550,8 +319,8 @@ STDMETHODIMP CContextMenu::HandleMenuMsg2(UINT,WPARAM,LPARAM,LRESULT* p)
 // Helpers
 // ─────────────────────────────────────────────────────────
 
-// Inside an archive view we reuse the folder's already-open engine; invoked
-// on an archive file we open our own.
+// Reuse the folder's already-open engine; fall back to opening our own
+// from the archive path when the folder has none to lend.
 std::shared_ptr<IArchiveEngine> CContextMenu::AcquireEngine()
 {
     if (m_pFolder) {
@@ -826,8 +595,8 @@ void CContextMenu::DoOpenItem()
     }
 }
 
-// Extract: the whole archive when invoked on the file or the view's
-// background, just the selection when invoked on items.
+// Extract: the whole archive when invoked on the view's background,
+// just the selection when invoked on items.
 void CContextMenu::DoExtract(bool here)
 {
     auto eng = AcquireEngine();
@@ -874,398 +643,6 @@ void CContextMenu::DoExtract(bool here)
             L"The archive may be damaged, or it may contain encrypted items "
             L"(ArchiveFldr has no password prompt yet).",
             L"ArchiveFldr", MB_ICONWARNING | MB_OK);
-}
-
-// ── Compression ──────────────────────────────────────────
-// The read engines cannot write — every IArchiveEngine::Create returns
-// false — so compression goes through ArchiveWriter, which drives
-// 7z.dll's IOutArchive directly.
-namespace {
-
-// Settings -> writer options, in one place so the two entry points
-// (prompted and one-click) cannot drift apart.
-ArchiveWriter::Options OptionsFromSettings(const std::wstring& format)
-{
-    const Settings& s = Settings::Get();
-    ArchiveWriter::Options opt;
-    opt.format       = format.empty() ? s.defaultFormat : format;
-    opt.level        = (int)s.defaultCompLevel;
-    opt.solid        = s.createSolidArchive;
-    opt.encryptNames = s.encryptFileNames;
-    opt.threads      = s.multiThreaded ? s.threadCount : 1;
-    return opt;
-}
-
-// A save dialog filter listing every format this copy of 7z.dll can
-// write, with the preferred one first so it is what the dialog opens on.
-std::wstring BuildSaveFilter(const std::wstring& preferred,
-                             std::vector<std::wstring>& orderOut)
-{
-    std::vector<std::wstring> fmts = ArchiveWriter::WritableFormats();
-    std::stable_sort(fmts.begin(), fmts.end(),
-        [&](const std::wstring& a, const std::wstring& b)
-        {
-            const bool pa = _wcsicmp(a.c_str(), preferred.c_str()) == 0;
-            const bool pb = _wcsicmp(b.c_str(), preferred.c_str()) == 0;
-            return pa && !pb;
-        });
-
-    std::wstring filter;
-    orderOut.clear();
-    for (const auto& f : fmts)
-    {
-        const std::wstring ext = ArchiveWriter::DefaultExtensionFor(f);
-        filter += f + L" archive (*" + ext + L")";
-        filter.push_back(L'\0');
-        filter += L"*" + ext;
-        filter.push_back(L'\0');
-        orderOut.push_back(f);
-    }
-    filter.push_back(L'\0');
-    return filter;
-}
-
-} // namespace
-
-void CContextMenu::DoCompress(bool here)
-{
-    if (m_paths.empty()) return;
-
-    if (!ArchiveWriter::IsAvailable())
-    {
-        MessageBoxW(m_hwnd,
-            (L"ArchiveFldr cannot create archives: no usable 7z.dll was found.\n\n" +
-             ThirdParty::DescribeSearch(L"7z")).c_str(),
-            L"ArchiveFldr", MB_ICONWARNING | MB_OK);
-        return;
-    }
-
-    const Settings& st = Settings::Get();
-    std::wstring format = st.defaultFormat;
-    std::wstring outPath;
-
-    if (here)
-    {
-        // One click, no questions: the saved defaults and a name derived
-        // from the selection, which is what the menu item already showed.
-        if (!ArchiveWriter::FormatIsWritable(format))
-        {
-            const auto fmts = ArchiveWriter::WritableFormats();
-            if (fmts.empty()) return;
-            format = fmts.front();
-        }
-        outPath = ArchiveWriter::SuggestOutputPath(
-            m_paths, ArchiveWriter::DefaultExtensionFor(format));
-        if (outPath.empty()) return;
-    }
-    else
-    {
-        std::vector<std::wstring> order;
-        const std::wstring filter = BuildSaveFilter(format, order);
-        if (order.empty()) return;
-
-        const std::wstring suggested = ArchiveWriter::SuggestOutputPath(
-            m_paths, ArchiveWriter::DefaultExtensionFor(order.front()));
-
-        wchar_t file[MAX_PATH * 2] = {};
-        wcsncpy_s(file, suggested.c_str(), _TRUNCATE);
-
-        std::wstring initialDir = suggested;
-        PathRemoveFileSpecW(&initialDir[0]);
-        initialDir.resize(wcslen(initialDir.c_str()));
-
-        OPENFILENAMEW ofn{ sizeof(ofn), m_hwnd };
-        ofn.lpstrFilter     = filter.c_str();
-        ofn.nFilterIndex    = 1;
-        ofn.lpstrFile       = file;
-        ofn.nMaxFile        = ARRAYSIZE(file);
-        ofn.lpstrInitialDir = initialDir.c_str();
-        ofn.lpstrTitle      = L"Create Archive";
-        ofn.Flags           = OFN_EXPLORER | OFN_OVERWRITEPROMPT |
-                              OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-        if (!GetSaveFileNameW(&ofn)) return;
-
-        outPath = file;
-
-        // The extension the user actually typed wins over the filter they
-        // left selected — typing "x.7z" under the zip filter should make
-        // a 7z archive, not a zip called .7z.
-        std::wstring byName = ArchiveWriter::FormatForTargetName(outPath);
-        if (!byName.empty())
-            format = byName;
-        else
-        {
-            const size_t idx = (ofn.nFilterIndex >= 1 &&
-                                ofn.nFilterIndex <= order.size())
-                             ? ofn.nFilterIndex - 1 : 0;
-            format = order[idx];
-            // No recognised extension typed: append the filter's own.
-            if (!*PathFindExtensionW(outPath.c_str()))
-                outPath += ArchiveWriter::DefaultExtensionFor(format);
-        }
-    }
-
-    uint64_t totalBytes = 0;
-    std::vector<ArchiveWriter::Item> items =
-        ArchiveWriter::CollectItems(m_paths, &totalBytes);
-    if (items.empty())
-    {
-        MessageBoxW(m_hwnd, L"Nothing in the selection could be read.",
-                    L"ArchiveFldr", MB_ICONWARNING | MB_OK);
-        return;
-    }
-
-    // Refuse to put the archive inside its own input: it would try to
-    // compress the file it is still writing.
-    for (const auto& it : items)
-        if (!it.diskPath.empty() &&
-            _wcsicmp(it.diskPath.c_str(), outPath.c_str()) == 0)
-        {
-            MessageBoxW(m_hwnd,
-                L"The archive would be written into its own source. "
-                L"Choose a different name or location.",
-                L"ArchiveFldr", MB_ICONWARNING | MB_OK);
-            return;
-        }
-
-    std::wstring message;
-    bool ok;
-    {
-        WaitCursor wait;
-        ok = ArchiveWriter::Compress(outPath, items,
-                                     OptionsFromSettings(format),
-                                     nullptr, &message);
-    }
-
-    if (!ok)
-    {
-        MessageBoxW(m_hwnd,
-            message.empty() ? L"The archive could not be created." : message.c_str(),
-            L"ArchiveFldr", MB_ICONERROR | MB_OK);
-        return;
-    }
-
-    SHChangeNotify(SHCNE_CREATE, SHCNF_PATH, outPath.c_str(), nullptr);
-    {
-        std::wstring dir = outPath;
-        PathRemoveFileSpecW(&dir[0]);
-        dir.resize(wcslen(dir.c_str()));
-        SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATH, dir.c_str(), nullptr);
-    }
-
-    // Files that could not be read are reported, but the archive that
-    // did get built is still there and still valid.
-    if (!message.empty())
-        MessageBoxW(m_hwnd, message.c_str(), L"ArchiveFldr",
-                    MB_ICONWARNING | MB_OK);
-}
-
-void CContextMenu::DoCompressEmail()
-{
-    if (m_paths.empty()) return;
-
-    if (!ArchiveWriter::IsAvailable())
-    {
-        MessageBoxW(m_hwnd,
-            (L"ArchiveFldr cannot create archives: no usable 7z.dll was found.\n\n" +
-             ThirdParty::DescribeSearch(L"7z")).c_str(),
-            L"ArchiveFldr", MB_ICONWARNING | MB_OK);
-        return;
-    }
-
-    // Mail attachments go in a zip: it is the one format every mail
-    // client and recipient can open without installing anything.
-    std::wstring format = L"zip";
-    if (!ArchiveWriter::FormatIsWritable(format))
-    {
-        const auto fmts = ArchiveWriter::WritableFormats();
-        if (fmts.empty()) return;
-        format = fmts.front();
-    }
-
-    // Built in a private temp folder so a second run cannot collide with
-    // the attachment the mail client is still holding open.
-    const std::wstring dir = ArchiveOps::MakeTempDir(L"mail");
-    if (dir.empty())
-    {
-        MessageBoxW(m_hwnd, L"A temporary folder could not be created.",
-                    L"ArchiveFldr", MB_ICONERROR | MB_OK);
-        return;
-    }
-
-    std::wstring base = (m_paths.size() == 1)
-        ? std::wstring(PathFindFileNameW(m_paths.front().c_str()))
-        : std::wstring(L"Archive");
-    if (m_paths.size() == 1)
-    {
-        const DWORD attr = GetFileAttributesW(m_paths.front().c_str());
-        if (attr == INVALID_FILE_ATTRIBUTES || !(attr & FILE_ATTRIBUTE_DIRECTORY))
-        {
-            const size_t dot = base.rfind(L'.');
-            if (dot != std::wstring::npos && dot > 0) base.resize(dot);
-        }
-    }
-    const std::wstring outPath =
-        dir + L"\\" + base + ArchiveWriter::DefaultExtensionFor(format);
-
-    uint64_t total = 0;
-    std::vector<ArchiveWriter::Item> items =
-        ArchiveWriter::CollectItems(m_paths, &total);
-    if (items.empty()) return;
-
-    std::wstring message;
-    bool ok;
-    {
-        WaitCursor wait;
-        ok = ArchiveWriter::Compress(outPath, items,
-                                     OptionsFromSettings(format),
-                                     nullptr, &message);
-    }
-    if (!ok)
-    {
-        MessageBoxW(m_hwnd,
-            message.empty() ? L"The archive could not be created." : message.c_str(),
-            L"ArchiveFldr", MB_ICONERROR | MB_OK);
-        return;
-    }
-
-    // MAPI's "attach" parameter on a mailto: URL is honoured by Outlook
-    // and ignored by most other clients, so if nothing picks it up the
-    // folder holding the archive is opened for the user to drag from.
-    const std::wstring url =
-        L"mailto:?subject=" + base + L"&attach=%22" + outPath + L"%22";
-
-    SHELLEXECUTEINFOW sei{ sizeof(sei) };
-    sei.fMask  = SEE_MASK_FLAG_NO_UI;
-    sei.hwnd   = m_hwnd;
-    sei.lpVerb = L"open";
-    sei.lpFile = url.c_str();
-    sei.nShow  = SW_SHOWNORMAL;
-    if (!ShellExecuteExW(&sei))
-    {
-        ITEMIDLIST* pidl = ILCreateFromPathW(outPath.c_str());
-        if (pidl)
-        {
-            SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
-            ILFree(pidl);
-        }
-        MessageBoxW(m_hwnd,
-            (L"No mail client accepted the attachment. The archive is here:\n\n" +
-             outPath).c_str(),
-            L"ArchiveFldr", MB_ICONINFORMATION | MB_OK);
-    }
-}
-
-void CContextMenu::DoOpenShell()
-{
-    // ─────────────────────────────────────────────────────────────────
-    // "Open with ArchiveFldr" — browse the archive inside Windows Explorer.
-    //
-    // It used to be ShellExecute("open", <archive>), which only asks the
-    // shell to run the file type's default command: either nothing, or
-    // whatever other archiver owns the type. Nothing in it told Explorer
-    // to use this namespace extension.
-    //
-    // There is no command line that opens a namespace extension on a
-    // specific file either — Explorer's /e takes an object to browse, not
-    // a ::{CLSID} to browse it with. What works is the ordinary thing:
-    // build the archive's PIDL and ask the browser to navigate to it. The
-    // file-as-folder junction registered on the file type is what makes
-    // that land in CShellFolder.
-    // ─────────────────────────────────────────────────────────────────
-    if (m_archivePath.empty()) {
-        MessageBoxW(m_hwnd, L"No archive was selected.",
-                    L"ArchiveFldr", MB_ICONWARNING | MB_OK);
-        return;
-    }
-
-    if (!PathFileExistsW(m_archivePath.c_str())) {
-        MessageBoxW(m_hwnd,
-            (L"The archive no longer exists:\n\n" + m_archivePath).c_str(),
-            L"ArchiveFldr", MB_ICONERROR | MB_OK);
-        return;
-    }
-
-    // Pre-flight the archive so a failure is reported here, with a reason,
-    // instead of silently producing an empty Explorer window.
-    LPCWSTR ext = PathFindExtensionW(m_archivePath.c_str());
-    const bool is7z = ext && (_wcsicmp(ext, L".7z")   == 0 ||
-                              _wcsicmp(ext, L".7zip") == 0);
-    if (is7z && !Is7zEngineAvailable())
-    {
-        MessageBoxW(m_hwnd,
-            L"The 7-Zip engine DLL was not found, so .7z archives cannot be "
-            L"opened.\n\n"
-            L"Put a bitness-matched 7z.dll next to ArchiveFldr, in any of:\n"
-            L"    <ArchiveFldr folder>\\thirdparty\\7z\\7z.64.dll   (64-bit)\n"
-            L"    <ArchiveFldr folder>\\thirdparty\\7z\\7z.32.dll   (32-bit)\n"
-            L"    <ArchiveFldr folder>\\7z.64.dll  /  7z.32.dll  /  7z.dll\n\n"
-            L"A system-wide 7-Zip installation is also used automatically.",
-            L"ArchiveFldr", MB_ICONERROR | MB_OK);
-        return;
-    }
-
-    {
-        auto engine = CreateArchiveEngine(m_archivePath);
-        if (!engine || !engine->Open(m_archivePath))
-        {
-            std::wstring msg = L"ArchiveFldr could not read this archive:\n\n" +
-                               m_archivePath;
-            if (is7z)
-                msg += L"\n\nEngine: " + (Get7zEnginePath().empty()
-                                            ? std::wstring(L"<none>")
-                                            : Get7zEnginePath()) +
-                       L"\n\nThe file may be corrupt, or it may use encrypted "
-                       L"headers (password-protected archives are not "
-                       L"supported yet).";
-            MessageBoxW(m_hwnd, msg.c_str(), L"ArchiveFldr",
-                        MB_ICONERROR | MB_OK);
-            return;
-        }
-    }
-
-    // Browse the archive in the window the user is already looking at.
-    //
-    // This used to launch "explorer.exe /e,::{CLSID},<archive>". Explorer's
-    // command line has no ::{CLSID},<object> form — the documented shape is
-    // /e[,/root,<object>][[,/select],<sub object>] — so the trailing path was
-    // simply navigated to as an ordinary object. That always opened a second
-    // window, and it resolved the archive through the file association, which
-    // is why the built-in zip folder answered whenever it owned the type.
-    PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(m_archivePath.c_str());
-    if (!pidl)
-    {
-        MessageBoxW(m_hwnd,
-            (L"Windows could not resolve this path:\n\n" + m_archivePath).c_str(),
-            L"ArchiveFldr", MB_ICONERROR | MB_OK);
-        return;
-    }
-
-    // No ownership check in front of this. There used to be one, and it
-    // put a dialog about Default apps between the user and the archive
-    // every time another program held the file type — which is most of
-    // them on a stock Windows 11. The command says "open", so it opens:
-    // SystemFileAssociations\<ext>\CLSID is registered too, and the shell
-    // falls back to it whenever the owning ProgID is not itself a
-    // file-as-folder, so this usually lands in ArchiveFldr's view anyway.
-
-    // Same window first; a new one only if there is no browser to reuse
-    // (invoked from the desktop, or from a host that exposes no site).
-    if (BrowseAbsoluteInPlace(m_pSite, m_hwnd, pidl))
-    {
-        ILFree(pidl);
-        return;
-    }
-
-    const bool opened = ShellBrowseToFolder(m_hwnd, pidl);
-    ILFree(pidl);
-    if (opened) return;
-
-    MessageBoxW(m_hwnd,
-        L"ArchiveFldr could not open a view of this archive.\n\n"
-        L"Make sure the extension is registered (run, as administrator):\n"
-        L"    regsvr32 ArchiveFldr.64.dll",
-        L"ArchiveFldr", MB_ICONERROR | MB_OK);
 }
 
 void CContextMenu::DoTest()

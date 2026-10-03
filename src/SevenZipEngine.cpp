@@ -86,6 +86,282 @@ void ForgetPassword(const std::wstring& path, const std::wstring& password)
         g_passwords.erase(it);
 }
 
+// ── External 7-Zip codec catalogue ──────────────────────────────────────
+//
+// 7z.dll contains archive handlers, but methods supplied by DLLs in the
+// adjacent Codecs folder are discovered and wired up by 7z.exe, not by the
+// handler itself. ArchiveFldr is also a raw 7z.dll client, so it must provide
+// the same ICompressCodecsInfo catalogue. Without it a perfectly valid
+// ZSTD+7zAES archive lists normally and then fails extraction with operation
+// result kUnsupportedMethod (1).
+struct ExternalCodecModule
+{
+    HMODULE                     module = nullptr;
+    Func7z_GetMethodProperty    getProperty = nullptr;
+    Func7z_CreateCoder          createDecoder = nullptr;
+    Func7z_CreateCoder          createEncoder = nullptr;
+    Func7z_CreateObject         createObject = nullptr;
+    Func7z_SetCodecs            setCodecs = nullptr;
+};
+
+struct ExternalCodecMethod
+{
+    size_t moduleIndex = 0;
+    UINT32 methodIndex = 0;
+    GUID   decoder{};
+    GUID   encoder{};
+    bool   hasDecoder = false;
+    bool   hasEncoder = false;
+};
+
+class CExternalCodecsInfo final : public ICompressCodecsInfo7z
+{
+public:
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override
+    {
+        if (!ppv) return E_POINTER;
+        if (IsEqualIID(riid, IID_IUnknown) ||
+            IsEqualIID(riid, IID_ICompressCodecsInfo7z))
+            *ppv = static_cast<ICompressCodecsInfo7z*>(this);
+        else { *ppv = nullptr; return E_NOINTERFACE; }
+        AddRef();
+        return S_OK;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override
+        { return (ULONG)InterlockedIncrement(&m_ref); }
+    STDMETHODIMP_(ULONG) Release() override
+    {
+        ULONG n = (ULONG)InterlockedDecrement(&m_ref);
+        if (!n) delete this;
+        return n;
+    }
+
+    STDMETHODIMP GetNumMethods(UINT32* numMethods) override
+    {
+        if (!numMethods) return E_POINTER;
+        *numMethods = (UINT32)m_methods.size();
+        return S_OK;
+    }
+
+    STDMETHODIMP GetProperty(UINT32 index, PROPID propID,
+                              PROPVARIANT* value) override
+    {
+        if (!value) return E_POINTER;
+        PropVariantInit(value);
+        if (index >= m_methods.size()) return E_INVALIDARG;
+        const ExternalCodecMethod& method = m_methods[index];
+
+        // Older plug-ins only publish the decoder/encoder CLSIDs. Newer
+        // archive handlers ask these synthesized boolean properties first.
+        if (propID == k7zMethodDecoderIsAssigned ||
+            propID == k7zMethodEncoderIsAssigned)
+        {
+            value->vt = VT_BOOL;
+            value->boolVal =
+                ((propID == k7zMethodDecoderIsAssigned)
+                    ? method.hasDecoder : method.hasEncoder)
+                ? VARIANT_TRUE : VARIANT_FALSE;
+            return S_OK;
+        }
+
+        const ExternalCodecModule& module = m_modules[method.moduleIndex];
+        return module.getProperty
+            ? module.getProperty(method.methodIndex, propID, value)
+            : E_NOTIMPL;
+    }
+
+    STDMETHODIMP CreateDecoder(UINT32 index, const GUID* iid,
+                                void** coder) override
+    {
+        return CreateCoder(index, iid, coder, false);
+    }
+
+    STDMETHODIMP CreateEncoder(UINT32 index, const GUID* iid,
+                                void** coder) override
+    {
+        return CreateCoder(index, iid, coder, true);
+    }
+
+    bool LoadFolder(const std::wstring& folder)
+    {
+        WIN32_FIND_DATAW fd{};
+        HANDLE find = FindFirstFileW((folder + L"\\*.dll").c_str(), &fd);
+        if (find == INVALID_HANDLE_VALUE) return false;
+        do
+        {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+                LoadModule(folder + L"\\" + fd.cFileName);
+        } while (FindNextFileW(find, &fd));
+        FindClose(find);
+        return !m_methods.empty();
+    }
+
+    size_t MethodCount() const { return m_methods.size(); }
+
+    void ConnectModules()
+    {
+        // Codec plug-ins can themselves depend on another external method.
+        for (const auto& module : m_modules)
+            if (module.setCodecs) module.setCodecs(this);
+    }
+
+private:
+    ~CExternalCodecsInfo() = default; // modules intentionally live for process lifetime
+
+    static bool GetClass(Func7z_GetMethodProperty getProperty, UINT32 index,
+                         PROPID propID, GUID& clsid)
+    {
+        PROPVARIANT value; PropVariantInit(&value);
+        const HRESULT hr = getProperty(index, propID, &value);
+        const bool ok = hr == S_OK && value.vt == VT_BSTR && value.bstrVal &&
+                        SysStringByteLen(value.bstrVal) == sizeof(GUID);
+        if (ok) memcpy(&clsid, value.bstrVal, sizeof(GUID));
+        PropVariantClear(&value);
+        return ok;
+    }
+
+    void LoadModule(const std::wstring& path)
+    {
+        HMODULE moduleHandle = LoadLibraryExW(
+            path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+        if (!moduleHandle) return; // includes opposite-bitness plug-ins
+
+        ExternalCodecModule module;
+        module.module = moduleHandle;
+        module.getProperty = reinterpret_cast<Func7z_GetMethodProperty>(
+            GetProcAddress(moduleHandle, "GetMethodProperty"));
+        if (!module.getProperty)
+        {
+            FreeLibrary(moduleHandle); // ordinary dependency DLL, not a codec
+            return;
+        }
+
+        module.createDecoder = reinterpret_cast<Func7z_CreateCoder>(
+            GetProcAddress(moduleHandle, "CreateDecoder"));
+        module.createEncoder = reinterpret_cast<Func7z_CreateCoder>(
+            GetProcAddress(moduleHandle, "CreateEncoder"));
+        module.createObject = reinterpret_cast<Func7z_CreateObject>(
+            GetProcAddress(moduleHandle, "CreateObject"));
+        module.setCodecs = reinterpret_cast<Func7z_SetCodecs>(
+            GetProcAddress(moduleHandle, "SetCodecs"));
+
+        UINT32 count = 1; // old codec plug-ins exported exactly one method
+        if (auto getCount = reinterpret_cast<Func7z_GetNumberOfMethods>(
+                GetProcAddress(moduleHandle, "GetNumberOfMethods")))
+        {
+            if (getCount(&count) != S_OK || count == 0 || count > 4096)
+            {
+                FreeLibrary(moduleHandle);
+                return;
+            }
+        }
+
+        const size_t moduleIndex = m_modules.size();
+        const size_t oldMethodCount = m_methods.size();
+        m_modules.push_back(module);
+        for (UINT32 i = 0; i < count; ++i)
+        {
+            ExternalCodecMethod method;
+            method.moduleIndex = moduleIndex;
+            method.methodIndex = i;
+            method.hasDecoder = GetClass(module.getProperty, i,
+                                         k7zMethodDecoder, method.decoder);
+            method.hasEncoder = GetClass(module.getProperty, i,
+                                         k7zMethodEncoder, method.encoder);
+            if (method.hasDecoder || method.hasEncoder)
+                m_methods.push_back(method);
+        }
+
+        if (m_methods.size() == oldMethodCount)
+        {
+            m_modules.pop_back();
+            FreeLibrary(moduleHandle);
+        }
+    }
+
+    HRESULT CreateCoder(UINT32 index, const GUID* iid, void** coder,
+                        bool encode)
+    {
+        if (!coder) return E_POINTER;
+        *coder = nullptr;
+        if (!iid || index >= m_methods.size()) return E_INVALIDARG;
+
+        const ExternalCodecMethod& method = m_methods[index];
+        const ExternalCodecModule& module = m_modules[method.moduleIndex];
+        const bool assigned = encode ? method.hasEncoder : method.hasDecoder;
+        if (!assigned) return S_OK;
+
+        Func7z_CreateCoder direct =
+            encode ? module.createEncoder : module.createDecoder;
+        if (direct) return direct(method.methodIndex, iid, coder);
+        if (module.createObject)
+            return module.createObject(
+                encode ? &method.encoder : &method.decoder, iid, coder);
+        return E_NOTIMPL;
+    }
+
+    LONG                             m_ref = 1;
+    std::vector<ExternalCodecModule> m_modules;
+    std::vector<ExternalCodecMethod> m_methods;
+};
+
+CExternalCodecsInfo* g_externalCodecs = nullptr; // process-lifetime object
+std::once_flag       g_externalCodecsOnce;
+std::wstring         g_externalCodecsFolder;
+
+void InitExternalCodecsOnce()
+{
+    if (g_enginePath.empty() || !g_hLib) return;
+
+    std::wstring folder = g_enginePath;
+    PathRemoveFileSpecW(&folder[0]);
+    folder.resize(wcslen(folder.c_str()));
+    if (!folder.empty() && folder.back() != L'\\') folder += L'\\';
+    folder += L"Codecs";
+
+    auto* codecs = new(std::nothrow) CExternalCodecsInfo();
+    if (!codecs) return;
+    if (!codecs->LoadFolder(folder))
+    {
+        codecs->Release();
+        return;
+    }
+
+    g_externalCodecs = codecs; // keep its original ref for process lifetime
+    g_externalCodecsFolder = folder;
+    codecs->ConnectModules();
+
+    // 7-Zip 15+ accepts the catalogue once at module scope. Older/custom
+    // builds expose only ISetCompressCodecsInfo on each archive object; the
+    // handler creation path below also covers that contract.
+    if (auto setCodecs = reinterpret_cast<Func7z_SetCodecs>(
+            GetProcAddress(g_hLib, "SetCodecs")))
+        setCodecs(codecs);
+}
+
+ICompressCodecsInfo7z* GetExternalCodecs()
+{
+    std::call_once(g_externalCodecsOnce, InitExternalCodecsOnce);
+    return g_externalCodecs;
+}
+
+size_t ExternalCodecMethodCount()
+{
+    auto* codecs = static_cast<CExternalCodecsInfo*>(GetExternalCodecs());
+    return codecs ? codecs->MethodCount() : 0;
+}
+
+void AttachExternalCodecs(IUnknown* object)
+{
+    ICompressCodecsInfo7z* codecs = GetExternalCodecs();
+    if (!object || !codecs) return;
+
+    ComPtr<ISetCompressCodecsInfo7z> setter;
+    if (object->QueryInterface(IID_ISetCompressCodecsInfo7z,
+                               (void**)setter.GetAddressOf()) == S_OK && setter)
+        setter->SetCompressCodecsInfo(codecs);
+}
+
 // Engine discovery is delegated to the universal third-party DLL layout
 // (see ThirdParty.h): thirdparty\7z\7z.64.dll, thirdparty\7z\7z.dll,
 // <ArchiveFldr dir>\7z.64.dll, an installed 7-Zip, ... — one shared search
@@ -895,6 +1171,10 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
         return false;
     }
 
+    // Register the module-level catalogue before constructing handlers; the
+    // per-object attachment below covers older engines as well.
+    GetExternalCodecs();
+
     // Which handler? Start with the ones that claim this extension, then
     // fall back to every other handler, so a .tar that is really a .gz —
     // or a file with no extension at all — still opens. Each attempt gets
@@ -930,6 +1210,11 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
 
         ComPtr<IInArchive7z> candidate;
         candidate.Attach(static_cast<IInArchive7z*>(rawArchive));
+
+        // A raw 7z.dll client must explicitly give archive handlers the
+        // methods discovered in the adjacent Codecs folder. This is what
+        // lets the 7z handler instantiate external ZSTD/Brotli/LZ4 decoders.
+        AttachExternalCodecs(candidate.Get());
 
         // Keep the signal local to this handler.  A password request means
         // that it recognised encrypted headers; no unrelated fallback
@@ -1376,6 +1661,23 @@ bool C7zArchiveEngine::ExtractIndices(const std::vector<UINT32>& indices,
         {
             m_lastError = L"One or more items are encrypted and the password is "
                           L"missing or wrong.";
+        }
+        else if (cbRaw->LastOperationResult() ==
+                 N7zExtract::kUnsupportedMethod)
+        {
+            wchar_t count[32] = {};
+            swprintf_s(count, ARRAYSIZE(count), L"%u",
+                       (unsigned)ExternalCodecMethodCount());
+            m_lastError =
+                L"The loaded 7-Zip engine has no decoder for this item's "
+                L"compression method.\n\nEngine: " + Get7zEnginePath() +
+                L"\nExternal codec methods loaded: " + count;
+            if (!g_externalCodecsFolder.empty())
+                m_lastError += L"\nCodecs folder: " + g_externalCodecsFolder;
+            else
+                m_lastError +=
+                    L"\nNo adjacent Codecs folder containing compatible "
+                    L"7-Zip codec plug-ins was found.";
         }
         else
         {
@@ -2184,6 +2486,8 @@ bool Compress(const std::wstring& outPath,
         return fail(L"7z.dll could not be loaded, so ArchiveFldr cannot create "
                     L"archives.\n\n" + ThirdParty::DescribeSearch(L"7z"));
 
+    GetExternalCodecs();
+
     const Handler7z* handler = nullptr;
     for (const auto& h : WritableHandlers())
         if (_wcsicmp(h.name.c_str(), opt.format.c_str()) == 0) { handler = &h; break; }
@@ -2208,6 +2512,8 @@ bool Compress(const std::wstring& outPath,
         return fail(L"7z.dll refused to create a writer for \"" + opt.format +
                     L"\" (" + buf + L").");
     }
+
+    AttachExternalCodecs(outArc.Get());
 
     // ── Compression settings ─────────────────────────────
     ApplyWriterProps(outArc.Get(), opt, handler->name);

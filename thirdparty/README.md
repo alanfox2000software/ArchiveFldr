@@ -18,7 +18,9 @@ more engines are added.
 └─ thirdparty\
    ├─ 7z\
    │  ├─ 7z.64.dll                 ← used by ArchiveFldr.64.dll
-   │  └─ 7z.32.dll                 ← used by ArchiveFldr.32.dll
+   │  ├─ 7z.32.dll                 ← used by ArchiveFldr.32.dll
+   │  └─ Codecs\                   ← optional 7-Zip codec plug-ins
+   │     └─ zstd-x64.dll           ← example: 7z ZSTD method decoder
    ├─ brotli\                      three DLLs, in a bitness subfolder
    │  ├─ 64\
    │  │  ├─ libbrotlidec.dll
@@ -146,7 +148,10 @@ ArchiveFldr asks `7z.dll` which formats it supports (`GetNumberOfFormats` /
 `GetHandlerProperty2`) instead of carrying a hard-coded list, so it reads
 exactly what your copy of 7-Zip reads — including formats added after
 this was written. When a file's extension does not match its contents,
-every other handler is tried as well.
+every other handler is tried as well. ArchiveFldr also loads 7-Zip codec
+plug-ins from the `Codecs` folder adjacent to the selected engine and
+registers them through `ICompressCodecsInfo`; this is required for archives
+using external methods such as 7-Zip ZS's ZSTD (`04F71101`).
 
 **WimLib** needs version **1.13.0 or newer** — in other words the
 `libwim-15` builds. `struct wimlib_dir_entry` grew fields in 1.9.1 and

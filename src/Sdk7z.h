@@ -99,6 +99,45 @@ struct IProgress7z : public IUnknown
 };
 
 // ─────────────────────────────────────────────────────────
+// External compression codecs (CPP/7zip/ICoder.h) — group 4
+//
+// 7z.exe discovers DLLs in its Codecs folder and gives this catalogue to
+// archive handlers. A raw 7z.dll client must do the same or a valid archive
+// using an external method such as ZSTD fails with kUnsupportedMethod.
+// ─────────────────────────────────────────────────────────
+struct ICompressCodecsInfo7z : public IUnknown
+{
+    STDMETHOD(GetNumMethods)(UINT32* numMethods) PURE;
+    STDMETHOD(GetProperty)(UINT32 index, PROPID propID,
+                           PROPVARIANT* value) PURE;
+    STDMETHOD(CreateDecoder)(UINT32 index, const GUID* iid,
+                             void** coder) PURE;
+    STDMETHOD(CreateEncoder)(UINT32 index, const GUID* iid,
+                             void** coder) PURE;
+};
+
+struct ISetCompressCodecsInfo7z : public IUnknown
+{
+    STDMETHOD(SetCompressCodecsInfo)(ICompressCodecsInfo7z* codecs) PURE;
+};
+
+// Method properties exported by codec plug-ins (NMethodPropID).
+enum Sdk7zMethodPropID : PROPID
+{
+    k7zMethodID                = 0,
+    k7zMethodName              = 1,
+    k7zMethodDecoder           = 2,
+    k7zMethodEncoder           = 3,
+    k7zMethodPackStreams       = 4,
+    k7zMethodUnpackStreams     = 5,
+    k7zMethodDescription       = 6,
+    k7zMethodDecoderIsAssigned = 7,
+    k7zMethodEncoderIsAssigned = 8,
+    k7zMethodDigestSize        = 9,
+    k7zMethodIsFilter          = 10,
+};
+
+// ─────────────────────────────────────────────────────────
 // Archive callbacks (CPP/7zip/Archive/IArchive.h) — group 6
 // ─────────────────────────────────────────────────────────
 struct IArchiveOpenCallback7z : public IUnknown
@@ -204,6 +243,10 @@ DEFINE_GUID(IID_IInStream7z,
     0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x03,0x00,0x03,0x00,0x00);
 DEFINE_GUID(IID_IOutStream7z,
     0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x03,0x00,0x04,0x00,0x00);
+DEFINE_GUID(IID_ICompressCodecsInfo7z,
+    0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x04,0x00,0x60,0x00,0x00);
+DEFINE_GUID(IID_ISetCompressCodecsInfo7z,
+    0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x04,0x00,0x61,0x00,0x00);
 DEFINE_GUID(IID_IArchiveOpenCallback7z,
     0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x06,0x00,0x10,0x00,0x00);
 DEFINE_GUID(IID_IArchiveExtractCallback7z,
@@ -248,3 +291,13 @@ enum
 
 typedef HRESULT (WINAPI *Func7z_CreateObject)(
     const GUID* clsid, const GUID* iid, void** outObject);
+
+// Exports used by DLLs in 7-Zip's Codecs folder.
+typedef HRESULT (WINAPI *Func7z_GetNumberOfMethods)(UINT32* numMethods);
+typedef HRESULT (WINAPI *Func7z_GetMethodProperty)(UINT32 methodIndex,
+                                                   PROPID propID,
+                                                   PROPVARIANT* value);
+typedef HRESULT (WINAPI *Func7z_CreateCoder)(UINT32 methodIndex,
+                                             const GUID* iid,
+                                             void** outObject);
+typedef HRESULT (WINAPI *Func7z_SetCodecs)(ICompressCodecsInfo7z* codecs);

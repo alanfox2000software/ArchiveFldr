@@ -22,6 +22,29 @@ most people only need `7z.64.dll` on modern 64-bit Windows.
 A plain, unrenamed `thirdparty\7z\7z.dll` is also accepted as a fallback
 if you don't want to rename the file.
 
+### Archives using external methods (ZSTD, Brotli, LZ4, …)
+
+A 7z archive can refer to a compression method that is not built into the
+selected `7z.dll`. For example, 7-Zip ZS uses method `04F71101` for ZSTD.
+Copy the matching 7-Zip codec plug-ins into a `Codecs` folder **beside the
+engine DLL**:
+
+```
+thirdparty\7z\
+├─ 7z.64.dll
+└─ Codecs\
+   └─ zstd-x64.dll
+```
+
+ArchiveFldr now discovers those plug-ins and supplies their decoders to the
+7z archive handler through `ICompressCodecsInfo`, as 7z.exe does. A raw
+`libzstd.dll` is not the same thing; it must be the 7-Zip codec plug-in from
+the same 7-Zip/7-Zip ZS installation that can extract the archive. Bitness
+must match Explorer and the selected engine DLL.
+
+When ArchiveFldr falls back to an installed `C:\Program Files\7-Zip\7z.dll`,
+it automatically scans that installation's adjacent `Codecs` folder.
+
 ### Full runtime search order
 
 `7z` is one component of the shared third-party layout documented in
@@ -62,21 +85,13 @@ If no usable engine DLL is found (here, or via a system-wide 7-Zip install
 registered under `HKLM\SOFTWARE\7-Zip`), `.7z` archives will simply fail to
 open in ArchiveFldr — there is no fake/placeholder data shown.
 
-## Current limitations (v1 of the 7z engine integration)
+## Capabilities and limitations
 
-- **Extraction only** — creating or modifying `.7z` archives isn't
-  supported (7-Zip's own LZMA encoder has a separate, more complex SDK
-  surface not yet wired up here). ArchiveFldr reports this through
-  `IArchiveEngine::GetCaps()`, so the shell hides or explains the commands
-  that would need to write: dropping files onto an open `.7z` says why it
-  cannot be done instead of silently doing nothing, and Delete/Rename are
-  never offered for items inside it.
-- **No password-prompt UI** — unencrypted archives are unaffected, but an
-  archive with encrypted headers will fail to open, and individual
-  encrypted items inside an otherwise-open archive will fail to extract.
+ArchiveFldr supports browsing, password prompts (including encrypted file
+names), Details columns, opening an item, Extract/Extract-here, Test, copying
+or dragging items out, and creating/updating formats for which the selected
+`7z.dll` publishes a writer.
 
-What *does* work with this engine: browsing, the Details columns (size,
-packed, ratio, method, date, CRC), opening an item (extracted to a private
-read-only temp copy), Extract/Extract-here for the whole archive or a
-selection, Test, and copying or dragging items **out** of the archive into
-Explorer.
+Per-item Delete and Rename are not currently offered. Capabilities are read
+from the loaded handler, so commands that its particular `7z.dll` cannot
+perform are hidden or explained instead of silently doing nothing.

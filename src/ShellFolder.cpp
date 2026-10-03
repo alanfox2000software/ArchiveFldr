@@ -1,12 +1,83 @@
 // ShellFolder.cpp
 #include "stdafx.h"
 #include "ShellFolder.h"
+#include "SysInfo.h"
 #include "ShellView.h"
 #include "ContextMenu.h"
 #include "DropTarget.h"
+#include "DataObject.h"
+#include "ArchiveOps.h"
 #include "ThumbnailProvider.h"
 #include "GUIDs.h"
 #include "Settings.h"
+
+// ─────────────────────────────────────────────────────────
+// CFolderViewCB — the view callback handed to the Shell's default folder
+// view (DefView). It is how an extension states its LAYOUT: which view mode
+// an archive opens in, and that the enumeration is cheap enough to run on
+// the UI thread.
+//
+// Only messages whose parameter contract is unambiguous are handled; the
+// rest fall through to E_NOTIMPL so DefView keeps its own behaviour.
+// ─────────────────────────────────────────────────────────
+namespace {
+
+class CFolderViewCB final : public IShellFolderViewCB
+{
+public:
+    CFolderViewCB() { InterlockedIncrement(&g_cDllRefCount); }
+
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override
+    {
+        if (!ppv) return E_POINTER;
+        *ppv = nullptr;
+        if (IsEqualIID(riid, IID_IUnknown) ||
+            IsEqualIID(riid, IID_IShellFolderViewCB))
+        { *ppv = static_cast<IShellFolderViewCB*>(this); AddRef(); return S_OK; }
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override
+    { return InterlockedIncrement(&m_cRef); }
+    STDMETHODIMP_(ULONG) Release() override
+    { ULONG n = InterlockedDecrement(&m_cRef); if (!n) delete this; return n; }
+
+    STDMETHODIMP MessageSFVCB(UINT uMsg, WPARAM /*wParam*/, LPARAM lParam) override
+    {
+        switch (uMsg)
+        {
+        case SFVM_DEFVIEWMODE:
+            // An archive is a table of name/size/packed/ratio/date — open in
+            // Details so those columns are visible without the user asking.
+            if (lParam)
+            {
+                *reinterpret_cast<FOLDERVIEWMODE*>(lParam) = FVM_DETAILS;
+                return S_OK;
+            }
+            break;
+
+        case SFVM_BACKGROUNDENUM:
+            // Listing comes from an already-parsed, in-memory table.
+            return S_OK;
+
+        case SFVM_COLUMNCLICK:
+            return S_FALSE;        // let DefView do the sorting
+
+        case SFVM_WINDOWCREATED:
+            return S_OK;
+        }
+        return E_NOTIMPL;
+    }
+
+private:
+    ~CFolderViewCB() { InterlockedDecrement(&g_cDllRefCount); }
+    long m_cRef = 1;
+};
+
+// Flip to true in the same change that implements
+// CShellFolder::SetNameOf(); see the use in GetAttributesOf().
+constexpr bool kFolderCanRename = false;
+
+} // namespace
 
 // ── Column table ──────────────────────────────────────────
 const CShellFolder::ColDef CShellFolder::s_cols[CShellFolder::kNumCols] = {
@@ -24,8 +95,15 @@ const CShellFolder::ColDef CShellFolder::s_cols[CShellFolder::kNumCols] = {
 // ─────────────────────────────────────────────────────────
 LPITEMIDLIST CPidlMgr::Create(const ArchiveEntry& e)
 {
-    UINT nameBytes = (UINT)((e.name.size()+1)*sizeof(WCHAR));
-    UINT total     = offsetof(NSE_ITEMID,name) + nameBytes + sizeof(USHORT);
+    // cb is the size of THIS item and nothing else. It used to include
+    // the two bytes of the list terminator as well, so every item
+    // claimed two bytes it did not own: self-consistent, because the
+    // same arithmetic allocated them, but it made the terminator part
+    // of the item and anything reading cb as "where the name ends" read
+    // two bytes of padding. ILNext / ILGetSize work off cb, so the
+    // layout is the contract.
+    const UINT nameBytes = (UINT)((e.name.size() + 1) * sizeof(WCHAR));
+    const UINT total     = (UINT)offsetof(NSE_ITEMID, name) + nameBytes;
     LPITEMIDLIST pidl = (LPITEMIDLIST)CoTaskMemAlloc(total + sizeof(USHORT));
     if (!pidl) return nullptr;
     ZeroMemory(pidl, total + sizeof(USHORT));
@@ -38,6 +116,10 @@ LPITEMIDLIST CPidlMgr::Create(const ArchiveEntry& e)
     item->fileSize  = e.uncompressedSize;
     item->packedSize= e.compressedSize;
     item->mtime     = e.modifiedTime;
+    if (e.isEncrypted) item->flags |= NSE_FLAG_ENC;
+    if (e.hasCrc)      item->flags |= NSE_FLAG_HASCRC;
+    if (!e.sizeKnown)  item->flags |= NSE_FLAG_NOSIZE;
+    wcsncpy_s(item->method, e.compressionMethod.c_str(), _TRUNCATE);
     memcpy(item->name, e.name.c_str(), nameBytes);
 
     // Terminating zero USHORT
@@ -83,6 +165,16 @@ std::wstring CPidlMgr::GetName(LPCITEMIDLIST pidl)
     return item ? item->name : L"";
 }
 
+std::wstring CPidlMgr::GetMethod(LPCITEMIDLIST pidl)
+{
+    auto* item = GetItem(pidl);
+    if (!item) return L"";
+    // Fixed-size field: make sure a full-length value still terminates.
+    wchar_t buf[ARRAYSIZE(item->method) + 1] = {};
+    memcpy(buf, item->method, sizeof(item->method));
+    return buf;
+}
+
 bool CPidlMgr::IsDir(LPCITEMIDLIST pidl)
 {
     auto* item = GetItem(pidl);
@@ -92,6 +184,29 @@ bool CPidlMgr::IsDir(LPCITEMIDLIST pidl)
 LPCITEMIDLIST CPidlMgr::GetLast(LPCITEMIDLIST pidl)
 {
     return ILFindLastID(pidl);
+}
+
+LPITEMIDLIST CPidlMgr::CloneFirst(LPCITEMIDLIST pidl)
+{
+    if (!pidl || !pidl->mkid.cb) return nullptr;
+    const USHORT cb = pidl->mkid.cb;
+    auto* p = (LPITEMIDLIST)CoTaskMemAlloc(cb + sizeof(USHORT));
+    if (!p) return nullptr;
+    memcpy(p, pidl, cb);
+    *(USHORT*)((BYTE*)p + cb) = 0;      // terminator
+    return p;
+}
+
+std::wstring CPidlMgr::GetChainPath(LPCITEMIDLIST pidl)
+{
+    std::wstring path;
+    for (LPCITEMIDLIST cur = pidl; cur && cur->mkid.cb; cur = ILNext(cur))
+    {
+        if (!IsOurs(cur)) continue;
+        if (!path.empty()) path += L'\\';
+        path += GetName(cur);
+    }
+    return path;
 }
 
 // ─────────────────────────────────────────────────────────
@@ -176,15 +291,64 @@ STDMETHODIMP_(ULONG) CShellFolder::Release()
 STDMETHODIMP CShellFolder::GetClassID(CLSID* pclsid)
 {
     if (!pclsid) return E_POINTER;
-    *pclsid = CLSID_ShellNSEFolder; return S_OK;
+    *pclsid = CLSID_ArchiveFldrFolder; return S_OK;
 }
 STDMETHODIMP CShellFolder::Initialize(LPCITEMIDLIST pidl)
 {
+    // The shell hands us the fully qualified PIDL of our junction point —
+    // i.e. the archive file itself, whether we were reached by browsing into
+    // it (file-as-folder registration) or through a rooted view
+    // (explorer.exe /e,::{CLSID},<archive>).
     CPidlMgr::Free(m_pidlAbs);
     m_pidlAbs = CPidlMgr::Clone(pidl);
-    // Try to recover archive path from Desktop.ini or registry
-    wchar_t path[MAX_PATH*2] = {};
-    if (SHGetPathFromIDListW(pidl, path)) {
+    m_internalPath.clear();
+
+    wchar_t path[MAX_PATH * 2] = {};
+    if (!SHGetPathFromIDListW(pidl, path))
+    {
+        // SHGetPathFromIDList is limited to MAX_PATH and to "simple" file
+        // system PIDLs; fall back to the modern name API before giving up.
+        PWSTR psz = nullptr;
+        if (SUCCEEDED(SysInfo::GetNameFromIDList(
+                pidl, SysInfo::kSigdnFileSysPath, &psz)) && psz)
+        {
+            wcsncpy_s(path, psz, _TRUNCATE);
+            CoTaskMemFree(psz);
+        }
+    }
+
+    if (!path[0])
+    {
+        // Last resort. A rooted view ("explorer.exe /e,::{CLSID},C:\x.7z")
+        // can hand us a PIDL that is the CLSID junction with the archive
+        // appended, which is not a plain file system PIDL. Its desktop
+        // parsing name still carries the archive path, so dig it back out
+        // instead of coming up empty and showing a blank window.
+        PWSTR psz = nullptr;
+        if (SUCCEEDED(SysInfo::GetNameFromIDList(
+                pidl, SysInfo::kSigdnDesktopAbsoluteParsing, &psz)) && psz)
+        {
+            std::wstring s = psz;
+            CoTaskMemFree(psz);
+
+            size_t pos = std::wstring::npos;
+            for (size_t i = 0; i + 2 < s.size(); ++i)          // "X:\"
+                if (iswalpha(s[i]) && s[i + 1] == L':' &&
+                    (s[i + 2] == L'\\' || s[i + 2] == L'/')) { pos = i; break; }
+            if (pos == std::wstring::npos)                      // "\\server\share"
+                pos = s.find(L"\\\\");
+
+            if (pos != std::wstring::npos)
+            {
+                std::wstring cand = s.substr(pos);
+                if (PathFileExistsW(cand.c_str()))
+                    wcsncpy_s(path, cand.c_str(), _TRUNCATE);
+            }
+        }
+    }
+
+    if (path[0])
+    {
         m_archivePath = path;
         m_engine = CreateArchiveEngine(m_archivePath);
         if (m_engine) m_engine->Open(m_archivePath);
@@ -194,32 +358,82 @@ STDMETHODIMP CShellFolder::Initialize(LPCITEMIDLIST pidl)
 STDMETHODIMP CShellFolder::GetCurFolder(LPITEMIDLIST* ppidl)
 {
     if (!ppidl) return E_POINTER;
-    *ppidl = m_pidlAbs ? CPidlMgr::Clone(m_pidlAbs) : ILClone(nullptr);
-    return S_OK;
+    *ppidl = nullptr;
+    // Documented contract: when the folder has not been initialized with a
+    // PIDL, hand back NULL and S_FALSE. The default Shell view calls this
+    // during creation and does not expect a NULL PIDL alongside S_OK.
+    if (!m_pidlAbs) return S_FALSE;
+    *ppidl = CPidlMgr::Clone(m_pidlAbs);
+    return *ppidl ? S_OK : E_OUTOFMEMORY;
 }
 
 // ─────────────────────────────────────────────────────────
 // IShellFolder::ParseDisplayName
 // ─────────────────────────────────────────────────────────
 STDMETHODIMP CShellFolder::ParseDisplayName(
-    HWND /*hwnd*/, LPBC /*pbc*/, LPOLESTR pszName,
+    HWND hwnd, LPBC pbc, LPOLESTR pszName,
     ULONG* pchEaten, LPITEMIDLIST* ppidl, ULONG* pdwAttributes)
 {
     if (!pszName || !ppidl) return E_POINTER;
     *ppidl = nullptr;
     if (pchEaten) *pchEaten = 0;
-
-    // Find entry by name in this folder
     if (!m_engine) return E_FAIL;
+
+    // The shell hands over the whole remaining path, not just one segment
+    // ("sub\inner\file.txt"), and expects us to walk it. GetDisplayNameOf
+    // now hands out exactly such multi-segment parsing names, so they have
+    // to parse back into a PIDL or Explorer cannot resolve its own
+    // address bar / breadcrumb entries.
+    const std::wstring input = pszName;
+    const size_t sep         = input.find_first_of(L"\\/");
+    const std::wstring first = (sep == std::wstring::npos) ? input : input.substr(0, sep);
+    const std::wstring rest  = (sep == std::wstring::npos) ? std::wstring()
+                                                           : input.substr(sep + 1);
+    if (first.empty()) return E_INVALIDARG;
+
     auto entries = m_engine->List(m_internalPath);
-    for (auto& e : entries) {
-        if (_wcsicmp(e.name.c_str(), pszName) == 0) {
-            *ppidl = CPidlMgr::Create(e);
-            if (pchEaten) *pchEaten = (ULONG)wcslen(pszName);
-            if (pdwAttributes && *ppidl)
+    for (auto& e : entries)
+    {
+        if (_wcsicmp(e.name.c_str(), first.c_str()) != 0) continue;
+
+        LPITEMIDLIST child = CPidlMgr::Create(e);
+        if (!child) return E_OUTOFMEMORY;
+
+        if (rest.empty())
+        {
+            *ppidl = child;
+            if (pchEaten) *pchEaten = (ULONG)input.size();
+            if (pdwAttributes)
                 GetAttributesOf(1, (LPCITEMIDLIST*)ppidl, pdwAttributes);
-            return *ppidl ? S_OK : E_OUTOFMEMORY;
+            return S_OK;
         }
+
+        if (!e.isDirectory)
+        {
+            ILFree(child);
+            return HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND);
+        }
+
+        // Descend and let the sub-folder parse what is left.
+        IShellFolder* pSub = nullptr;
+        HRESULT hr = BindToObject(child, pbc, IID_IShellFolder, (void**)&pSub);
+        if (FAILED(hr) || !pSub) { ILFree(child); return FAILED(hr) ? hr : E_FAIL; }
+
+        LPITEMIDLIST tail = nullptr;
+        ULONG tailEaten = 0;
+        hr = pSub->ParseDisplayName(hwnd, pbc,
+                                    const_cast<LPOLESTR>(rest.c_str()),
+                                    &tailEaten, &tail, pdwAttributes);
+        pSub->Release();
+
+        if (SUCCEEDED(hr) && tail)
+        {
+            *ppidl = ILCombine(child, tail);
+            ILFree(tail);
+            if (pchEaten) *pchEaten = (ULONG)input.size();
+        }
+        ILFree(child);
+        return *ppidl ? S_OK : (FAILED(hr) ? hr : E_OUTOFMEMORY);
     }
     return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
 }
@@ -253,19 +467,33 @@ STDMETHODIMP CShellFolder::EnumObjects(HWND /*hwnd*/, DWORD grfFlags, IEnumIDLis
 // IShellFolder::BindToObject — navigate into sub-folder
 // ─────────────────────────────────────────────────────────
 STDMETHODIMP CShellFolder::BindToObject(
-    LPCITEMIDLIST pidl, LPBC /*pbc*/, REFIID riid, void** ppv)
+    LPCITEMIDLIST pidl, LPBC pbc, REFIID riid, void** ppv)
 {
     if (!ppv) return E_POINTER;
     *ppv = nullptr;
     if (!CPidlMgr::IsOurs(pidl)) return E_INVALIDARG;
-    if (!CPidlMgr::IsDir(pidl)) return E_INVALIDARG;
+    if (!CPidlMgr::IsDir(pidl))  return E_INVALIDARG;
 
-    LPITEMIDLIST pidlAbs = CPidlMgr::Concat(m_pidlAbs, pidl);
+    // The shell may hand over several levels at once ("dir1\\dir2"). Bind the
+    // first one and let the resulting folder deal with the remainder, so the
+    // child always knows its own leaf item — getting this wrong leaves the
+    // view pointing at the wrong directory inside the archive.
+    LPCITEMIDLIST rest = ILNext(pidl);
+    const bool    multi = rest && rest->mkid.cb;
+
+    LPITEMIDLIST first = multi ? CPidlMgr::CloneFirst(pidl) : nullptr;
+    LPCITEMIDLIST leaf = multi ? (LPCITEMIDLIST)first : pidl;
+    if (multi && !first) return E_OUTOFMEMORY;
+
+    LPITEMIDLIST pidlAbs = CPidlMgr::Concat(m_pidlAbs, leaf);
     auto* pSub = new(std::nothrow) CShellFolder(
-        this, pidlAbs, pidl, m_engine, m_archivePath);
+        this, pidlAbs, leaf, m_engine, m_archivePath);
     ILFree(pidlAbs);
+    if (first) ILFree(first);
     if (!pSub) return E_OUTOFMEMORY;
-    HRESULT hr = pSub->QueryInterface(riid, ppv);
+
+    HRESULT hr = multi ? pSub->BindToObject(rest, pbc, riid, ppv)
+                       : pSub->QueryInterface(riid, ppv);
     pSub->Release();
     return hr;
 }
@@ -300,6 +528,22 @@ STDMETHODIMP CShellFolder::CompareIDs(
     case 5: cmp = CompareFileTime(&a->mtime, &b->mtime); break;
     default: cmp = _wcsicmp(a->name, b->name); break;
     }
+
+    // Equal so far: the PIDLs may be multi-level ("dir\sub\file"), and the
+    // Shell requires a *total* ordering over complete ID lists — comparing
+    // only the first SHITEMID makes distinct items look identical, which
+    // shows up as duplicated or vanishing rows in the view.
+    if (cmp == 0)
+    {
+        LPCITEMIDLIST next1 = ILNext(pidl1);
+        LPCITEMIDLIST next2 = ILNext(pidl2);
+        bool more1 = next1 && next1->mkid.cb != 0;
+        bool more2 = next2 && next2->mkid.cb != 0;
+
+        if (more1 && more2) return CompareIDs(lParam, next1, next2);
+        if (more1 != more2) cmp = more1 ? 1 : -1;
+    }
+
     return MAKE_HRESULT(SEVERITY_SUCCESS, 0, (USHORT)cmp);
 }
 
@@ -311,12 +555,44 @@ STDMETHODIMP CShellFolder::CreateViewObject(HWND hwnd, REFIID riid, void** ppv)
     if (!ppv) return E_POINTER;
     *ppv = nullptr;
 
-    if (IsEqualIID(riid, IID_IShellView)) {
+    if (IsEqualIID(riid, IID_IShellView) || IsEqualIID(riid, IID_IShellView2)) {
+        // Prefer the Shell's own default folder view (DefView). It is the
+        // view Explorer expects to host, and it drives this folder through
+        // the IShellFolder2 methods we already implement — columns, sorting,
+        // selection, the item context menu, the details/preview panes and
+        // keyboard handling all come for free, which a hand-rolled list
+        // control cannot provide inside an Explorer frame.
+        SFV_CREATE sfv = { sizeof(sfv) };
+        sfv.pshf   = static_cast<IShellFolder*>(static_cast<IShellFolder2*>(this));
+        sfv.psfvcb = new(std::nothrow) CFolderViewCB();   // view layout
+
+        IShellView* pDefView = nullptr;
+        HRESULT hr = SHCreateShellFolderView(&sfv, &pDefView);
+        if (sfv.psfvcb) sfv.psfvcb->Release();            // the view keeps a ref
+        if (SUCCEEDED(hr) && pDefView) {
+            hr = pDefView->QueryInterface(riid, ppv);
+            pDefView->Release();
+            if (SUCCEEDED(hr)) return hr;
+        }
+
+        // Fallback: ArchiveFldr's built-in view implementation.
         auto* pView = new(std::nothrow) CShellView(this, hwnd);
         if (!pView) return E_OUTOFMEMORY;
-        HRESULT hr = pView->QueryInterface(riid, ppv);
+        hr = pView->QueryInterface(riid, ppv);
         pView->Release(); return hr;
     }
+    // Right-click on empty space in the view: the background menu belongs to
+    // the folder, not to any item (Extract all, Paste, Refresh, Info...).
+    if (IsEqualIID(riid, IID_IContextMenu)  ||
+        IsEqualIID(riid, IID_IContextMenu2) ||
+        IsEqualIID(riid, IID_IContextMenu3)) {
+        auto* p = new(std::nothrow) CContextMenu();
+        if (!p) return E_OUTOFMEMORY;
+        p->SetBackground(this, hwnd);
+        HRESULT hr = p->QueryInterface(riid, ppv);
+        p->Release(); return hr;
+    }
+
     if (IsEqualIID(riid, IID_IDropTarget)) {
         AddRef(); *ppv = static_cast<IDropTarget*>(this);
         return S_OK;
@@ -330,18 +606,47 @@ STDMETHODIMP CShellFolder::CreateViewObject(HWND hwnd, REFIID riid, void** ppv)
 STDMETHODIMP CShellFolder::GetAttributesOf(
     UINT cidl, LPCITEMIDLIST* apidl, SFGAOF* rgfInOut)
 {
-    if (!apidl || !rgfInOut) return E_POINTER;
+    if (!rgfInOut) return E_POINTER;
+
+    // cidl == 0 asks about this folder itself. Explorer does this while
+    // deciding whether the junction can be browsed, so it has to answer
+    // SFGAO_FOLDER — returning E_POINTER here (the old behaviour) made the
+    // shell give up on the archive.
+    if (cidl == 0 || !apidl) {
+        *rgfInOut &= (SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_BROWSABLE |
+                      SFGAO_DROPTARGET | SFGAO_HASPROPSHEET);
+        return S_OK;
+    }
+
     SFGAOF attrs = *rgfInOut;
     SFGAOF result = 0xFFFFFFFF;
 
+    // Only advertise what the engine behind this archive can actually do.
+    // Claiming CANDELETE/CANRENAME on a read-only engine puts live Delete
+    // and Rename commands in the menu that then silently do nothing.
+    EngineCaps caps;
+    if (m_engine) caps = m_engine->GetCaps();
+
     for (UINT i = 0; i < cidl; i++) {
-        if (!CPidlMgr::IsOurs(apidl[i])) { result = 0; break; }
-        bool isDir = CPidlMgr::IsDir(apidl[i]);
-        SFGAOF a =
-            SFGAO_CANCOPY | SFGAO_CANMOVE | SFGAO_CANDELETE |
-            SFGAO_CANRENAME | SFGAO_HASPROPSHEET;
+        // A relative PIDL may hold several levels; the attributes describe
+        // the item it ends at.
+        LPCITEMIDLIST leaf = CPidlMgr::GetLast(apidl[i]);
+        if (!CPidlMgr::IsOurs(leaf)) { result = 0; break; }
+        bool isDir = CPidlMgr::IsDir(leaf);
+
+        SFGAOF a = SFGAO_HASPROPSHEET;
+        if (caps.canExtract) a |= SFGAO_CANCOPY;   // copy == extract a copy
+        if (caps.canDelete)  a |= SFGAO_CANDELETE | SFGAO_CANMOVE;
+        // Only while SetNameOf() can actually carry it out. Advertising
+        // CANRENAME is what puts the view into an in-place edit on F2,
+        // and the edit ends in an E_NOTIMPL the user reads as the shell
+        // breaking. No engine reports canRename today; this keeps the
+        // two ends tied together for the one that eventually does.
+        if (caps.canRename && kFolderCanRename) a |= SFGAO_CANRENAME;
+
         if (isDir)
-            a |= SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_BROWSABLE;
+            a |= SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_BROWSABLE |
+                 SFGAO_STORAGEANCESTOR;
         else
             a |= SFGAO_STREAM;
         result &= a;
@@ -372,15 +677,29 @@ STDMETHODIMP CShellFolder::GetUIObjectOf(
         auto* p = new(std::nothrow) CDropTarget();
         if (!p) return E_OUTOFMEMORY;
         p->SetFolder(this);
+        p->SetSite(hwnd);
         HRESULT hr = p->QueryInterface(riid, ppv);
         p->Release(); return hr;
     }
-    if (IsEqualIID(riid, IID_IExtractIcon)) {
-        // Return our custom icon extractor
-        // (simplified: return system shell icon)
-        return SHCreateFileExtractIconW(
-            CPidlMgr::IsDir(apidl[0]) ? L"folder" : m_archivePath.c_str(),
-            FILE_ATTRIBUTE_NORMAL, riid, ppv);
+    // Copy (Ctrl+C) and drag-OUT of the archive. Without this the shell has
+    // no way to ask for the bytes, so dragging an entry to the desktop did
+    // nothing at all.
+    if (IsEqualIID(riid, IID_IDataObject)) {
+        return CArchiveDataObject::Create(this, cidl, apidl, riid, ppv);
+    }
+    if (IsEqualIID(riid, IID_IExtractIconW) ||
+        IsEqualIID(riid, IID_IExtractIconA)) {
+        // Hand the shell the icon that matches the item's own type: pass the
+        // entry name so the association lookup keys off its extension.
+        // (Passing the archive path, as before, drew every row — .txt, .exe,
+        // folders — with the archive's icon.)
+        LPCITEMIDLIST leaf = CPidlMgr::GetLast(apidl[0]);
+        const bool isDir = CPidlMgr::IsDir(leaf);
+        std::wstring name = CPidlMgr::GetName(leaf);
+        if (name.empty()) name = isDir ? L"folder" : L"file";
+        return SHCreateFileExtractIconW(name.c_str(),
+            isDir ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL,
+            riid, ppv);
     }
     return E_NOINTERFACE;
 }
@@ -388,12 +707,65 @@ STDMETHODIMP CShellFolder::GetUIObjectOf(
 // ─────────────────────────────────────────────────────────
 // IShellFolder::GetDisplayNameOf
 // ─────────────────────────────────────────────────────────
+// "dir1/dir2/" → "dir1\dir2" (no trailing separator)
+static std::wstring InternalPathToWin32(const std::wstring& internal)
+{
+    std::wstring s = internal;
+    while (!s.empty() && s.back() == L'/') s.pop_back();
+    for (auto& ch : s) if (ch == L'/') ch = L'\\';
+    return s;
+}
+
 STDMETHODIMP CShellFolder::GetDisplayNameOf(
-    LPCITEMIDLIST pidl, DWORD /*uFlags*/, STRRET* pName)
+    LPCITEMIDLIST pidl, DWORD uFlags, STRRET* pName)
 {
     if (!pName) return E_POINTER;
-    std::wstring name = CPidlMgr::GetName(pidl);
+    ZeroMemory(pName, sizeof(*pName));
     pName->uType = STRRET_WSTR;
+
+    // An empty PIDL means "this folder". Explorer asks for it to fill in the
+    // window title and the address bar of a rooted view; returning an empty
+    // string (the old behaviour) left the window nameless.
+    if (!pidl || pidl->mkid.cb == 0)
+    {
+        std::wstring self;
+        if (uFlags & SHGDN_FORPARSING)
+        {
+            self = m_archivePath;
+            std::wstring inner = InternalPathToWin32(m_internalPath);
+            if (!inner.empty()) self += L"\\" + inner;
+        }
+        else if (m_pidlRel && CPidlMgr::IsOurs(m_pidlRel))
+        {
+            // Leaf, not the first segment: m_pidlRel can hold several levels.
+            self = CPidlMgr::GetName(CPidlMgr::GetLast(m_pidlRel));
+        }
+        else
+        {
+            self = PathFindFileNameW(m_archivePath.c_str()); // "archive.7z"
+        }
+        return SHStrDupW(self.c_str(), &pName->pOleStr);
+    }
+
+    if (!CPidlMgr::IsOurs(pidl)) return E_INVALIDARG;
+
+    // The name shown in the view is the leaf's; a relative PIDL that spans
+    // several levels still has to parse back as the whole chain.
+    std::wstring name = CPidlMgr::GetName(CPidlMgr::GetLast(pidl));
+
+    // A fully qualified parsing name (SHGDN_FORPARSING without
+    // SHGDN_INFOLDER) must identify the item from the desktop down, the way
+    // "C:\x.zip\sub\file.txt" does for a compressed folder.
+    if ((uFlags & SHGDN_FORPARSING) && !(uFlags & SHGDN_INFOLDER))
+    {
+        std::wstring full = m_archivePath;
+        std::wstring inner = InternalPathToWin32(m_internalPath);
+        if (!inner.empty()) full += L"\\" + inner;
+        std::wstring chain = CPidlMgr::GetChainPath(pidl);
+        if (!chain.empty()) full += L"\\" + chain;
+        name.swap(full);
+    }
+
     return SHStrDupW(name.c_str(), &pName->pOleStr);
 }
 
@@ -425,21 +797,71 @@ STDMETHODIMP CShellFolder::GetDetailsEx(
     LPCITEMIDLIST pidl, const SHCOLUMNID* pscid, VARIANT* pv)
 {
     if (!pidl||!pscid||!pv) return E_POINTER;
-    SHELLDETAILS sd; sd.str.uType = STRRET_WSTR; sd.str.pOleStr = nullptr;
-    // map SCID to column index (simplified)
+    VariantInit(pv);
+
+    const NSE_ITEMID* item = CPidlMgr::GetItem(pidl);
+    if (!item) return E_INVALIDARG;
+
+    // Find which of our columns was asked for.
+    UINT col = kNumCols;
     for (UINT i = 0; i < kNumCols; i++) {
         SHCOLUMNID scid; MapColumnToSCID(i, &scid);
-        if (IsEqualPropertyKey(*pscid, scid)) {
-            HRESULT hr = GetDetailsOf(pidl, i, &sd);
-            if (FAILED(hr)) return hr;
-            V_VT(pv) = VT_BSTR;
-            V_BSTR(pv) = sd.str.pOleStr ?
-                SysAllocString(sd.str.pOleStr) : SysAllocString(L"");
-            CoTaskMemFree(sd.str.pOleStr);
-            return S_OK;
-        }
+        if (IsEqualPropertyKey(*pscid, scid)) { col = i; break; }
     }
-    return E_FAIL;
+    if (col >= kNumCols) return E_FAIL;
+
+    // Hand back a TYPED value wherever one exists: the view sorts, groups
+    // and filters on these, so a size returned as text sorts "10 KB" before
+    // "9 KB" and a date cannot be grouped at all.
+    const bool isDir = (item->flags & NSE_FLAG_DIR) != 0;
+    switch (col)
+    {
+    case 1:                                   // Size
+        // Explorer formats this column itself from PKEY_Size. Handing it a
+        // zero for "unknown" made it print "0 KB"; S_FALSE leaves the cell
+        // to GetDetailsOf, which writes an em dash.
+        if (isDir || (item->flags & NSE_FLAG_NOSIZE)) return S_FALSE;
+        V_VT(pv)  = VT_UI8;
+        V_UI8(pv) = item->fileSize;
+        return S_OK;
+
+    case 2:                                   // Packed size
+        if (isDir) return S_FALSE;
+        // Same rule as GetDetailsOf, which these two have to agree on:
+        // a format that never records a packed size (WIM, and every
+        // member of a solid block but the one carrying the figure)
+        // means "unknown", not "zero bytes". Handing Explorer a typed 0
+        // printed "0 bytes" in exactly the places the text column was
+        // careful to show an em dash.
+        if (item->packedSize == 0 && item->fileSize > 0) return S_FALSE;
+        V_VT(pv)  = VT_UI8;
+        V_UI8(pv) = item->packedSize;
+        return S_OK;
+
+    case 5:                                   // Modified
+    {
+        SYSTEMTIME st{};
+        DOUBLE     date = 0;
+        if (!FileTimeToSystemTime(&item->mtime, &st) || st.wYear <= 1601)
+            return S_FALSE;
+        if (!SystemTimeToVariantTime(&st, &date)) return S_FALSE;
+        V_VT(pv)   = VT_DATE;
+        V_DATE(pv) = date;
+        return S_OK;
+    }
+
+    default:
+        break;
+    }
+
+    // Everything else is genuinely textual (name, ratio, method, CRC).
+    SHELLDETAILS sd{}; sd.str.uType = STRRET_WSTR; sd.str.pOleStr = nullptr;
+    HRESULT hr = GetDetailsOf(pidl, col, &sd);
+    if (FAILED(hr)) return hr;
+    V_VT(pv)   = VT_BSTR;
+    V_BSTR(pv) = SysAllocString(sd.str.pOleStr ? sd.str.pOleStr : L"");
+    CoTaskMemFree(sd.str.pOleStr);
+    return S_OK;
 }
 
 STDMETHODIMP CShellFolder::GetDetailsOf(
@@ -465,29 +887,51 @@ STDMETHODIMP CShellFolder::GetDetailsOf(
         return SHStrDupW(item->name, &psd->str.pOleStr);
     case 1: // Size
         if (item->flags & NSE_FLAG_DIR) wcscpy_s(buf,L"<DIR>");
-        else StrFormatByteSizeW(item->fileSize, buf, 64);
+        else if (item->flags & NSE_FLAG_NOSIZE) wcscpy_s(buf, L"\u2014");
+        else wcsncpy_s(buf, ArchiveOps::FormatSizeKB(item->fileSize).c_str(),
+                       _TRUNCATE);
         psd->fmt = LVCFMT_RIGHT; break;
     case 2: // Packed
         if (item->flags & NSE_FLAG_DIR) wcscpy_s(buf,L"");
-        else StrFormatByteSizeW(item->packedSize, buf, 64);
+        else if (item->packedSize == 0 && item->fileSize > 0)
+            // Not reported by this format (WIM shares and deduplicates its
+            // resources, solid blocks hand the whole figure to one member).
+            // An em dash says "unknown"; "0 bytes" would say "empty".
+            wcscpy_s(buf, L"\u2014");
+        else wcsncpy_s(buf, ArchiveOps::FormatSizeKB(item->packedSize).c_str(),
+                       _TRUNCATE);
         psd->fmt = LVCFMT_RIGHT; break;
     case 3: { // Ratio
-        double r = item->fileSize > 0 ?
-            100.0*(1.0-(double)item->packedSize/item->fileSize) : 0.0;
-        swprintf_s(buf,128,L"%.0f%%", r);
+        if (item->flags & NSE_FLAG_DIR) { psd->fmt = LVCFMT_RIGHT; break; }
+        if (item->flags & NSE_FLAG_NOSIZE) {       // nothing to compare to
+            wcscpy_s(buf, L"\u2014"); psd->fmt = LVCFMT_RIGHT; break; }
+        std::wstring r = ArchiveOps::FormatRatio(item->fileSize,
+                                                 item->packedSize);
+        wcsncpy_s(buf, r.c_str(), _TRUNCATE);
         psd->fmt = LVCFMT_RIGHT; break; }
-    case 4: // Method - retrieved from engine
-        wcscpy_s(buf, L"Deflate"); break;
+    case 4: { // Method — carried in the item ID (see NSE_ITEMID::method)
+        std::wstring m = CPidlMgr::GetMethod(pidl);
+        if (m.empty() && !(item->flags & NSE_FLAG_DIR)) m = L"Store";
+        wcsncpy_s(buf, m.c_str(), _TRUNCATE);
+        break; }
     case 5: { // Modified
-        SYSTEMTIME st; FILETIME lft;
-        FileTimeToLocalFileTime(&item->mtime, &lft);
-        FileTimeToSystemTime(&lft, &st);
-        swprintf_s(buf,128,L"%04d-%02d-%02d %02d:%02d",
-            st.wYear,st.wMonth,st.wDay,st.wHour,st.wMinute);
+        SYSTEMTIME st{}; FILETIME lft{};
+        if (FileTimeToLocalFileTime(&item->mtime, &lft) &&
+            FileTimeToSystemTime(&lft, &st) && st.wYear > 1601)
+            swprintf_s(buf,128,L"%04d-%02d-%02d %02d:%02d",
+                st.wYear,st.wMonth,st.wDay,st.wHour,st.wMinute);
         break; }
     case 6: // CRC
+        // Only print a checksum the archive actually stores. Tar keeps a
+        // header checksum but no data CRC, and WIM uses SHA-1, so those
+        // used to show a bogus "00000000".
         if (!(item->flags & NSE_FLAG_DIR))
-            swprintf_s(buf,128,L"%08X", item->crc32);
+        {
+            if (item->flags & NSE_FLAG_HASCRC)
+                swprintf_s(buf, 128, L"%08X", item->crc32);
+            else
+                wcscpy_s(buf, L"\u2014");
+        }
         break;
     }
     psd->str.uType = STRRET_WSTR;
@@ -503,15 +947,15 @@ STDMETHODIMP CShellFolder::MapColumnToSCID(UINT col, SHCOLUMNID* pscid)
     // PKEY_PropList_* or a custom FMTID with our own PID.
     // We define a private FMTID for our extension columns.
 
-    // Our private FMTID for custom ShellNSE columns:
+    // Our private FMTID for custom ArchiveFldr columns:
     // {B1A2C3D4-0000-0000-ABCD-AABBCCDDEEFF}
-    static const GUID FMTID_ShellNSE = {
+    static const GUID FMTID_ArchiveFldr = {
         0xB1A2C3D4, 0x0000, 0x0000,
         { 0xAB, 0xCD, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF }
     };
 
     // PID values for our custom columns
-    enum ShellNSE_PID : ULONG {
+    enum ArchiveFldr_PID : ULONG {
         PID_NSE_PACKED  = 2,   // Packed size
         PID_NSE_RATIO   = 3,   // Compression ratio
         PID_NSE_METHOD  = 4,   // Compression method
@@ -527,22 +971,22 @@ STDMETHODIMP CShellFolder::MapColumnToSCID(UINT col, SHCOLUMNID* pscid)
         *pscid = PKEY_Size;
         break;
     case 2: // Packed size — custom
-        pscid->fmtid = FMTID_ShellNSE;
+        pscid->fmtid = FMTID_ArchiveFldr;
         pscid->pid   = PID_NSE_PACKED;
         break;
     case 3: // Ratio — custom
-        pscid->fmtid = FMTID_ShellNSE;
+        pscid->fmtid = FMTID_ArchiveFldr;
         pscid->pid   = PID_NSE_RATIO;
         break;
     case 4: // Method — custom
-        pscid->fmtid = FMTID_ShellNSE;
+        pscid->fmtid = FMTID_ArchiveFldr;
         pscid->pid   = PID_NSE_METHOD;
         break;
     case 5: // Modified — standard
         *pscid = PKEY_DateModified;
         break;
     case 6: // CRC-32 — custom
-        pscid->fmtid = FMTID_ShellNSE;
+        pscid->fmtid = FMTID_ArchiveFldr;
         pscid->pid   = PID_NSE_CRC;
         break;
     default:
@@ -553,20 +997,18 @@ STDMETHODIMP CShellFolder::MapColumnToSCID(UINT col, SHCOLUMNID* pscid)
 
 STDMETHODIMP CShellFolder::ColumnClick(UINT /*col*/) { return S_FALSE; }
 
-DWORD m_lastEffect = DROPEFFECT_NONE;
-
 // ─────────────────────────────────────────────────────────
 // IDropTarget (folder-level — accept drops FROM Explorer)
 // ─────────────────────────────────────────────────────────
 STDMETHODIMP CShellFolder::DragEnter(
-    IDataObject* pObj, DWORD grfKey, POINTL pt, DWORD* pdwEffect)
+    IDataObject* pObj, DWORD /*grfKey*/, POINTL pt, DWORD* pdwEffect)
 {
     (void)pt;
-    *pdwEffect = (grfKey & MK_CONTROL) ? DROPEFFECT_COPY : DROPEFFECT_MOVE;
-    FORMATETC fe{CF_HDROP,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL};
-    *pdwEffect = SUCCEEDED(pObj->QueryGetData(&fe))
-        ? *pdwEffect : DROPEFFECT_NONE;
-    m_lastEffect = *pdwEffect;   // ← save it
+    if (!pdwEffect) return E_POINTER;
+    // Dropping into an archive is always a COPY: the engine cannot promise
+    // the data landed, so the source must never delete its originals.
+    m_lastEffect = ArchiveDrop::EffectFor(pObj);
+    *pdwEffect   = m_lastEffect;
     return S_OK;
 }
 STDMETHODIMP CShellFolder::DragOver(DWORD grfKeyState, POINTL pt, DWORD* pdwEffect)
@@ -576,34 +1018,17 @@ STDMETHODIMP CShellFolder::DragOver(DWORD grfKeyState, POINTL pt, DWORD* pdwEffe
     if (pdwEffect) *pdwEffect = m_lastEffect;
     return S_OK;
 }
-STDMETHODIMP CShellFolder::DragLeave() { return S_OK; }
+STDMETHODIMP CShellFolder::DragLeave()
+{
+    m_lastEffect = DROPEFFECT_NONE;
+    return S_OK;
+}
 STDMETHODIMP CShellFolder::Drop(IDataObject* pObj,DWORD,POINTL,DWORD* pdwEffect)
 {
-    *pdwEffect = DROPEFFECT_NONE;
-    return DropFiles(pObj);
-}
-
-HRESULT CShellFolder::DropFiles(IDataObject* pObj)
-{
-    FORMATETC fe{CF_HDROP,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL};
-    STGMEDIUM sm{};
-    RETURN_IF_FAILED(pObj->GetData(&fe, &sm));
-
-    HDROP hDrop = (HDROP)GlobalLock(sm.hGlobal);
-    if (!hDrop) { ReleaseStgMedium(&sm); return E_FAIL; }
-
-    UINT count = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
-    if (m_engine) {
-        for (UINT i = 0; i < count; i++) {
-            wchar_t path[MAX_PATH*2] = {};
-            DragQueryFileW(hDrop, i, path, MAX_PATH*2);
-            m_engine->AddFile(path, m_internalPath, nullptr);
-        }
-    }
-    GlobalUnlock(sm.hGlobal);
-    ReleaseStgMedium(&sm);
-    // Notify Explorer to refresh
-    SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_IDLIST, m_pidlAbs, nullptr);
+    if (!pdwEffect) return E_POINTER;
+    HRESULT hr = ArchiveDrop::Perform(nullptr, this, pObj);
+    *pdwEffect = (hr == S_OK) ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+    m_lastEffect = DROPEFFECT_NONE;
     return S_OK;
 }
 

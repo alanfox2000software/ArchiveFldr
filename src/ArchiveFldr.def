@@ -1,0 +1,15 @@
+; No LIBRARY statement on purpose. The output is ArchiveFldr.32.dll or
+; ArchiveFldr.64.dll depending on the platform, so any name here would
+; contradict the linker's own /OUT and earn LNK4070. The linker takes
+; the name from /OUT regardless; LIBRARY only ever adds a way to be
+; wrong.
+; DllMain is NOT exported. The loader finds it through the PE entry
+; point the linker already wrote; exporting it only publishes an entry
+; point any process can call by name, out of order and off the loader's
+; own sequence. Nothing in Windows looks it up here.
+EXPORTS
+    DllGetClassObject       PRIVATE
+    DllCanUnloadNow         PRIVATE
+    DllRegisterServer       PRIVATE
+    DllUnregisterServer     PRIVATE
+    DllInstall              PRIVATE

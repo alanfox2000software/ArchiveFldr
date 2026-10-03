@@ -3,11 +3,11 @@
 #include "ClassFactory.h"
 #include "ShellFolder.h"
 #include "ContextMenu.h"
-#include "IconOverlay.h"
 #include "DropTarget.h"
+#ifndef ARCHIVEFLDR_NO_VISTA_HANDLERS
 #include "ThumbnailProvider.h"
 #include "PreviewHandler.h"
-#include "PropertySheet.h"
+#endif // ARCHIVEFLDR_NO_VISTA_HANDLERS
 
 // ── IUnknown ─────────────────────────────────────────────
 STDMETHODIMP CClassFactory::QueryInterface(REFIID riid, void** ppv)
@@ -61,13 +61,6 @@ HRESULT CClassFactory::CreateContextMenu(REFIID riid, LPVOID* ppv)
     HRESULT hr = p->QueryInterface(riid, ppv);
     p->Release(); return hr;
 }
-HRESULT CClassFactory::CreateIconOverlay(REFIID riid, LPVOID* ppv)
-{
-    auto* p = new(std::nothrow) CIconOverlay();
-    if (!p) return E_OUTOFMEMORY;
-    HRESULT hr = p->QueryInterface(riid, ppv);
-    p->Release(); return hr;
-}
 HRESULT CClassFactory::CreateDropTarget(REFIID riid, LPVOID* ppv)
 {
     auto* p = new(std::nothrow) CDropTarget();
@@ -75,6 +68,7 @@ HRESULT CClassFactory::CreateDropTarget(REFIID riid, LPVOID* ppv)
     HRESULT hr = p->QueryInterface(riid, ppv);
     p->Release(); return hr;
 }
+#ifndef ARCHIVEFLDR_NO_VISTA_HANDLERS
 HRESULT CClassFactory::CreateThumbnailProvider(REFIID riid, LPVOID* ppv)
 {
     auto* p = new(std::nothrow) CThumbnailProvider();
@@ -89,10 +83,4 @@ HRESULT CClassFactory::CreatePreviewHandler(REFIID riid, LPVOID* ppv)
     HRESULT hr = p->QueryInterface(riid, ppv);
     p->Release(); return hr;
 }
-HRESULT CClassFactory::CreatePropertySheet(REFIID riid, LPVOID* ppv)
-{
-    auto* p = new(std::nothrow) CPropertySheet();
-    if (!p) return E_OUTOFMEMORY;
-    HRESULT hr = p->QueryInterface(riid, ppv);
-    p->Release(); return hr;
-}
+#endif // ARCHIVEFLDR_NO_VISTA_HANDLERS

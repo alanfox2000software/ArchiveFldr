@@ -1,10 +1,11 @@
 // SevenZipEngine.h
-// Real IArchiveEngine implementation for .7z / .7zip archives, backed by
+// Real IArchiveEngine implementation for every container 7z.dll can read
+// — .7z, .zip, .tar, .wim, .iso, .cab, .gz, .xz and the rest — backed by
 // the external 7-Zip engine DLL dropped in by the user at:
-//   thirdparty\7z\7z.64.dll   (64-bit ShellNSE.64.dll)
-//   thirdparty\7z\7z.32.dll   (32-bit ShellNSE.32.dll)
+//   thirdparty\7z\7z.64.dll   (64-bit ArchiveFldr.64.dll)
+//   thirdparty\7z\7z.32.dll   (32-bit ArchiveFldr.32.dll)
 //
-// ShellNSE itself ships NO decoder code — it only talks to 7z.dll through
+// ArchiveFldr itself ships NO decoder code — it only talks to 7z.dll through
 // the small, stable "COM-lite" interface declared in Sdk7z.h, exactly the
 // way the 7-Zip SDK's own Client7z.cpp sample does.
 #pragma once
@@ -16,7 +17,7 @@
 // could be located and its CreateObject() entry point resolved.
 // The module is loaded once and kept for the lifetime of the process.
 bool   Is7zEngineAvailable();
-// Full path that ShellNSE looked for / loaded (for diagnostics & the
+// Full path that ArchiveFldr looked for / loaded (for diagnostics & the
 // Settings → Integration page "status" readout).
 std::wstring Get7zEnginePath();
 
@@ -45,7 +46,12 @@ public:
 
     bool Test(ProgressFn cb) override;
 
-    std::wstring GetFormatName()  const override { return L"7-Zip"; }
+    // Real extraction + testing; no compressor is wired up, so adding,
+    // deleting and renaming stay off (the shell greys those commands out).
+    EngineCaps GetCaps() const override;
+
+    std::wstring GetFormatName()  const override
+    { return m_formatName.empty() ? std::wstring(L"7-Zip") : m_formatName; }
     std::wstring GetFilePath()    const override { return m_filePath; }
     std::wstring GetComment()     const override { return L""; }
     uint64_t     GetFileCount()   const override;
@@ -56,11 +62,22 @@ public:
     const std::wstring& GetLastError() const { return m_lastError; }
 
 private:
+    // Display name of the handler that actually opened the file ("tar",
+    // "wim", …), so the UI does not call every archive "7-Zip".
+    std::wstring m_formatName;
     bool ExtractIndices(const std::vector<UINT32>& indices,
                         const std::wstring& destDir, ProgressFn cb);
     void BuildEntryList();
+    // Split each solid block's packed size across the files sharing it.
+    void SpreadSolidBlockPackSizes(
+        const std::vector<std::pair<size_t, uint64_t>>& blockOf);
 
     ComPtr<IInArchive7z>      m_archive;
     std::vector<ArchiveEntry> m_allEntries; // flat list, directories synthesized
     std::wstring              m_lastError;
+    // Name to give the payload of a single-stream container (.bz2, .gz,
+    // .xz), which carries no name of its own. Empty for every other
+    // archive. Both the listing and the extract callback read this, so
+    // the two cannot disagree about what the file is called.
+    std::wstring              m_innerName;
 };

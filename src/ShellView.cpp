@@ -6,7 +6,7 @@
 #include "GUIDs.h"
 #include "Settings.h"
 
-static const wchar_t kViewClass[] = L"ShellNSE_View";
+static const wchar_t kViewClass[] = L"ArchiveFldr_View";
 
 CShellView::CShellView(CShellFolder* pFolder, HWND hwndOwner)
     : m_pFolder(pFolder), m_hwndOwner(hwndOwner)
@@ -30,6 +30,7 @@ CShellView::CShellView(CShellFolder* pFolder, HWND hwndOwner)
 }
 CShellView::~CShellView()
 {
+    if (m_hListFont) { DeleteObject(m_hListFont); m_hListFont = nullptr; }
     if (m_pFolder) { m_pFolder->Release(); m_pFolder = nullptr; }
     if (m_pBrowser){ m_pBrowser->Release(); m_pBrowser = nullptr; }
     InterlockedDecrement(&g_cDllRefCount);
@@ -173,15 +174,57 @@ void CShellView::CreateListView()
         SHGFI_SYSICONINDEX|SHGFI_SMALLICON);
     ListView_SetImageList(m_hwndList, hSys, LVSIL_SMALL);
 
-    // Columns
-    struct { const wchar_t* n; int w; } cols[] = {
-        {L"Name",220},{L"Size",90},{L"Packed",90},
-        {L"Ratio",60},{L"Method",80},{L"Modified",130},{L"CRC-32",80}
+    // ── Columns ──────────────────────────────────────────
+    // Only the ones the user asked for. m_colMap keeps the link back to
+    // the folder's column numbers, which never change: hiding "Packed"
+    // must not make GetDetailsOf report the ratio under its heading.
+    const Settings& cfg = Settings::Get();
+    struct ColDef { const wchar_t* n; int w; int folderCol; bool shown; };
+    const ColDef cols[] = {
+        { L"Name",     220, 0, true                   },
+        { L"Size",      90, 1, cfg.showSizeColumn     },
+        { L"Packed",    90, 2, cfg.showSizeColumn     },
+        { L"Ratio",     60, 3, cfg.showRatioColumn    },
+        { L"Method",    80, 4, cfg.showMethodColumn   },
+        { L"Modified", 130, 5, cfg.showDateColumn     },
+        { L"CRC-32",    80, 6, cfg.showCrcColumn      },
     };
-    for (int i = 0; i < 7; i++) {
-        LVCOLUMNW c{LVCF_TEXT|LVCF_WIDTH,(i>0?LVCFMT_RIGHT:LVCFMT_LEFT),
-                    cols[i].w,(LPWSTR)cols[i].n};
-        ListView_InsertColumn(m_hwndList, i, &c);
+
+    m_colMap.clear();
+    int shownIndex = 0;
+    for (const ColDef& cd : cols)
+    {
+        if (!cd.shown) continue;
+        LVCOLUMNW c{ LVCF_TEXT | LVCF_WIDTH,
+                     (shownIndex > 0 ? LVCFMT_RIGHT : LVCFMT_LEFT),
+                     cd.w, (LPWSTR)cd.n };
+        ListView_InsertColumn(m_hwndList, shownIndex, &c);
+        m_colMap.push_back(cd.folderCol);
+        ++shownIndex;
+    }
+
+    // ── Font ─────────────────────────────────────────────
+    // A list view keeps using the font it was given, so the handle has
+    // to outlive this call and be destroyed with the view.
+    if (!cfg.fontFace.empty() && cfg.fontSize > 0)
+    {
+        const HDC hdc = GetDC(m_hwndList);
+        const int height = -MulDiv(cfg.fontSize,
+                                   GetDeviceCaps(hdc, LOGPIXELSY), 72);
+        ReleaseDC(m_hwndList, hdc);
+
+        LOGFONTW lf{};
+        lf.lfHeight  = height;
+        lf.lfWeight  = FW_NORMAL;
+        lf.lfCharSet = DEFAULT_CHARSET;
+        wcsncpy_s(lf.lfFaceName, cfg.fontFace.c_str(), _TRUNCATE);
+
+        if (HFONT hf = CreateFontIndirectW(&lf))
+        {
+            if (m_hListFont) DeleteObject(m_hListFont);
+            m_hListFont = hf;
+            SendMessageW(m_hwndList, WM_SETFONT, (WPARAM)hf, TRUE);
+        }
     }
 }
 
@@ -217,13 +260,13 @@ void CShellView::PopulateListView()
         item.lParam  = (LPARAM)CPidlMgr::Clone(pidl);
         ListView_InsertItem(m_hwndList, &item);
 
-        // Sub-items via GetDetailsOf
-        for (int col = 1; col < 7; col++) {
+        // Sub-items via GetDetailsOf, through the visible-column map.
+        for (size_t i = 1; i < m_colMap.size(); ++i) {
             SHELLDETAILS sd{};
-            m_pFolder->GetDetailsOf(pidl, col, &sd);
+            m_pFolder->GetDetailsOf(pidl, m_colMap[i], &sd);
             wchar_t buf[128] = {};
             StrRetToBufW(&sd.str, pidl, buf, 128);
-            ListView_SetItemText(m_hwndList, row, col, buf);
+            ListView_SetItemText(m_hwndList, row, (int)i, buf);
         }
         ILFree(pidl); row++;
     }
@@ -241,10 +284,27 @@ void CShellView::OnDblClick(int idx)
     if (!ListView_GetItem(m_hwndList,&item)) return;
     LPITEMIDLIST pidl = (LPITEMIDLIST)item.lParam;
     if (!pidl) return;
-    if (CPidlMgr::IsDir(pidl) && m_pBrowser) {
-    if (m_pBrowser)
-        m_pBrowser->BrowseObject(pidl, SBSP_RELATIVE);
+
+    // A folder navigates this window; a file runs the item context menu's
+    // default verb (extract a temp copy and open it), same as DefView does.
+    if (CPidlMgr::IsDir(pidl))
+    {
+        if (m_pBrowser)
+            m_pBrowser->BrowseObject(pidl, SBSP_RELATIVE | SBSP_DEFBROWSER);
+        return;
     }
+
+    auto* pCM = new(std::nothrow) CContextMenu();
+    if (!pCM) return;
+    LPCITEMIDLIST one = pidl;
+    pCM->SetFolder(m_pFolder, m_hwnd, 1, &one);
+    // "Open archive on double-click" off means the user would rather get
+    // the file out than run it, so the default verb becomes extract.
+    const char* verb = Settings::Get().openArchiveOnDblClk ? "open" : "extract";
+    CMINVOKECOMMANDINFO ci{ sizeof(ci), 0, m_hwnd, verb,
+                            nullptr, nullptr, SW_SHOWNORMAL };
+    pCM->InvokeCommand(&ci);
+    pCM->Release();
 }
 
 void CShellView::OnContextMenu(int x, int y)
@@ -300,6 +360,37 @@ LRESULT CShellView::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_SETFOCUS:
         if (m_hwndList) SetFocus(m_hwndList); return 0;
     case WM_NOTIFY: {
+        // Alternate row shading. The list view has no style for it, so
+        // the colour is chosen per row during custom draw.
+        if (((NMHDR*)lp)->code == NM_CUSTOMDRAW &&
+            ((NMHDR*)lp)->hwndFrom == m_hwndList &&
+            Settings::Get().alternateRowColors)
+        {
+            auto* cd = (NMLVCUSTOMDRAW*)lp;
+            switch (cd->nmcd.dwDrawStage)
+            {
+            case CDDS_PREPAINT:
+                return CDRF_NOTIFYITEMDRAW;
+            case CDDS_ITEMPREPAINT:
+                if (cd->nmcd.dwItemSpec & 1)
+                {
+                    // Derived from the current window colour so it stays
+                    // sane under a high-contrast or dark theme instead of
+                    // being a hard-coded near-white.
+                    const COLORREF c = GetSysColor(COLOR_WINDOW);
+                    const int r = GetRValue(c), g = GetGValue(c), b = GetBValue(c);
+                    const int d = (r + g + b > 384) ? -8 : 12;
+                    auto shade = [](int v) {
+                        return (BYTE)(v < 0 ? 0 : (v > 255 ? 255 : v));
+                    };
+                    cd->clrTextBk = RGB(shade(r + d), shade(g + d), shade(b + d));
+                }
+                return CDRF_DODEFAULT;
+            default:
+                return CDRF_DODEFAULT;
+            }
+        }
+
         auto* nm = (NMHDR*)lp;
         if (nm->hwndFrom == m_hwndList) {
             if (nm->code == NM_DBLCLK)

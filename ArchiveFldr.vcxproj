@@ -1,0 +1,643 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- ═══════════════════════════════════════════════════
+       Configuration / Platform Matrix
+  ════════════════════════════════════════════════════ -->
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <!-- ═══════════════════════════════════════════════════
+       Global Properties
+  ════════════════════════════════════════════════════ -->
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
+    <RootNamespace>ArchiveFldr</RootNamespace>
+    <Keyword>Win32Proj</Keyword>
+    <!-- Toolset override. Defaults to v145 (VS2026) for a normal build:
+           msbuild ArchiveFldr.sln /p:Configuration=Release /p:Platform=x64
+         To produce a binary whose CRT actually runs on Windows XP, build
+         with the XP-capable toolset instead (needs the VS2017 build tools
+         and the "Windows XP support for C++" component installed):
+           msbuild ArchiveFldr.sln /p:ArchiveFldrToolset=v141_xp
+         See BUILD-XP.md. -->
+    <ArchiveFldrToolset Condition="'$(ArchiveFldrToolset)'==''">v145</ArchiveFldrToolset>
+    <!-- The XP toolset brings its own (Windows 7.1A) SDK, so only pin the
+         modern SDK version when we are not building for XP. The default
+         above has to come first: this test used to read the property
+         before it had a value, and only worked because an unset property
+         compares equal to the empty string. -->
+    <WindowsTargetPlatformVersion Condition="!$(ArchiveFldrToolset.EndsWith('_xp'))">10.0.28000.0</WindowsTargetPlatformVersion>
+    <!-- The language standard follows the toolset as well. v141 predates
+         /std:c++20 — it would warn D9002, ignore the switch and fall back
+         to C++14, which is not a dialect this code compiles in. C++17 is
+         the newest the XP toolset understands, and nothing here needs
+         more than that. -->
+    <ArchiveFldrLangStandard Condition="'$(ArchiveFldrLangStandard)'=='' And $(ArchiveFldrToolset.EndsWith('_xp'))">stdcpp17</ArchiveFldrLangStandard>
+    <ArchiveFldrLangStandard Condition="'$(ArchiveFldrLangStandard)'==''">stdcpp20</ArchiveFldrLangStandard>
+    <!-- Targeting macros follow the toolset. They have to: with
+         _WIN32_WINNT at 0x0A00 the STL compiles std::mutex down to SRW
+         locks, which XP's kernel32 does not export, and the extension
+         would not load no matter which toolset built it. ARCHIVEFLDR_XP also
+         compiles out the thumbnail provider and preview handler, neither
+         of which exists before Vista. -->
+    <ArchiveFldrTargetDefines Condition="$(ArchiveFldrToolset.EndsWith('_xp'))">ARCHIVEFLDR_XP;_WIN32_WINNT=0x0501;WINVER=0x0501;NTDDI_VERSION=0x05010300;</ArchiveFldrTargetDefines>
+    <ArchiveFldrTargetDefines Condition="!$(ArchiveFldrToolset.EndsWith('_xp'))">_WIN32_WINNT=0x0A00;WINVER=0x0A00;NTDDI_VERSION=0x0A000006;</ArchiveFldrTargetDefines>
+    <ProjectName>ArchiveFldr</ProjectName>
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <!-- Force UTF-8 for all source files project-wide -->
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <!-- ═══════════════════════════════════════════════════
+       Per-Configuration Property Groups
+  ════════════════════════════════════════════════════ -->
+  <!-- DEBUG | Win32 -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>$(ArchiveFldrToolset)</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <!-- RELEASE | Win32 -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>$(ArchiveFldrToolset)</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <!-- DEBUG | x64 -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>$(ArchiveFldrToolset)</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <!-- RELEASE | x64 -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>$(ArchiveFldrToolset)</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <!-- ═══════════════════════════════════════════════════
+       Output / Intermediate Directories
+  ════════════════════════════════════════════════════ -->
+  <!-- One output folder per configuration AND platform:
+       Debug\x32, Debug\x64, Release\x32,
+       Release\x64.
+
+       The two bitnesses used to share bin\$(Configuration)\ so that
+       ArchiveFldr.32.dll and ArchiveFldr.64.dll landed side by side.
+       That had one real virtue — the settings program could find its
+       opposite-bitness DLL by looking next to itself — and one real
+       vice: everything that is not name-decorated by bitness (the
+       .pdb and .res of a given project, and anything else a future
+       platform-neutral output might add) carries the same name in
+       both platforms, so whichever built last silently overwrote the
+       other. Separate folders end the overwrite, and CPageInstall
+       learned to look in the sibling folder to keep the virtue.
+
+       thirdparty\ can still be a single shared tree. Put it in
+       bin\$(Configuration)\, the parent of these two, and both
+       bitnesses will find it: ThirdParty::ProbePaths looks one level
+       up as well as beside the module.
+
+       IntDir is per architecture AND per project. Both projects
+       compile res\resource.rc, so a shared IntDir had them writing the
+       same resource.res, and MSBuild's file trackers (CL.*.tlog,
+       link.*.tlog, mt.*.tlog) collided in the same place: that is
+       warning MSB8028, and it makes clean and incremental builds
+       unreliable. -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <OutDir>$(SolutionDir)$(Configuration)\x32\</OutDir>
+    <IntDir>$(SolutionDir)obj\$(Configuration)\x86\$(ProjectName)\</IntDir>
+    <TargetName>ArchiveFldr.32</TargetName>
+    <TargetExt>.dll</TargetExt>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <OutDir>$(SolutionDir)$(Configuration)\x32\</OutDir>
+    <IntDir>$(SolutionDir)obj\$(Configuration)\x86\$(ProjectName)\</IntDir>
+    <TargetName>ArchiveFldr.32</TargetName>
+    <TargetExt>.dll</TargetExt>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>$(SolutionDir)$(Configuration)\x64\</OutDir>
+    <IntDir>$(SolutionDir)obj\$(Configuration)\x64\$(ProjectName)\</IntDir>
+    <TargetName>ArchiveFldr.64</TargetName>
+    <TargetExt>.dll</TargetExt>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(SolutionDir)$(Configuration)\x64\</OutDir>
+    <IntDir>$(SolutionDir)obj\$(Configuration)\x64\$(ProjectName)\</IntDir>
+    <TargetName>ArchiveFldr.64</TargetName>
+    <TargetExt>.dll</TargetExt>
+  </PropertyGroup>
+  <!-- ═══════════════════════════════════════════════════
+       Shared Preprocessor Definitions (property sheet style)
+       These are the CRITICAL WRL/WinRT conflict fixes:
+         __WRL_NO_DEFAULT_LIB__  — stops WRL auto-linking WinRT
+         __WRL_CLASSIC_COM__     — keeps WRL in classic COM mode
+         RO_NO_TEMPLATE_NAME     — stops IInspectable becoming template
+         _HIDE_GLOBAL_ASYNC_STATUS — suppresses WinRT async headers
+  ════════════════════════════════════════════════════ -->
+  <PropertyGroup Label="SharedDefines">
+    <WrlFixDefines>
+      __WRL_NO_DEFAULT_LIB__;
+      __WRL_CLASSIC_COM__;
+      RO_NO_TEMPLATE_NAME;
+      _HIDE_GLOBAL_ASYNC_STATUS;
+    </WrlFixDefines>
+    <CommonDefines>
+      UNICODE;
+      _UNICODE;
+      _WINDOWS;
+      _USRDLL;
+      ARCHIVEFLDR_EXPORTS;
+      $(ArchiveFldrTargetDefines)
+      WIN32_LEAN_AND_MEAN;
+      NOMINMAX;
+      STRICT;
+    </CommonDefines>
+    <!-- /utf-8        = source + execution charset both UTF-8 (fixes C4819)
+         /wd4091       = suppress 'typedef ignored' in SDK headers
+         /wd4229       = suppress 'anachronism: modifiers on data'
+         /wd4471       = suppress unscoped enum forward decl warning
+         /wd4819       = suppress code-page warning (redundant with /utf-8)
+         /wd4251       = suppress dll-interface warning
+         /Zc:__cplusplus = make __cplusplus report correct value    -->
+    <CommonExtraOptions>
+      /utf-8
+      /wd4091
+      /wd4229
+      /wd4471
+      /wd4819
+      /wd4251
+      /Zc:__cplusplus
+    </CommonExtraOptions>
+  </PropertyGroup>
+  <!-- ═══════════════════════════════════════════════════
+       Item Definition Groups — Compiler + Linker
+       One per configuration (4 total)
+  ════════════════════════════════════════════════════ -->
+  <!-- ──────────────────────────────────────────────────
+       DEBUG | Win32
+  ────────────────────────────────────────────────── -->
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>stdafx.h</PrecompiledHeaderFile>
+      <WarningLevel>Level4</WarningLevel>
+      <Optimization>Disabled</Optimization>
+      <SDLCheck>true</SDLCheck>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <!-- C++20 — do NOT use stdcpp23, it pulls <expected> & WinRT -->
+      <LanguageStandard>$(ArchiveFldrLangStandard)</LanguageStandard>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>
+        src;res;%(AdditionalIncludeDirectories)
+      </AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>
+        WIN32;
+        _DEBUG;
+        $(CommonDefines)
+        $(WrlFixDefines)
+        %(PreprocessorDefinitions)
+      </PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <!-- UTF-8 + SDK warning suppression -->
+      <AdditionalOptions>
+        $(CommonExtraOptions) %(AdditionalOptions)
+      </AdditionalOptions>
+      <DisableSpecificWarnings>
+        4091;4229;4471;4819;4251;%(DisableSpecificWarnings)
+      </DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <!-- Lowest Windows the loader will accept this binary on: 5.01 is
+           Windows XP (x86) and 5.02 is XP x64 / Server 2003, which is the
+           floor for any 64-bit build. Without this the linker stamps a
+           6.00+ subsystem version and XP refuses the DLL outright. -->
+      <MinimumRequiredVersion Condition="'$(Platform)'=='Win32'">5.01</MinimumRequiredVersion>
+      <MinimumRequiredVersion Condition="'$(Platform)'=='x64'">5.02</MinimumRequiredVersion>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <ModuleDefinitionFile>src\ArchiveFldr.def</ModuleDefinitionFile>
+      <!-- Nothing links against a shell extension, so the import
+           library and its .exp are build residue. Keep them in IntDir
+           rather than beside the DLL or loose in the source tree. -->
+      <ImportLibrary>$(IntDir)$(TargetName).lib</ImportLibrary>
+      <AdditionalDependencies>
+        shlwapi.lib;
+        shell32.lib;
+        ole32.lib;
+        oleaut32.lib;
+        uuid.lib;
+        comctl32.lib;
+        user32.lib;
+        gdi32.lib;
+        advapi32.lib;
+        uxtheme.lib;
+        comdlg32.lib;
+        %(AdditionalDependencies)
+      </AdditionalDependencies>
+      <!-- Do NOT link runtimeobject.lib (WinRT) -->
+    </Link>
+    <PostBuildEvent>
+      <Command>if exist "$(ProjectDir)thirdparty\" xcopy /y /i /e /s "$(ProjectDir)thirdparty\*.dll" "$(OutDir)thirdparty\" &gt;nul 2&gt;nul
+if exist "$(ProjectDir)Lang\" xcopy /y /i "$(ProjectDir)Lang\*.txt" "$(OutDir)Lang\" &gt;nul 2&gt;nul
+set "RS=%SystemRoot%\SysWOW64\regsvr32.exe"
+if not exist "%RS%" set "RS=%SystemRoot%\System32\regsvr32.exe"
+"%RS%" /s "$(TargetPath)" &amp;&amp; echo [ArchiveFldr] Registered Debug x86: $(TargetFileName) || echo [ArchiveFldr] Built Debug x86: $(TargetFileName) - NOT registered, run Visual Studio as administrator
+exit /b 0</Command>
+      <Message>Registering Shell Extension (Debug x86)...</Message>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <!-- ──────────────────────────────────────────────────
+       RELEASE | Win32
+  ────────────────────────────────────────────────── -->
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>stdafx.h</PrecompiledHeaderFile>
+      <WarningLevel>Level4</WarningLevel>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <WholeProgramOptimization>true</WholeProgramOptimization>
+      <LanguageStandard>$(ArchiveFldrLangStandard)</LanguageStandard>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>
+        src;res;%(AdditionalIncludeDirectories)
+      </AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>
+        WIN32;
+        NDEBUG;
+        $(CommonDefines)
+        $(WrlFixDefines)
+        %(PreprocessorDefinitions)
+      </PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <AdditionalOptions>
+        $(CommonExtraOptions) %(AdditionalOptions)
+      </AdditionalOptions>
+      <DisableSpecificWarnings>
+        4091;4229;4471;4819;4251;%(DisableSpecificWarnings)
+      </DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <!-- Lowest Windows the loader will accept this binary on: 5.01 is
+           Windows XP (x86) and 5.02 is XP x64 / Server 2003, which is the
+           floor for any 64-bit build. Without this the linker stamps a
+           6.00+ subsystem version and XP refuses the DLL outright. -->
+      <MinimumRequiredVersion Condition="'$(Platform)'=='Win32'">5.01</MinimumRequiredVersion>
+      <MinimumRequiredVersion Condition="'$(Platform)'=='x64'">5.02</MinimumRequiredVersion>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <ModuleDefinitionFile>src\ArchiveFldr.def</ModuleDefinitionFile>
+      <!-- Nothing links against a shell extension, so the import
+           library and its .exp are build residue. Keep them in IntDir
+           rather than beside the DLL or loose in the source tree. -->
+      <ImportLibrary>$(IntDir)$(TargetName).lib</ImportLibrary>
+      <AdditionalDependencies>
+        shlwapi.lib;
+        shell32.lib;
+        ole32.lib;
+        oleaut32.lib;
+        uuid.lib;
+        comctl32.lib;
+        user32.lib;
+        gdi32.lib;
+        advapi32.lib;
+        uxtheme.lib;
+        comdlg32.lib;
+        %(AdditionalDependencies)
+      </AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>if exist "$(ProjectDir)thirdparty\" xcopy /y /i /e /s "$(ProjectDir)thirdparty\*.dll" "$(OutDir)thirdparty\" &gt;nul 2&gt;nul
+if exist "$(ProjectDir)Lang\" xcopy /y /i "$(ProjectDir)Lang\*.txt" "$(OutDir)Lang\" &gt;nul 2&gt;nul
+set "RS=%SystemRoot%\SysWOW64\regsvr32.exe"
+if not exist "%RS%" set "RS=%SystemRoot%\System32\regsvr32.exe"
+"%RS%" /s "$(TargetPath)" &amp;&amp; echo [ArchiveFldr] Registered Release x86: $(TargetFileName) || echo [ArchiveFldr] Built Release x86: $(TargetFileName) - NOT registered, run Visual Studio as administrator
+exit /b 0</Command>
+      <Message>Registering Shell Extension (Release x86)...</Message>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <!-- ──────────────────────────────────────────────────
+       DEBUG | x64
+  ────────────────────────────────────────────────── -->
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>stdafx.h</PrecompiledHeaderFile>
+      <WarningLevel>Level4</WarningLevel>
+      <Optimization>Disabled</Optimization>
+      <SDLCheck>true</SDLCheck>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <LanguageStandard>$(ArchiveFldrLangStandard)</LanguageStandard>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>
+        src;res;%(AdditionalIncludeDirectories)
+      </AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>
+        _WIN64;
+        _DEBUG;
+        $(CommonDefines)
+        $(WrlFixDefines)
+        %(PreprocessorDefinitions)
+      </PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <AdditionalOptions>
+        $(CommonExtraOptions) %(AdditionalOptions)
+      </AdditionalOptions>
+      <DisableSpecificWarnings>
+        4091;4229;4471;4819;4251;%(DisableSpecificWarnings)
+      </DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <!-- Lowest Windows the loader will accept this binary on: 5.01 is
+           Windows XP (x86) and 5.02 is XP x64 / Server 2003, which is the
+           floor for any 64-bit build. Without this the linker stamps a
+           6.00+ subsystem version and XP refuses the DLL outright. -->
+      <MinimumRequiredVersion Condition="'$(Platform)'=='Win32'">5.01</MinimumRequiredVersion>
+      <MinimumRequiredVersion Condition="'$(Platform)'=='x64'">5.02</MinimumRequiredVersion>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <ModuleDefinitionFile>src\ArchiveFldr.def</ModuleDefinitionFile>
+      <!-- Nothing links against a shell extension, so the import
+           library and its .exp are build residue. Keep them in IntDir
+           rather than beside the DLL or loose in the source tree. -->
+      <ImportLibrary>$(IntDir)$(TargetName).lib</ImportLibrary>
+      <AdditionalDependencies>
+        shlwapi.lib;
+        shell32.lib;
+        ole32.lib;
+        oleaut32.lib;
+        uuid.lib;
+        comctl32.lib;
+        user32.lib;
+        gdi32.lib;
+        advapi32.lib;
+        uxtheme.lib;
+        comdlg32.lib;
+        %(AdditionalDependencies)
+      </AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>if exist "$(ProjectDir)thirdparty\" xcopy /y /i /e /s "$(ProjectDir)thirdparty\*.dll" "$(OutDir)thirdparty\" &gt;nul 2&gt;nul
+if exist "$(ProjectDir)Lang\" xcopy /y /i "$(ProjectDir)Lang\*.txt" "$(OutDir)Lang\" &gt;nul 2&gt;nul
+set "RS=%SystemRoot%\Sysnative\regsvr32.exe"
+if not exist "%RS%" set "RS=%SystemRoot%\System32\regsvr32.exe"
+"%RS%" /s "$(TargetPath)" &amp;&amp; echo [ArchiveFldr] Registered Debug x64: $(TargetFileName) || echo [ArchiveFldr] Built Debug x64: $(TargetFileName) - NOT registered, run Visual Studio as administrator
+exit /b 0</Command>
+      <Message>Registering Shell Extension (Debug x64)...</Message>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <!-- ──────────────────────────────────────────────────
+       RELEASE | x64
+  ────────────────────────────────────────────────── -->
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>stdafx.h</PrecompiledHeaderFile>
+      <WarningLevel>Level4</WarningLevel>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <WholeProgramOptimization>true</WholeProgramOptimization>
+      <LanguageStandard>$(ArchiveFldrLangStandard)</LanguageStandard>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>
+        src;res;%(AdditionalIncludeDirectories)
+      </AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>
+        _WIN64;
+        NDEBUG;
+        $(CommonDefines)
+        $(WrlFixDefines)
+        %(PreprocessorDefinitions)
+      </PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <AdditionalOptions>
+        $(CommonExtraOptions) %(AdditionalOptions)
+      </AdditionalOptions>
+      <DisableSpecificWarnings>
+        4091;4229;4471;4819;4251;%(DisableSpecificWarnings)
+      </DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <!-- Lowest Windows the loader will accept this binary on: 5.01 is
+           Windows XP (x86) and 5.02 is XP x64 / Server 2003, which is the
+           floor for any 64-bit build. Without this the linker stamps a
+           6.00+ subsystem version and XP refuses the DLL outright. -->
+      <MinimumRequiredVersion Condition="'$(Platform)'=='Win32'">5.01</MinimumRequiredVersion>
+      <MinimumRequiredVersion Condition="'$(Platform)'=='x64'">5.02</MinimumRequiredVersion>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <ModuleDefinitionFile>src\ArchiveFldr.def</ModuleDefinitionFile>
+      <!-- Nothing links against a shell extension, so the import
+           library and its .exp are build residue. Keep them in IntDir
+           rather than beside the DLL or loose in the source tree. -->
+      <ImportLibrary>$(IntDir)$(TargetName).lib</ImportLibrary>
+      <AdditionalDependencies>
+        shlwapi.lib;
+        shell32.lib;
+        ole32.lib;
+        oleaut32.lib;
+        uuid.lib;
+        comctl32.lib;
+        user32.lib;
+        gdi32.lib;
+        advapi32.lib;
+        uxtheme.lib;
+        comdlg32.lib;
+        %(AdditionalDependencies)
+      </AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>if exist "$(ProjectDir)thirdparty\" xcopy /y /i /e /s "$(ProjectDir)thirdparty\*.dll" "$(OutDir)thirdparty\" &gt;nul 2&gt;nul
+if exist "$(ProjectDir)Lang\" xcopy /y /i "$(ProjectDir)Lang\*.txt" "$(OutDir)Lang\" &gt;nul 2&gt;nul
+set "RS=%SystemRoot%\Sysnative\regsvr32.exe"
+if not exist "%RS%" set "RS=%SystemRoot%\System32\regsvr32.exe"
+"%RS%" /s "$(TargetPath)" &amp;&amp; echo [ArchiveFldr] Registered Release x64: $(TargetFileName) || echo [ArchiveFldr] Built Release x64: $(TargetFileName) - NOT registered, run Visual Studio as administrator
+exit /b 0</Command>
+      <Message>Registering Shell Extension (Release x64)...</Message>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <!-- ═══════════════════════════════════════════════════
+       Source Files
+  ════════════════════════════════════════════════════ -->
+  <ItemGroup>
+    <!-- Precompiled Header — must be set to Create -->
+    <ClCompile Include="src\stdafx.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
+    </ClCompile>
+    <!-- Core DLL -->
+    <ClCompile Include="src\dllmain.cpp" />
+    <ClCompile Include="src\ClassFactory.cpp" />
+    <ClCompile Include="src\Registry.cpp" />
+    <!-- Shell Namespace Extension -->
+    <ClCompile Include="src\ShellFolder.cpp" />
+    <ClCompile Include="src\ShellView.cpp" />
+    <!-- Shell Extension Handlers -->
+    <ClCompile Include="src\ContextMenu.cpp" />
+    <ClCompile Include="src\DropTarget.cpp" />
+    <ClCompile Include="src\ThumbnailProvider.cpp" />
+    <ClCompile Include="src\PreviewHandler.cpp" />
+    <!-- Archive Engine -->
+    <ClCompile Include="src\ArchiveEngine.cpp" />
+    <ClCompile Include="src\ArchiveOps.cpp" />
+    <ClCompile Include="src\DataObject.cpp" />
+    <ClCompile Include="src\ThirdParty.cpp" />
+    <ClCompile Include="src\SevenZipEngine.cpp" />
+    <!-- Settings & GUI -->
+    <ClCompile Include="src\CodecEngine.cpp" />
+    <ClCompile Include="src\WimEngine.cpp" />
+    <ClCompile Include="src\UnrarEngine.cpp" />
+    <ClCompile Include="src\SysInfo.cpp" />
+    <ClCompile Include="src\Formats.cpp" />
+    <ClCompile Include="src\Lang.cpp" />
+    <ClCompile Include="src\Settings.cpp" />
+    <ClCompile Include="src\BrowseTo.cpp" />
+  </ItemGroup>
+  <!-- ═══════════════════════════════════════════════════
+       Header Files
+  ════════════════════════════════════════════════════ -->
+  <ItemGroup>
+    <ClInclude Include="src\stdafx.h" />
+    <ClInclude Include="src\GUIDs.h" />
+    <ClInclude Include="src\ClassFactory.h" />
+    <ClInclude Include="src\ShellFolder.h" />
+    <ClInclude Include="src\ShellView.h" />
+    <ClInclude Include="src\ContextMenu.h" />
+    <ClInclude Include="src\DropTarget.h" />
+    <ClInclude Include="src\ThumbnailProvider.h" />
+    <ClInclude Include="src\PreviewHandler.h" />
+    <ClInclude Include="src\ArchiveEngine.h" />
+    <ClInclude Include="src\ArchiveOps.h" />
+    <ClInclude Include="src\DataObject.h" />
+    <ClInclude Include="src\ThirdParty.h" />
+    <ClInclude Include="src\SevenZipEngine.h" />
+    <ClInclude Include="src\Sdk7z.h" />
+    <ClInclude Include="src\Registry.h" />
+    <ClInclude Include="src\CodecEngine.h" />
+    <ClInclude Include="src\WimEngine.h" />
+    <ClInclude Include="src\UnrarEngine.h" />
+    <ClInclude Include="src\SysInfo.h" />
+    <ClInclude Include="src\Formats.h" />
+    <ClInclude Include="src\Lang.h" />
+    <ClInclude Include="src\Settings.h" />
+    <ClInclude Include="src\BrowseTo.h" />
+    <ClInclude Include="src\ArchiveWriter.h" />
+    <ClInclude Include="res\resource.h" />
+  </ItemGroup>
+  <!-- ═══════════════════════════════════════════════════
+       Resource Files
+  ════════════════════════════════════════════════════ -->
+  <ItemGroup>
+    <ResourceCompile Include="res\resource.rc">
+      <!-- RC compiler also needs UTF-8 + Unicode flag -->
+      <AdditionalOptions>/n %(AdditionalOptions)</AdditionalOptions>
+    </ResourceCompile>
+  </ItemGroup>
+  <!-- ═══════════════════════════════════════════════════
+       Miscellaneous / None files
+  ════════════════════════════════════════════════════ -->
+  <ItemGroup>
+    <None Include="src\ArchiveFldr.def" />
+    <None Include="res\manifest.xml" />
+    <None Include="Lang\en.txt" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+  <!-- ═══════════════════════════════════════════════════
+       The 32-bit DLL is part of an x64 build
+
+       On 64-bit Windows both DLLs are live at once: a 64-bit Explorer
+       loads ArchiveFldr.64.dll, while 32-bit hosts — the common file
+       dialog in a 32-bit program, an old shell replacement, Office's
+       file browser — load ArchiveFldr.32.dll. The settings program
+       registers and unregisters both, and the System page offers a
+       tick column for each, so an x64 build that produced only the
+       64-bit DLL left half of that pointing at a file that was never
+       built.
+
+       A solution configuration maps each project to exactly one
+       project configuration, so the solution cannot build this
+       project twice. Building Win32 from inside the x64 build is the
+       way round that. Configuration is passed through unchanged and
+       only Platform is swapped, so the nested build carries exactly
+       the global properties the solution would have given its own
+       Win32 build. MSBuild keys project instances on that set, so when
+       a batch build asks for both platforms this still runs once.
+
+       Visual Studio's up-to-date check can skip a project whose
+       outputs are current, and skips these targets with it. Delete
+       the 32-bit DLL and rebuild if you ever need to force it back.
+
+       Recursion stops by construction — the nested build has
+       Platform=Win32, and these targets only run for x64.
+
+       Off by default, because a build should produce what it was
+       asked for and nothing else — BUILD-XP.md documents building
+       each platform separately. Turn it on for a one-command build
+       of both:  msbuild ... /p:ArchiveFldrBuildWin32Companion=true
+  ═══════════════════════════════════════════════════ -->
+  <PropertyGroup>
+    <ArchiveFldrBuildWin32Companion Condition="'$(ArchiveFldrBuildWin32Companion)' == ''">false</ArchiveFldrBuildWin32Companion>
+    <ArchiveFldrWin32Companion Condition="'$(Platform)' == 'x64' AND '$(ArchiveFldrBuildWin32Companion)' == 'true'">true</ArchiveFldrWin32Companion>
+  </PropertyGroup>
+
+  <Target Name="ArchiveFldrBuildWin32"
+          AfterTargets="Build"
+          Condition="'$(ArchiveFldrWin32Companion)' == 'true'">
+    <Message Importance="high"
+             Text="[ArchiveFldr] $(Configuration)|x64 also builds the 32-bit DLL..." />
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);Platform=Win32" />
+  </Target>
+
+  <!-- Clean x64 without this leaves a stale ArchiveFldr.32.dll in
+       $(Configuration)\x32\, which the settings program would happily
+       register. Rebuild is Clean then Build, so it needs no hook of its
+       own; adding one would build the companion twice. -->
+  <Target Name="ArchiveFldrCleanWin32"
+          AfterTargets="Clean"
+          Condition="'$(ArchiveFldrWin32Companion)' == 'true'">
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="Clean"
+             Properties="Configuration=$(Configuration);Platform=Win32" />
+  </Target>
+</Project>

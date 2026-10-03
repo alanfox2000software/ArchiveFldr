@@ -1,4 +1,4 @@
-// Settings.h — Persistent settings for ShellNSE (registry-backed)
+// Settings.h — Persistent settings for ArchiveFldr (registry-backed)
 #pragma once
 #include "stdafx.h"
 
@@ -21,6 +21,13 @@ enum class ExtractPathMode : int {
     Downloads      = 4
 };
 
+// ── Working folder ────────────────────────────────────────
+// Where an extract-to-temp lands before the shell copies it out.
+enum class WorkDirMode : int {
+    SystemTemp = 0,   // whatever GetTempPath says
+    Specified  = 1    // workDirPath
+};
+
 // ── Date Format ───────────────────────────────────────────
 enum class DateFmt : int {
     ISO8601    = 0,   // 2024-12-31 23:59
@@ -35,8 +42,16 @@ enum class DateFmt : int {
 class Settings
 {
 public:
+    // Loaded on first use. This used to be driven from DllMain, which is
+    // not allowed to touch the registry (loader lock), and meant every
+    // short-lived shell host paid for it whether it read a setting or not.
     static Settings& Get() noexcept {
         static Settings s_instance;
+        static const bool s_loaded = [] {
+            s_instance.Load();
+            return true;
+        }();
+        (void)s_loaded;
         return s_instance;
     }
 
@@ -45,10 +60,13 @@ public:
     void Save() const;
     void Reset();
 
+    // ── Language ──────────────────────────────────────────
+    // File stem under Lang\, so "en" means Lang\en.txt.
+    std::wstring  language             = L"en";
+
     // ── General ───────────────────────────────────────────
     bool          showPreviewPane      = true;
     bool          showThumbnails       = true;
-    bool          showIconOverlay      = true;
     bool          showContextMenu      = true;
     bool          openArchiveOnDblClk  = true;   // true=open, false=extract
     bool          promptForPath        = true;
@@ -58,42 +76,109 @@ public:
     CompLevel     defaultCompLevel     = CompLevel::Normal;
     bool          createSolidArchive   = false;
     bool          encryptFileNames     = false;
-    bool          autoCloseAfterOp     = false;
 
     // ── Formats (which extensions to handle) ─────────────
     std::unordered_set<std::wstring> enabledFormats;
-    bool          handleZip    = true;
-    bool          handle7z     = true;
-    bool          handleRar    = true;   // extract only
-    bool          handleTar    = true;
-    bool          handleGz     = true;
-    bool          handleBz2    = true;
-    bool          handleXz     = true;
-    bool          handleLzma   = true;
-    bool          handleZst    = true;
-    bool          handleIso    = true;
-    bool          handleCab    = true;
-    bool          handleLzh    = true;
-    bool          handleArj    = true;   // extract only
-    bool          handleWim    = true;
-    bool          handleMsi    = false;
-    bool          handleOffice = true;   // .docx .xlsx etc
+    // Which extensions ArchiveFldr offers to handle, as a set of
+    // lower-case extensions with the dot (".zip"). This drives the
+    // Capabilities\FileAssociations key, which is what makes ArchiveFldr
+    // selectable per type in Settings > Default apps.
+    //
+    // It replaces sixteen hard-coded handleXxx booleans that nothing ever
+    // read: the format table in Formats.cpp is the real list, and it has
+    // 21 registrable entries, not 16.
+    // Two sets, because the association genuinely is per bitness: a
+    // 64-bit Explorer loads ArchiveFldr.64.dll and a 32-bit host loads
+    // ArchiveFldr.32.dll, each registering in its own view of
+    // HKLM\Software\Classes. One tick could not describe both.
+    std::set<std::wstring> assoc32;
+    std::set<std::wstring> assoc64;
+
+    // The set belonging to the build that is asking. Registration code
+    // wants its own bitness and nothing else.
+    std::set<std::wstring>& AssociatedHere() {
+#ifdef _WIN64
+        return assoc64;
+#else
+        return assoc32;
+#endif
+    }
+    const std::set<std::wstring>& AssociatedHere() const {
+#ifdef _WIN64
+        return assoc64;
+#else
+        return assoc32;
+#endif
+    }
+
+    // Listed in HKLM\SOFTWARE\RegisteredApplications, so Windows shows
+    // ArchiveFldr in Settings > Default apps. Writing it needs admin, so
+    // the settings program reports failure rather than silently not doing
+    // it.
+    bool          registerAsDefaultApp = false;
 
     // ── Context Menu Items ────────────────────────────────
     bool          ctxExtract          = true;
     bool          ctxExtractHere      = true;
     bool          ctxAddToArchive     = true;
+    // "Add to <name>.<ext>", the one-click compress. Separate from
+    // ctxAddToArchive because they are two menu entries and 7-Zip's
+    // options list treats them as two.
+    bool          ctxCompressHere     = true;
     bool          ctxCompressEmail    = true;
     bool          ctxOpenInShell      = true;
     bool          ctxTestArchive      = true;
     bool          ctxArchiveInfo      = true;
     bool          ctxSettings         = true;
-    bool          ctxUseSubMenu       = true;
-    std::wstring  ctxSubMenuTitle     = L"ShellNSE";
+    bool          ctxUseSubMenu       = true;   // "Cascaded context menu"
+    bool          ctxMenuIcons        = true;   // "Icons in context menu"
+    std::wstring  ctxSubMenuTitle     = L"ArchiveFldr";
+
+    // Is the context menu handler wanted, per bitness?
+    //
+    // Two flags for the same reason there are two association sets: a
+    // 64-bit Explorer can only load ArchiveFldr.64.dll and a 32-bit host
+    // only ArchiveFldr.32.dll, and each registers its own copy of the
+    // handler's CLSID in its own view of HKLM\Software\Classes. One flag
+    // could not describe both.
+    //
+    // These are what the two "Integrate to shell context menu" ticks on
+    // the ArchiveFldr page write. Registration reads them back: a build
+    // registers the context menu CLSID only when its own flag is set,
+    // and the shellex keys that point at it — which are shared between
+    // the two registry views, not per bitness — stand as long as either
+    // flag is set. Both default to true, so an unattended
+    // "regsvr32 ArchiveFldr.64.dll" on a machine that has never run the
+    // settings program behaves exactly as it always did.
+    //
+    // showContextMenu above is a different switch: it is read at
+    // runtime, by a handler that is already registered and loaded, and
+    // turns the menu off everywhere without touching the registry.
+    bool          ctxMenu32           = true;
+    bool          ctxMenu64           = true;
+
+    // The flag belonging to the build that is asking, like
+    // AssociatedHere() above.
+    bool& CtxMenuHere() {
+#ifdef _WIN64
+        return ctxMenu64;
+#else
+        return ctxMenu32;
+#endif
+    }
+    bool CtxMenuHere() const {
+#ifdef _WIN64
+        return ctxMenu64;
+#else
+        return ctxMenu32;
+#endif
+    }
+
+    // ...and whether anyone wants it, which is what the shared keys
+    // under Software\Classes follow.
+    bool CtxMenuAnywhere() const { return ctxMenu32 || ctxMenu64; }
 
     // ── Appearance ────────────────────────────────────────
-    bool          darkMode            = false;
-    bool          useCustomIcons      = true;
     bool          showSizeColumn      = true;
     bool          showDateColumn      = true;
     bool          showRatioColumn     = true;
@@ -107,15 +192,15 @@ public:
     // ── Advanced ──────────────────────────────────────────
     bool          multiThreaded       = true;
     int           threadCount         = 0;   // 0 = auto (CPU count)
-    bool          useTempDir          = false;
+    // Working folder (Folders page). useTempDir stays as the on-disk
+    // name of the same switch so existing installs keep their setting.
+    bool          useTempDir          = false;  // true = WorkDirMode::Specified
     std::wstring  tempDirPath;
+    WorkDirMode   WorkDir() const {
+        return useTempDir ? WorkDirMode::Specified : WorkDirMode::SystemTemp;
+    }
     bool          logErrors           = true;
     std::wstring  logFilePath;
-    bool          checkForUpdates     = true;
-    bool          sendUsageData       = false;
-    int           maxMemoryMB         = 256;
-    bool          cacheThumbnails     = true;
-    int           cacheSizeMB         = 128;
 
 private:
     Settings();

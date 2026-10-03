@@ -1,10 +1,14 @@
-// PreviewHandler.cpp
+// Windows Vista introduced IThumbnailProvider and IPreviewHandler;
+// neither exists on XP, where the shell uses IExtractImage and has no
+// preview pane. The XP build compiles this file away entirely.
 #include "stdafx.h"
+#ifndef ARCHIVEFLDR_NO_VISTA_HANDLERS
+// PreviewHandler.cpp
 #include "PreviewHandler.h"
 #include "ArchiveEngine.h"
 #include "GUIDs.h"
 
-static const wchar_t kPreviewClass[] = L"ShellNSE_Preview";
+static const wchar_t kPreviewClass[] = L"ArchiveFldr_Preview";
 
 CPreviewHandler::CPreviewHandler()
 {
@@ -46,8 +50,7 @@ STDMETHODIMP CPreviewHandler::QueryInterface(REFIID riid, void** ppv)
     { *ppv=static_cast<IPreviewHandlerVisuals*>(this); AddRef(); return S_OK; }
     if (IsEqualIID(riid,IID_IInitializeWithFile))
     { *ppv=static_cast<IInitializeWithFile*>(this); AddRef(); return S_OK; }
-    if (IsEqualIID(riid,IID_IInitializeWithStream))
-    { *ppv=static_cast<IInitializeWithStream*>(this); AddRef(); return S_OK; }
+    // No IInitializeWithStream on purpose — see PreviewHandler.h.
     if (IsEqualIID(riid,IID_IOleWindow))
     { *ppv=static_cast<IOleWindow*>(this); AddRef(); return S_OK; }
     return E_NOINTERFACE;
@@ -64,7 +67,6 @@ STDMETHODIMP CPreviewHandler::Initialize(LPCWSTR pszFilePath, DWORD)
     m_filePath = pszFilePath;
     return S_OK;
 }
-STDMETHODIMP CPreviewHandler::Initialize(IStream*, DWORD) { return E_NOTIMPL; }
 
 // ── IOleWindow ────────────────────────────────────────────
 STDMETHODIMP CPreviewHandler::GetWindow(HWND* p)
@@ -150,6 +152,7 @@ void CPreviewHandler::LoadEntries()
 void CPreviewHandler::CreatePreviewWindow()
 {
     if (m_hwnd) return;
+    EnsureCommonControls();
     m_hwnd = CreateWindowExW(0, kPreviewClass, L"",
         WS_CHILD|WS_VISIBLE|WS_VSCROLL|WS_CLIPCHILDREN,
         m_rc.left, m_rc.top,
@@ -167,6 +170,12 @@ void CPreviewHandler::PaintPreview(HDC hdc, const RECT& rc)
 {
     float W = (float)(rc.right-rc.left);
     float H = (float)(rc.bottom-rc.top);
+
+    // GDI+ is started here, on first paint, not by the loader.
+    if (!EnsureGdiPlus()) {
+        FillRect(hdc, &rc, (HBRUSH)(COLOR_WINDOW + 1));
+        return;
+    }
 
     Gdiplus::Graphics g(hdc);
     g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
@@ -293,6 +302,44 @@ LRESULT CALLBACK CPreviewHandler::PreviewWndProc(
     return p->WndProc(hwnd,msg,wp,lp);
 }
 
+// The furthest the thumb may travel. Win32 defines it as
+// nMax - nPage + 1, which goes negative as soon as the content fits in
+// the window — and std::clamp with hi < lo is undefined behaviour, not a
+// quiet no-op, which is exactly what the old code did on every archive
+// short enough to need no scrollbar.
+static int MaxScrollPos(const SCROLLINFO& si)
+{
+    const int hi = si.nMax - (int)si.nPage + 1;
+    return (hi > si.nMin) ? hi : si.nMin;
+}
+
+static int ClampScrollPos(const SCROLLINFO& si, int pos)
+{
+    const int hi = MaxScrollPos(si);
+    if (pos < si.nMin) return si.nMin;
+    if (pos > hi)      return hi;
+    return pos;
+}
+
+// Move to `pos`, telling the scrollbar and the window about it together.
+void CPreviewHandler::ApplyScrollPos(HWND hwnd, int pos)
+{
+    SCROLLINFO cur{sizeof(cur), SIF_RANGE|SIF_PAGE};
+    if (!GetScrollInfo(hwnd, SB_VERT, &cur)) return;
+
+    pos = ClampScrollPos(cur, pos);
+
+    SCROLLINFO set{sizeof(set), SIF_POS};
+    set.nPos = pos;
+    SetScrollInfo(hwnd, SB_VERT, &set, TRUE);
+
+    if (pos != m_scrollY)
+    {
+        m_scrollY = pos;
+        InvalidateRect(hwnd, nullptr, FALSE);
+    }
+}
+
 LRESULT CPreviewHandler::WndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp)
 {
     switch (msg) {
@@ -312,34 +359,59 @@ LRESULT CPreviewHandler::WndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp)
 
     case WM_VSCROLL: {
         SCROLLINFO si{sizeof(si),SIF_ALL};
-        GetScrollInfo(hwnd,SB_VERT,&si);
+        if (!GetScrollInfo(hwnd,SB_VERT,&si)) return 0;
+        int pos = si.nPos;
         switch (LOWORD(wp)) {
-        case SB_LINEUP:   si.nPos -= m_rowHeight; break;
-        case SB_LINEDOWN: si.nPos += m_rowHeight; break;
-        case SB_PAGEUP:   si.nPos -= si.nPage;    break;
-        case SB_PAGEDOWN: si.nPos += si.nPage;    break;
-        case SB_THUMBTRACK: si.nPos = si.nTrackPos; break;
+        case SB_TOP:        pos  = si.nMin;         break;
+        case SB_BOTTOM:     pos  = MaxScrollPos(si); break;
+        case SB_LINEUP:     pos -= m_rowHeight;     break;
+        case SB_LINEDOWN:   pos += m_rowHeight;     break;
+        case SB_PAGEUP:     pos -= (int)si.nPage;   break;
+        case SB_PAGEDOWN:   pos += (int)si.nPage;   break;
+        case SB_THUMBTRACK:
+        case SB_THUMBPOSITION: pos = si.nTrackPos;  break;
+        default: return 0;
         }
-        si.nPos = std::clamp(si.nPos,si.nMin,(int)(si.nMax-si.nPage));
-        m_scrollY = si.nPos;
-        SetScrollInfo(hwnd,SB_VERT,&si,TRUE);
-        InvalidateRect(hwnd,nullptr,FALSE);
+        ApplyScrollPos(hwnd, pos);
         return 0; }
 
     case WM_SIZE: {
         RECT rc; GetClientRect(hwnd,&rc);
-        int total = (int)m_rows.size() * m_rowHeight + 60;
-        SCROLLINFO si{sizeof(si),SIF_PAGE|SIF_RANGE,
-            0, total, (UINT)(rc.bottom), m_scrollY};
+        const int total = (int)m_rows.size() * m_rowHeight + 60;
+        SCROLLINFO si{sizeof(si), SIF_PAGE|SIF_RANGE|SIF_POS};
+        si.nMin  = 0;
+        // nMax is the last valid position, not the size: with nPage set
+        // the furthest the bar can travel is nMax - nPage + 1, so a nMax
+        // of `total` leaves one blank line reachable past the end.
+        si.nMax  = total > 0 ? total - 1 : 0;
+        si.nPage = (UINT)((rc.bottom > 0) ? rc.bottom : 1);
+        // A window that just grew can leave the remembered position
+        // past the new end of the range.
+        si.nPos  = ClampScrollPos(si, m_scrollY);
+        m_scrollY = si.nPos;
         SetScrollInfo(hwnd,SB_VERT,&si,TRUE);
         InvalidateRect(hwnd,nullptr,TRUE);
         return 0; }
 
     case WM_MOUSEWHEEL: {
-        int delta = GET_WHEEL_DELTA_WPARAM(wp);
-        m_scrollY = std::max(0, m_scrollY - delta/3);
-        InvalidateRect(hwnd,nullptr,FALSE);
+        SCROLLINFO si{sizeof(si),SIF_ALL};
+        if (!GetScrollInfo(hwnd,SB_VERT,&si)) return 0;
+
+        // Honour the user's wheel setting instead of inventing a
+        // divisor, and keep the thumb in step with the content —
+        // scrolling used to move the drawing and leave the scrollbar
+        // where it was, with nothing stopping it past the last row.
+        UINT lines = 3;
+        SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &lines, 0);
+        if (lines == 0) return 0;                  // "do not scroll"
+        const int step = (lines == WHEEL_PAGESCROLL)
+                       ? (int)si.nPage
+                       : (int)lines * m_rowHeight;
+
+        const int delta = GET_WHEEL_DELTA_WPARAM(wp);
+        ApplyScrollPos(hwnd, si.nPos - (delta * step) / WHEEL_DELTA);
         return 0; }
     }
     return DefWindowProcW(hwnd,msg,wp,lp);
 }
+#endif // ARCHIVEFLDR_NO_VISTA_HANDLERS

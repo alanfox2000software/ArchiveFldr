@@ -10,8 +10,22 @@ struct ArchiveEntry {
     std::wstring fullPath;
     bool         isDirectory       = false;
     uint64_t     uncompressedSize  = 0;
+    // False when the format does not record the original size. A raw
+    // Brotli stream never does, and LZ4/LZ5/Zstandard only do when the
+    // compressor chose to write it. Zero must not be shown as "0 KB".
+    bool         sizeKnown         = true;
     uint64_t     compressedSize    = 0;
+    // True when compressedSize is this item's share of a solid block
+    // rather than a figure the archive stores for it alone.
+    bool         packedIsShared    = false;
     uint32_t     crc32             = 0;
+    // Whether crc32 above means anything. Several formats store no
+    // per-file CRC at all — tar carries only a header checksum, WIM uses
+    // SHA-1 — and for those a zero must read as "not stored", not as a
+    // checksum that happens to be zero.
+    bool         hasCrc            = false;
+    // Hex digest for formats that use something other than CRC-32.
+    std::wstring sha1;
     std::wstring compressionMethod;
     FILETIME     modifiedTime      = {};
     bool         isEncrypted       = false;
@@ -26,6 +40,30 @@ struct ArchiveEntry {
 // ── Progress callback ─────────────────────────────────────
 using ProgressFn = std::function<void(int /*pct*/,
                                       const std::wstring& /*currentFile*/)>;
+
+// ─────────────────────────────────────────────────────────
+// EngineCaps — what the backend behind this archive can really do.
+//
+// Shell UI (context menus, drag & drop, the data object) asks for this
+// instead of assuming: a format with no third-party DLL behind it must
+// grey its commands out and say so, never silently do nothing.
+// ─────────────────────────────────────────────────────────
+struct EngineCaps
+{
+    bool canExtract = false;   // can produce real file data
+    bool canAdd     = false;   // can add / update entries
+    bool canDelete  = false;
+    bool canRename  = false;
+    bool canTest    = false;
+
+    // True when the entries are placeholder/demo data rather than the real
+    // contents of the file on disk (no engine is wired up for this format).
+    bool isStub     = true;
+
+    std::wstring engineName;         // "7-Zip"
+    std::wstring backendPath;        // third-party DLL actually loaded
+    std::wstring unavailableReason;  // why isStub / !canExtract, for the user
+};
 
 // ─────────────────────────────────────────────────────────
 // IArchiveEngine — abstract interface
@@ -60,6 +98,16 @@ public:
 
     // ── Integrity ────────────────────────────────────────
     virtual bool Test(ProgressFn cb) = 0;
+
+    // ── Capabilities ─────────────────────────────────────
+    // Conservative default: an engine that does not override this is
+    // treated as a placeholder with nothing real behind it.
+    virtual EngineCaps GetCaps() const
+    {
+        EngineCaps c;
+        c.engineName = GetFormatName();
+        return c;
+    }
 
     // ── Metadata ─────────────────────────────────────────
     virtual std::wstring GetFormatName()  const = 0;
@@ -103,6 +151,7 @@ public:
     bool DeleteFile(const ArchiveEntry& e) override;
     bool Rename    (const ArchiveEntry& e, const std::wstring& newName) override;
     bool Test      (ProgressFn cb)         override;
+    EngineCaps GetCaps() const             override;
 
     std::wstring GetFormatName()  const override;
     std::wstring GetFilePath()    const override { return m_filePath; }

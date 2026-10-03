@@ -1,10 +1,14 @@
+# Visual Studio local state and build output
 .vs/
-obj/
-bin/
-
-# Third-party 7-Zip engine DLLs — not ours to redistribute; see
-# thirdparty/7z/README.md for how to obtain and place them yourself.
-thirdparty/**/*.dll
-.vs/ShellNSE/v18/.suo
-.vs/ShellNSE/v18/Browse.VC.db
-ShellNSE.vcxproj.user
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+Win32/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+*.aps
+*.log

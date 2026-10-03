@@ -6,12 +6,12 @@
   <assemblyIdentity
     version    = "1.0.0.0"
     processorArchitecture = "*"
-    name       = "ShellNSE.ArchiveShellExtension"
+    name       = "ArchiveFldr.ArchiveShellExtension"
     type       = "win32"
   />
 
   <description>
-    ShellNSE — Windows Shell Namespace Extension.
+    ArchiveFldr — Windows Shell Namespace Extension.
     Lets Windows Explorer browse archive files (ZIP, 7Z, RAR,
     TAR, GZ, ISO, CAB, WIM and many more) as native folders.
   </description>

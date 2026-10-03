@@ -3,36 +3,17 @@
 #include "ArchiveEngine.h"
 #include "GUIDs.h"
 #include "SevenZipEngine.h"
+#include "CodecEngine.h"
+#include "UnrarEngine.h"
+#include "WimEngine.h"
+#include "Formats.h"
 
 // ─────────────────────────────────────────────────────────
 // CStubArchiveEngine
 // ─────────────────────────────────────────────────────────
 std::wstring CStubArchiveEngine::ExtToFormatName(const wchar_t* ext)
 {
-    if (!ext) return L"Archive";
-    struct { const wchar_t* e; const wchar_t* n; } tbl[] = {
-        {L".zip",  L"ZIP"},   {L".zipx", L"ZIPX"},
-        {L".jar",  L"JAR"},   {L".apk",  L"APK"},
-        {L".war",  L"WAR"},   {L".docx", L"DOCX"},
-        {L".xlsx", L"XLSX"},  {L".pptx", L"PPTX"},
-        {L".7z",   L"7-Zip"}, {L".7zip", L"7-Zip"},
-        {L".rar",  L"RAR"},   {L".r00",  L"RAR"},
-        {L".tar",  L"TAR"},   {L".tgz",  L"TAR+GZ"},
-        {L".tbz2", L"TAR+BZ2"},{L".txz", L"TAR+XZ"},
-        {L".gz",   L"GZip"},  {L".gzip", L"GZip"},
-        {L".bz2",  L"BZip2"}, {L".xz",  L"XZ"},
-        {L".zst",  L"Zstd"},  {L".lz",  L"Lzip"},
-        {L".lzma", L"LZMA"},  {L".lzh", L"LZH"},
-        {L".lha",  L"LZH"},   {L".arj", L"ARJ"},
-        {L".cab",  L"CAB"},   {L".iso", L"ISO"},
-        {L".img",  L"ISO"},   {L".wim", L"WIM"},
-        {L".swm",  L"WIM"},   {L".esd", L"WIM"},
-        {L".msi",  L"MSI"},   {L".deb", L"DEB"},
-        {L".rpm",  L"RPM"},   {nullptr,  nullptr}
-    };
-    for (int i=0; tbl[i].e; i++)
-        if (_wcsicmp(ext, tbl[i].e)==0) return tbl[i].n;
-    return L"Archive";
+    return Formats::NameFor(ext);
 }
 
 bool CStubArchiveEngine::Open(const std::wstring& path)
@@ -64,57 +45,16 @@ void CStubArchiveEngine::Close()
 
 void CStubArchiveEngine::BuildSampleEntries()
 {
+    // Deliberately empty.
+    //
+    // This used to invent a plausible-looking tree (bin/, docs/, images/,
+    // changelog.txt, install.bat …) so the shell plumbing could be
+    // exercised before any real engine existed. That was a mistake once
+    // the engines landed: a format that fell through to this class showed
+    // Explorer a directory listing of files that do not exist, and every
+    // attempt to open one failed. Showing nothing, plus the explanation
+    // in GetCaps(), is the honest answer.
     m_allEntries.clear();
-    // Simulate a realistic archive tree
-    struct Def {
-        const wchar_t* path; bool dir;
-        uint64_t sz; uint64_t csz; const wchar_t* meth;
-    } defs[] = {
-        {L"docs/",              true,       0,       0, L"Store"  },
-        {L"docs/readme.txt",   false,   4096,    1500, L"Deflate" },
-        {L"docs/license.txt",  false,   8192,    2800, L"Deflate" },
-        {L"docs/manual.pdf",   false, 524288,  420000, L"Deflate" },
-        {L"src/",               true,       0,       0, L"Store"  },
-        {L"src/main.cpp",      false,  32768,    9200, L"Deflate" },
-        {L"src/utils.cpp",     false,  16384,    5100, L"Deflate" },
-        {L"src/utils.h",       false,   4096,    1200, L"Deflate" },
-        {L"src/resource.rc",   false,   8192,    2100, L"Deflate" },
-        {L"src/stdafx.h",      false,   6144,    1800, L"Deflate" },
-        {L"bin/",               true,       0,       0, L"Store"  },
-        {L"bin/app.exe",       false,1048576,  620000, L"LZMA"   },
-        {L"bin/app.dll",       false, 262144,  180000, L"LZMA"   },
-        {L"bin/app.pdb",       false, 524288,  400000, L"LZMA"   },
-        {L"images/",            true,       0,       0, L"Store"  },
-        {L"images/icon.ico",   false,  16384,   15500, L"Store"  },
-        {L"images/banner.png", false, 102400,   98000, L"Store"  },
-        {L"images/splash.bmp", false, 307200,  290000, L"Deflate"},
-        {L"config.ini",        false,   1024,     480, L"Deflate" },
-        {L"changelog.txt",     false,  20480,    6200, L"Deflate" },
-        {L"install.bat",       false,   2048,     760, L"Deflate" },
-        {L"uninstall.bat",     false,   1536,     600, L"Deflate" },
-    };
-
-    SYSTEMTIME st; GetLocalTime(&st);
-    FILETIME ft; SystemTimeToFileTime(&st, &ft);
-
-    for (auto& d : defs) {
-        ArchiveEntry e;
-        e.fullPath          = d.path;
-        e.isDirectory       = d.dir;
-        e.uncompressedSize  = d.sz;
-        e.compressedSize    = d.csz;
-        e.compressionMethod = d.meth;
-        e.modifiedTime      = ft;
-        e.crc32             = d.dir ? 0 :
-            (uint32_t)(d.sz * 0x5A3C9F17ULL + 0xDEADBEEF);
-
-        // Extract name (last component)
-        std::wstring fp = d.path;
-        if (!fp.empty() && fp.back()==L'/') fp.pop_back();
-        size_t sl = fp.rfind(L'/');
-        e.name = (sl==std::wstring::npos) ? fp : fp.substr(sl+1);
-        m_allEntries.push_back(std::move(e));
-    }
 }
 
 // ── List ──────────────────────────────────────────────────
@@ -259,6 +199,26 @@ bool CStubArchiveEngine::Test(ProgressFn cb)
 
 // ── Metadata ─────────────────────────────────────────────
 std::wstring CStubArchiveEngine::GetFormatName() const { return m_formatName; }
+
+// The stub has no decoder behind it: it lists plausible sample entries so
+// the shell plumbing can be exercised, but it cannot produce one byte of
+// real data. Say so, loudly, instead of letting the shell "succeed" with
+// empty files.
+EngineCaps CStubArchiveEngine::GetCaps() const
+{
+    EngineCaps c;
+    c.engineName = m_formatName;
+    c.isStub     = true;
+    c.unavailableReason =
+        L"ArchiveFldr has no engine for " + m_formatName +
+        L" archives, so it cannot show what is inside this file.\n\n"
+        L"Engines are third-party DLLs placed under the ArchiveFldr "
+        L"\"thirdparty\" folder — see thirdparty\\README.md. Installing "
+        L"7-Zip's 7z." + std::wstring((sizeof(void*) == 8) ? L"64" : L"32") +
+        L".dll covers most container formats, including this one.";
+    return c;
+}
+
 uint64_t CStubArchiveEngine::GetFileCount() const {
     return std::count_if(m_allEntries.begin(),m_allEntries.end(),
         [](const ArchiveEntry& e){ return !e.isDirectory; });
@@ -284,21 +244,39 @@ uint64_t CStubArchiveEngine::GetPackedSize() const {
 std::shared_ptr<IArchiveEngine> CreateArchiveEngine(const std::wstring& path)
 {
     LPCWSTR ext = PathFindExtensionW(path.c_str());
-    if (!IsArchiveExtension(ext)) return nullptr;
+    const Formats::Format* f = Formats::Find(ext);
+    if (!f) return nullptr;
 
-    // .7z / .7zip → real 7-Zip engine (thirdparty\7z\7z.64.dll / 7z.32.dll).
-    // Open() returns false honestly (no fake/demo data) if the engine DLL
-    // is missing, unloadable, or the file isn't a valid 7z archive — the
-    // caller (ShellFolder/ContextMenu) is expected to handle that failure
-    // the same way it would any other unreadable archive.
-    if (_wcsicmp(ext, L".7z") == 0 || _wcsicmp(ext, L".7zip") == 0)
+    // Note that the engine is chosen even when its DLL is missing. Each one
+    // reports that honestly through GetCaps().unavailableReason — naming the
+    // DLL and every path it was looked for — which is far more use than
+    // quietly handing back a stub full of invented entries.
+    switch (f->engine)
+    {
+    case Formats::EngineKind::Codec:
+        // Brotli / LZ4 / LZ5 / Lizard / Zstandard: one stream, one file.
+        return std::make_shared<CCodecEngine>(f->codec);
+
+    case Formats::EngineKind::Unrar:
+        if (IsUnrarAvailable()) return std::make_shared<CUnrarEngine>();
+        // No unrar.dll — 7-Zip reads RAR too, so try that before giving up.
+        if (Is7zEngineAvailable()) return std::make_shared<C7zArchiveEngine>();
+        return std::make_shared<CUnrarEngine>();
+
+    case Formats::EngineKind::Wim:
+        // wimlib understands WIM properly: multiple images, split parts,
+        // reparse points. Fall back to 7z.dll, which also reads WIM, and
+        // only then to wimlib's own "here is what I looked for" report.
+        if (IsWimLibAvailable())  return std::make_shared<CWimEngine>();
+        if (Is7zEngineAvailable())return std::make_shared<C7zArchiveEngine>();
+        return std::make_shared<CWimEngine>();
+
+    case Formats::EngineKind::SevenZip:
+        // Everything 7z.dll can read: .7z, .zip, .tar, .iso, .cab, .gz,
+        // .xz, … The engine asks 7z.dll which handler fits rather than
+        // assuming the .7z one, so these all open properly.
         return std::make_shared<C7zArchiveEngine>();
-
-    // In production, dispatch remaining formats here:
-    // if zip format  → CZipEngine (minizip / zlibwapi)
-    // if rar format  → CRarEngine (UnRAR DLL)
-    // if iso format  → CIsoEngine (libisofs / custom)
-    // etc.
+    }
 
     return std::make_shared<CStubArchiveEngine>();
 }

@@ -33,11 +33,11 @@ public:
     // ── Static creator helpers ────────────────────────────
     static HRESULT CreateShellFolder      (REFIID, LPVOID*);
     static HRESULT CreateContextMenu      (REFIID, LPVOID*);
-    static HRESULT CreateIconOverlay      (REFIID, LPVOID*);
     static HRESULT CreateDropTarget       (REFIID, LPVOID*);
+#ifndef ARCHIVEFLDR_NO_VISTA_HANDLERS
     static HRESULT CreateThumbnailProvider(REFIID, LPVOID*);
     static HRESULT CreatePreviewHandler   (REFIID, LPVOID*);
-    static HRESULT CreatePropertySheet    (REFIID, LPVOID*);
+#endif // ARCHIVEFLDR_NO_VISTA_HANDLERS
 
 private:
     ~CClassFactory() { InterlockedDecrement(&g_cDllRefCount); }

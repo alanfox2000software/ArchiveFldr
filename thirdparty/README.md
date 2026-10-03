@@ -113,7 +113,7 @@ drop the DLL at any one of them and retry.
 |----|--------|-----------------|------------|--------|
 | `7z` | `thirdparty\7z\` | `7z.dll`, `7za.dll` | `.7z` `.zip` `.tar` `.wim` `.iso` `.cab` `.gz` `.xz` `.bz2` … | create + extract + test |
 | `Unrar` | `thirdparty\Unrar\` | `unrar64.dll`, `unrar.dll` | `.rar` `.r00` `.cbr` | extract + test |
-| `zstd` | `thirdparty\zstd\` | `libzstd.<bits>.dll` | `.zst` `.zstd` `.tzst`; ZSTD in 7z/ZIP | 7z/ZIP compress; extract + test |
+| `zstd` | `thirdparty\zstd\` | `libzstd.<bits>.dll` | `.zst` `.zstd` `.tzst`; ZSTD in 7z/ZIP | compress + extract + test |
 | `brotli` | `thirdparty\brotli\<bits>\` | common + dec + enc DLLs | `.br`; Brotli in 7z | compress + extract + test |
 | `lz4` | `thirdparty\lz4\` or `thirdparty\brunsli\` | `liblz4.<bits>.dll` | `.lz4` `.tlz4`; LZ4 in 7z | compress + extract + test |
 | `lz5` | `thirdparty\lz5\` or `thirdparty\brunsli\` | `liblz5.<bits>.dll` | `.lz5`; LZ5 in 7z | compress + extract + test |
@@ -134,9 +134,9 @@ archive formats: the file holds one compressed stream and no file names.
 ArchiveFldr shows exactly one entry, named by removing the suffix —
 `notes.txt.zst` → `notes.txt`, `backup.tlz4` → `backup.tar`. Only zstd
 records the original size in its header, so the other four show their size
-only after extraction. Brotli, LZ4 and LZ5 streams can also be created from
-one selected ordinary file; their encoders are additionally published to
-7z.dll for Brotli/LZ4/LZ5 methods inside 7z archives.
+only after extraction. Zstandard, Brotli, LZ4 and LZ5 streams can be created
+from one selected ordinary file; their encoders are additionally published
+to 7z.dll for those methods inside 7z archives (and ZSTD in ZIP).
 
 **LZ5 and Lizard** must export the *frame* API (`LZ5F_…` / `LizardF_…`).
 A build that exports only the raw block functions cannot read framed

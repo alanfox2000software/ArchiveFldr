@@ -503,8 +503,8 @@ EngineCaps CCodecEngine::GetCaps() const
         caps.isStub     = false;
         caps.canExtract = true;
         caps.canTest    = true;
-        // An opened stream cannot be modified in place. New Brotli/LZ4/LZ5
-        // streams are created separately by ArchiveWriter's Add dialog.
+        // An opened stream cannot be modified in place. New Zstandard,
+        // Brotli, LZ4 and LZ5 streams are created by ArchiveWriter's dialog.
         caps.canAdd = caps.canDelete = caps.canRename = false;
         return caps;
     }

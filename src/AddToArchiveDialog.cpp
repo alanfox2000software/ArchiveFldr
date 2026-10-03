@@ -284,7 +284,7 @@ INT_PTR CALLBACK DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
                     st->formats.push_back(f);
             if (st->rq->singleStreamAllowed)
                 for (const wchar_t* f : { L"xz", L"gzip", L"bzip2",
-                                           L"brotli", L"lz4", L"lz5" })
+                                           L"zstd", L"brotli", L"lz4", L"lz5" })
                     if (ArchiveWriter::FormatIsWritable(f))
                         st->formats.push_back(f);
             if (st->formats.empty() && !st->rq->format.empty())

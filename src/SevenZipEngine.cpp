@@ -119,6 +119,7 @@ struct NativeZstdApi
     size_t (__cdecl* compressStream)(void*, void*, void*) = nullptr;
     size_t (__cdecl* endStream)(void*, void*) = nullptr;
     size_t (__cdecl* freeCStream)(void*) = nullptr;
+    size_t (__cdecl* setPledgedSrcSize)(void*, unsigned long long) = nullptr;
     unsigned (__cdecl* isError)(size_t) = nullptr;
 };
 
@@ -145,6 +146,7 @@ void InitNativeZstdOnce()
     BIND_ZSTD(compressStream, "ZSTD_compressStream");
     BIND_ZSTD(endStream, "ZSTD_endStream");
     BIND_ZSTD(freeCStream, "ZSTD_freeCStream");
+    BIND_ZSTD(setPledgedSrcSize, "ZSTD_CCtx_setPledgedSrcSize");
     BIND_ZSTD(isError, "ZSTD_isError");
 #undef BIND_ZSTD
 
@@ -383,8 +385,13 @@ public:
         try
         {
             const size_t init = g_nativeZstd.initCStream(stream, m_level);
-            hr = g_nativeZstd.isError(init) ? E_FAIL
-                : Encode(stream, inStream, outStream, inSize, progress);
+            if (g_nativeZstd.isError(init)) hr = E_FAIL;
+            else if (inSize && g_nativeZstd.setPledgedSrcSize &&
+                     g_nativeZstd.isError(
+                         g_nativeZstd.setPledgedSrcSize(stream, *inSize)))
+                hr = E_FAIL;
+            else
+                hr = Encode(stream, inStream, outStream, inSize, progress);
         }
         catch (const std::bad_alloc&) { hr = E_OUTOFMEMORY; }
         catch (...) { hr = E_FAIL; }
@@ -3255,6 +3262,7 @@ namespace ArchiveWriter {
 
 NativeCodecKind NativeKindForFormat(const std::wstring& format)
 {
+    if (_wcsicmp(format.c_str(), L"zstd") == 0)   return NativeCodecKind::Zstd;
     if (_wcsicmp(format.c_str(), L"brotli") == 0) return NativeCodecKind::Brotli;
     if (_wcsicmp(format.c_str(), L"lz4") == 0) return NativeCodecKind::Lz4;
     if (_wcsicmp(format.c_str(), L"lz5") == 0) return NativeCodecKind::Lz5;
@@ -3264,6 +3272,7 @@ NativeCodecKind NativeKindForFormat(const std::wstring& format)
 bool NativeFormatWritable(const std::wstring& format)
 {
     const NativeCodecKind kind = NativeKindForFormat(format);
+    if (kind == NativeCodecKind::Zstd) return NativeZstdEncoderAvailable();
     if (kind == NativeCodecKind::Brotli) return NativeBrotliEncoderAvailable();
     if (kind == NativeCodecKind::Lz4 || kind == NativeCodecKind::Lz5)
         return GetNativeLzFrame(kind, true) != nullptr;
@@ -3398,11 +3407,14 @@ bool CompressNativeStream(const std::wstring& outPath,
     ComPtr<ISequentialOutStream7z> out;
     out.Attach(static_cast<ISequentialOutStream7z*>(outRaw));
 
-    auto* coderRaw = new(std::nothrow) CNativeAuxCoder(kind, true);
+    ICompressCoder7z* coderRaw = kind == NativeCodecKind::Zstd
+        ? static_cast<ICompressCoder7z*>(new(std::nothrow) CNativeZstdEncoder())
+        : static_cast<ICompressCoder7z*>(
+            new(std::nothrow) CNativeAuxCoder(kind, true));
     if (!coderRaw)
     { outRaw->CloseFile(); ::DeleteFileW(tempPath.c_str()); return fail(L"Out of memory."); }
     ComPtr<ICompressCoder7z> coder;
-    coder.Attach(static_cast<ICompressCoder7z*>(coderRaw));
+    coder.Attach(coderRaw);
 
     ComPtr<ICompressSetCoderProperties7z> props;
     if (coder->QueryInterface(IID_ICompressSetCoderProperties7z,
@@ -3456,6 +3468,7 @@ bool CompressNativeStream(const std::wstring& outPath,
 bool IsAvailable()
 {
     return (Get7zCreateObjectFunc() != nullptr && !WritableHandlers().empty()) ||
+           NativeZstdEncoderAvailable() ||
            NativeBrotliEncoderAvailable() ||
            GetNativeLzFrame(NativeCodecKind::Lz4, true) ||
            GetNativeLzFrame(NativeCodecKind::Lz5, true);
@@ -3466,7 +3479,7 @@ std::vector<std::wstring> WritableFormats()
     std::vector<std::wstring> out;
     for (const auto& h : WritableHandlers())
         if (!h.name.empty()) out.push_back(h.name);
-    for (const wchar_t* format : { L"brotli", L"lz4", L"lz5" })
+    for (const wchar_t* format : { L"zstd", L"brotli", L"lz4", L"lz5" })
         if (NativeFormatWritable(format) &&
             std::none_of(out.begin(), out.end(), [&](const std::wstring& f) {
                 return _wcsicmp(f.c_str(), format) == 0; }))
@@ -3497,6 +3510,7 @@ std::vector<std::wstring> MethodsFor(const std::wstring& format)
     if (_wcsicmp(format.c_str(), L"xz") == 0)    return { L"LZMA2" };
     if (_wcsicmp(format.c_str(), L"gzip") == 0)  return { L"Deflate" };
     if (_wcsicmp(format.c_str(), L"bzip2") == 0) return { L"BZip2" };
+    if (_wcsicmp(format.c_str(), L"zstd") == 0)  return { L"Zstandard" };
     if (_wcsicmp(format.c_str(), L"brotli") == 0)return { L"Brotli" };
     if (_wcsicmp(format.c_str(), L"lz4") == 0)   return { L"LZ4" };
     if (_wcsicmp(format.c_str(), L"lz5") == 0)   return { L"LZ5" };
@@ -3554,8 +3568,11 @@ static const ExtAlias kExtAliases[] =
     { L"tbz",   L"bzip2" },
     { L"tbz2",  L"bzip2" },
     { L"dz",    L"gzip"  },
-    { L"zsd",   L"zstd"  },
     // native single-stream writers
+    { L"zst",   L"zstd"  },
+    { L"zstd",  L"zstd"  },
+    { L"zsd",   L"zstd"  },
+    { L"tzst",  L"zstd"  },
     { L"br",    L"brotli"},
     { L"lz4",   L"lz4"   },
     { L"lz5",   L"lz5"   },
@@ -3582,10 +3599,11 @@ std::wstring FormatForTargetName(const std::wstring& fileName)
 
 std::wstring DefaultExtensionFor(const std::wstring& format)
 {
+    if (_wcsicmp(format.c_str(), L"zstd") == 0) return L".zst";
+    if (_wcsicmp(format.c_str(), L"brotli") == 0) return L".br";
     for (const auto& h : WritableHandlers())
         if (_wcsicmp(h.name.c_str(), format.c_str()) == 0 && !h.exts.empty())
             return L"." + h.exts.front();
-    if (_wcsicmp(format.c_str(), L"brotli") == 0) return L".br";
     return L"." + format;
 }
 

@@ -36,9 +36,10 @@ thirdparty\zstd\
 ```
 
 No separate 7-Zip ZSTD plug-in is required when the matching raw library is
-present. The adapter encodes and decodes both the 7-Zip ZS method
-(`04F71101`) and official ZSTD coder ID (`04015D`), including
-concatenated/skippable frames. ZIP creation uses standardized ZSTD method 93.
+present. The adapter creates and extracts standalone Zstandard streams and
+encodes/decodes both the 7-Zip ZS method (`04F71101`) and official ZSTD coder
+ID (`04015D`), including concatenated/skippable frames. ZIP creation uses
+standardized ZSTD method 93.
 
 The same adapter publishes Brotli (`04F71102`), LZ4 (`04F71104`) and LZ5
 (`04F71105`) encoders and decoders from these raw runtime libraries:

@@ -2073,17 +2073,17 @@ bool Compress(const std::wstring& outPath,
 
     if (FAILED(hr))
     {
-        DeleteFileW(tempPath.c_str());
+        ::DeleteFileW(tempPath.c_str());
         if (hr == E_ABORT) return fail(L"Cancelled.");
         wchar_t buf[64]; swprintf_s(buf, L"0x%08X", (unsigned)hr);
         return fail(L"Compression failed (" + std::wstring(buf) + L").");
     }
 
-    DeleteFileW(outPath.c_str());
+    ::DeleteFileW(outPath.c_str());
     if (!MoveFileW(tempPath.c_str(), outPath.c_str()))
     {
         const DWORD err = GetLastError();
-        DeleteFileW(tempPath.c_str());
+        ::DeleteFileW(tempPath.c_str());
         wchar_t buf[64]; swprintf_s(buf, L"%u", err);
         return fail(L"The archive was built but could not be moved into place "
                     L"(error " + std::wstring(buf) + L").");
@@ -2175,7 +2175,7 @@ bool C7zArchiveEngine::AddItems(const std::vector<ArchiveWriter::Item>& items,
     if (!outStream) return fail(L"Out of memory.");
     if (!outStream->CreateOutputFile(tempPath))
     {
-        const DWORD e = GetLastError();
+        const DWORD e = ::GetLastError();
         outStream->Release();
         return fail(L"Could not create \"" + tempPath + L"\" (error " +
                     std::to_wstring(e) + L").");
@@ -2201,7 +2201,7 @@ bool C7zArchiveEngine::AddItems(const std::vector<ArchiveWriter::Item>& items,
 
     if (FAILED(hr))
     {
-        DeleteFileW(tempPath.c_str());
+        ::DeleteFileW(tempPath.c_str());
         if (hr == E_ABORT) return fail(L"Cancelled.");
         wchar_t buf[64]; swprintf_s(buf, L"0x%08X", (unsigned)hr);
         return fail(L"Updating the archive failed (" + std::wstring(buf) +
@@ -2223,8 +2223,8 @@ bool C7zArchiveEngine::AddItems(const std::vector<ArchiveWriter::Item>& items,
         if (!MoveFileExW(tempPath.c_str(), reopenPath.c_str(),
                          MOVEFILE_REPLACE_EXISTING))
         {
-            const DWORD e = GetLastError();
-            DeleteFileW(tempPath.c_str());
+            const DWORD e = ::GetLastError();
+            ::DeleteFileW(tempPath.c_str());
             m_password = password;
             Open(reopenPath);                       // put the original back up
             return fail(L"The updated archive was built but could not "
@@ -2240,11 +2240,11 @@ bool C7zArchiveEngine::AddItems(const std::vector<ArchiveWriter::Item>& items,
     }
     else
     {
-        DeleteFileW(finalPath.c_str());
+        ::DeleteFileW(finalPath.c_str());
         if (!MoveFileW(tempPath.c_str(), finalPath.c_str()))
         {
-            const DWORD e = GetLastError();
-            DeleteFileW(tempPath.c_str());
+            const DWORD e = ::GetLastError();
+            ::DeleteFileW(tempPath.c_str());
             return fail(L"The updated archive was built but could not be "
                         L"moved to \"" + finalPath + L"\" (error " +
                         std::to_wstring(e) + L").");

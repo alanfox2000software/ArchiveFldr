@@ -20,10 +20,10 @@
 // so these numbers are part of the file format and must not be
 // renumbered casually.
 //
-// 101 was IDD_PAGE_SYSTEM (file type associations) and 102 was
-// IDD_PAGE_ARCHIVEFLDR (Explorer context menu integration). Both
-// features were removed; the ids are retired, never reused.
+// 101 was IDD_PAGE_SYSTEM (file type associations). That page remains
+// retired; 102 is the restored Explorer context-menu integration page.
 #define IDD_OPTIONS                 100
+#define IDD_PAGE_ARCHIVEFLDR        102
 #define IDD_PAGE_FOLDERS            103
 #define IDD_PAGE_SETTINGS           104
 #define IDD_PAGE_LANGUAGE           105
@@ -66,12 +66,16 @@
 // the ids are retired, never reused — each is a key in every
 // Lang\<x>.txt on disk.
 
-// ── ArchiveFldr page (removed) ────────────────────────────
-// 1020–1026 were the controls of the Explorer context menu integration
-// page (IDC_CHK_INTEGRATE, IDC_CHK_CASCADED, IDC_CHK_MENUICONS,
-// IDC_LBL_CTXITEMS, IDC_LIST_CTXITEMS, IDC_CHK_INTEGRATE_64,
-// IDC_CHK_INTEGRATE_32). The feature was removed; the ids are retired,
-// never reused — each is a key in every Lang\<x>.txt on disk.
+// ── ArchiveFldr page ──────────────────────────────────────
+// IDC_CHK_INTEGRATE is the master runtime switch. The two indented
+// checkboxes control the actual 32- and 64-bit handler registration.
+#define IDC_CHK_INTEGRATE           1020
+#define IDC_CHK_CASCADED            1021
+#define IDC_CHK_MENUICONS           1022
+#define IDC_LBL_CTXITEMS            1023
+#define IDC_LIST_CTXITEMS           1024
+#define IDC_CHK_INTEGRATE_64        1025
+#define IDC_CHK_INTEGRATE_32        1026
 
 // ── Folders page ──────────────────────────────────────────
 #define IDC_GRP_WORKFOLDER          1030
@@ -81,9 +85,9 @@
 #define IDC_BTN_WORKDIR             1034
 
 // ── Settings page ─────────────────────────────────────────
-// Install and Uninstall are both per bitness, and each acts on the
-// whole shell extension: browsing archives as folders, the context
-// menu inside an opened archive, thumbnails, preview, Default apps.
+// Install and Uninstall are both per bitness and act on the base shell
+// extension. Explorer context-menu integration is controlled separately
+// on the ArchiveFldr page.
 //
 // 1042 and 1043 were a single "Install" and a single "Uninstall"
 // button covering both bitnesses. They are retired rather than reused:

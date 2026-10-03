@@ -1,8 +1,8 @@
 // SettingsDialog.h
 // ─────────────────────────────────────────────────────────────────────────
 // The Options window, laid out after 7-Zip's File Manager > Tools >
-// Options: a tab strip with Folders, Settings and Language,
-// and OK / Cancel / Apply along the bottom.
+// Options: a tab strip with ArchiveFldr, Folders, Settings and
+// Language, and OK / Cancel / Apply along the bottom.
 //
 // Every page is a child dialog created from a template in resource.rc and
 // parked inside the tab control's display rectangle. Captions come from
@@ -34,10 +34,42 @@ public:
     virtual void  Retranslate()         = 0;
 };
 
-// The "System" page (file type associations) and the "ArchiveFldr" page
-// (Explorer context menu integration) are gone: both features were
-// removed. The context menu on items inside an opened archive is part
-// of the namespace extension and needs no page.
+// The "System" page (file type associations) was removed. Its settings
+// remain registry-backed, but this dialog no longer exposes that page.
+
+// ── ArchiveFldr: the shell context menu ──────────────────
+class CPageArchiveFldr : public ISettingsPage
+{
+public:
+    HWND Create(HWND) override;  void Show(bool) override;
+    void Load() override;        void Save() override;
+    void Place(const RECT&) override;
+    bool Dirty() const override { return m_dirty; }
+    void ClearDirty() override  { m_dirty = false; }
+    UINT DialogId() const override { return IDD_PAGE_ARCHIVEFLDR; }
+    const wchar_t* Title() const override { return L"ArchiveFldr"; }
+    HWND GetHwnd() const override { return m_hwnd; }
+    void Retranslate() override;
+
+    // Apply only the context-menu registration for each bitness whose
+    // checkbox changed. Preferences are saved before this is called.
+    void ApplyIntegration();
+
+    // Re-read the per-bitness integration switches after Install or
+    // Uninstall changes the registration state.
+    void ReloadIntegration();
+
+private:
+    static INT_PTR CALLBACK DlgProc(HWND, UINT, WPARAM, LPARAM);
+    void SyncEnabled();
+    void FillItems();
+
+    HWND m_hwnd = nullptr;
+    HWND m_list = nullptr;
+    bool m_dirty = false;
+    bool m_was32 = false;
+    bool m_was64 = false;
+};
 
 // ── Folders: working folder ──────────────────────────────
 class CPageFolders : public ISettingsPage
@@ -65,10 +97,9 @@ private:
 // ── Settings: install / uninstall the shell extension ────
 //
 // Four buttons: install and uninstall, once per bitness. Each acts on
-// the whole extension — browsing archives as folders, the context
-// menu inside an opened archive, thumbnails, preview, Default apps.
-// The Explorer right-click menu on archive files is gone; nothing
-// here installs or uninstalls one.
+// the base extension — browsing archives as folders, thumbnails,
+// preview and Default apps. Explorer context-menu integration is
+// controlled independently on the ArchiveFldr page.
 class CPageInstall : public ISettingsPage
 {
 public:
@@ -84,8 +115,8 @@ public:
 
 private:
     static INT_PTR CALLBACK DlgProc(HWND, UINT, WPARAM, LPARAM);
-    // One bitness, the one x64 names, and the whole extension both
-    // ways: install registers everything, uninstall removes it all.
+    // One bitness, the one x64 names, and only the base extension.
+    // Context-menu registration follows the ArchiveFldr page.
     void Run(bool install, bool x64);
     void RefreshState();
 
@@ -148,13 +179,18 @@ private:
 public:
     void EnableApply(bool en);
 
+    // Keep the ArchiveFldr page in sync after the Settings page installs
+    // or removes one bitness of the base extension.
+    void OnInstallChanged();
+
 private:
     HWND m_hDlg   = nullptr;
     HWND m_hTab   = nullptr;
     int  m_cur    = 0;
 
     std::vector<std::unique_ptr<ISettingsPage>> m_pages;
-    // Owned by m_pages; kept by hand because Retranslate asks it which
-    // language the user has highlighted.
+    // Owned by m_pages; kept by hand for cross-page coordination.
     CPageLanguage*    m_langPage    = nullptr;
+    CPageArchiveFldr* m_ctxPage     = nullptr;
+    CPageInstall*     m_installPage = nullptr;
 };

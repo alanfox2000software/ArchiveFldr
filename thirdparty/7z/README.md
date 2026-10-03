@@ -36,8 +36,29 @@ thirdparty\zstd\
 ```
 
 No separate 7-Zip ZSTD plug-in is required when the matching raw library is
-present. The adapter supports both the 7-Zip ZS method (`04F71101`) and the
-official ZSTD coder ID (`04015D`), including concatenated/skippable frames.
+present. The adapter encodes and decodes both the 7-Zip ZS method
+(`04F71101`) and official ZSTD coder ID (`04015D`), including
+concatenated/skippable frames. ZIP creation uses standardized ZSTD method 93.
+
+The same adapter publishes Brotli (`04F71102`), LZ4 (`04F71104`) and LZ5
+(`04F71105`) encoders and decoders from these raw runtime libraries:
+
+```
+thirdparty\brotli\32\libbrotlicommon.dll
+thirdparty\brotli\32\libbrotlidec.dll
+thirdparty\brotli\32\libbrotlienc.dll
+thirdparty\brotli\64\libbrotlicommon.dll
+thirdparty\brotli\64\libbrotlidec.dll
+thirdparty\brotli\64\libbrotlienc.dll
+thirdparty\brunsli\liblz4.32.dll
+thirdparty\brunsli\liblz4.64.dll
+thirdparty\brunsli\liblz5.32.dll
+thirdparty\brunsli\liblz5.64.dll
+```
+
+Only the matching process bitness is loaded. Dedicated `thirdparty\lz4` and
+`thirdparty\lz5` folders remain accepted; `thirdparty\brunsli` is their
+shared fallback location.
 
 ArchiveFldr additionally discovers genuine 7-Zip codec plug-ins from a
 `Codecs` folder beside the selected engine. This remains useful for other
@@ -100,6 +121,11 @@ ArchiveFldr supports browsing, password prompts (including encrypted file
 names), Details columns, opening an item, Extract/Extract-here, Test, copying
 or dragging items out, and creating/updating formats for which the selected
 `7z.dll` publishes a writer.
+
+The Add to Archive dialog can split a completed archive at an exact byte
+count. Parts are named `archive.ext.001`, `.002`, and so on; opening `.001`
+uses the extension before that suffix to select the underlying handler and
+supplies sibling volumes through 7-Zip's volume callback.
 
 Per-item Delete and Rename are not currently offered. Capabilities are read
 from the loaded handler, so commands that its particular `7z.dll` cannot

@@ -146,6 +146,8 @@
 #define IDC_LBL_ADD_ENCMETHOD       1918
 #define IDC_CMB_ADD_ENCMETHOD       1919
 #define IDC_CHK_ADD_ENCNAMES        1920
+#define IDC_LBL_ADD_VOLUME          1921
+#define IDC_EDIT_ADD_VOLUME         1922
 
 // Next default values for new objects
 //
@@ -153,7 +155,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        2000
 #define _APS_NEXT_COMMAND_VALUE         32771
-#define _APS_NEXT_CONTROL_VALUE         1921
+#define _APS_NEXT_CONTROL_VALUE         1923
 #define _APS_NEXT_SYMED_VALUE           110
 #endif
 #endif

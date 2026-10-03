@@ -145,6 +145,7 @@
 1917 = "Show password"
 1918 = "Encryption method:"
 1920 = "Encrypt file names (7z)"
+1921 = "Split to volumes, bytes:"
 
 ; Caption when the number of files is known; %s is the count.
 2060 = "Add to Archive — %s file(s)"

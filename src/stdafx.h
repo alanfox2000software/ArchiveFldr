@@ -167,6 +167,7 @@ using ComPtr = Microsoft::WRL::ComPtr<T>;
 #include <unordered_set>
 #include <set>
 #include <list>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -174,6 +175,7 @@ using ComPtr = Microsoft::WRL::ComPtr<T>;
 #include <thread>
 #include <future>
 #include <functional>
+#include <type_traits>
 #include <algorithm>
 #include <numeric>
 #include <optional>
@@ -183,6 +185,7 @@ using ComPtr = Microsoft::WRL::ComPtr<T>;
 #include <sstream>
 #include <chrono>
 #include <cassert>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>      // swprintf_s, used by LOG_IF_FAILED below
 #include <cstring>

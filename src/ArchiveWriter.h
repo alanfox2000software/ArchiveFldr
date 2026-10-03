@@ -38,6 +38,7 @@ struct Options
     std::wstring password;               // empty = no encryption
     std::wstring encMethod;              // zip only: "ZipCrypto", "AES256"
     int          threads      = 0;       // 0 = let 7-Zip decide
+    uint64_t     volumeBytes  = 0;       // 0 = one file; otherwise .001, .002, ...
 };
 
 // ── Choice lists for the Add to Archive dialog ───────────

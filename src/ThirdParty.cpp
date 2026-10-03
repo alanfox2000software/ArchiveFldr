@@ -145,15 +145,25 @@ std::vector<std::wstring> ProbePaths(const Component& c)
     // "64" folder is a stronger match than a bare one further out.
     const std::wstring id   = c.id;
     const std::wstring bits = BitnessTag();
-    const std::wstring subDirs[] = {
+    std::vector<std::wstring> subDirs = {
         L"\\thirdparty\\" + id + L"\\" + bits + L"\\",
         L"\\thirdparty\\" + id + L"\\",
+    };
+    // Some distributions keep the related LZ4/LZ5 runtimes in one
+    // thirdparty\\brunsli folder. Accept that shared layout as a fallback
+    // while retaining the dedicated component folders as the first choice.
+    if (_wcsicmp(c.id, L"lz4") == 0 || _wcsicmp(c.id, L"lz5") == 0)
+    {
+        subDirs.push_back(L"\\thirdparty\\brunsli\\" + bits + L"\\");
+        subDirs.push_back(L"\\thirdparty\\brunsli\\");
+    }
+    subDirs.insert(subDirs.end(), {
         L"\\thirdparty\\" + bits + L"\\",
         L"\\thirdparty\\",
         L"\\" + id + L"\\" + bits + L"\\",
         L"\\" + id + L"\\",
         L"\\",
-    };
+    });
 
     // Each platform now builds into its own folder (<Config>\x64,
     // <Config>\x32), so a single shared thirdparty\ tree sits one

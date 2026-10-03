@@ -36,6 +36,9 @@ more engines are added.
    ├─ lz5\
    │  ├─ liblz5.64.dll
    │  └─ liblz5.32.dll
+   ├─ brunsli\                    ← accepted shared fallback for LZ4/LZ5
+   │  ├─ liblz4.64.dll / liblz4.32.dll
+   │  └─ liblz5.64.dll / liblz5.32.dll
    ├─ zstd\
    │  ├─ libzstd.64.dll
    │  ├─ libzstd.32.dll
@@ -108,12 +111,12 @@ drop the DLL at any one of them and retry.
 
 | id | folder | primary file(s) | extensions | status |
 |----|--------|-----------------|------------|--------|
-| `7z` | `thirdparty\7z\` | `7z.dll`, `7za.dll` | `.7z` `.zip` `.tar` `.wim` `.iso` `.cab` `.gz` `.xz` `.bz2` … | extract + test |
+| `7z` | `thirdparty\7z\` | `7z.dll`, `7za.dll` | `.7z` `.zip` `.tar` `.wim` `.iso` `.cab` `.gz` `.xz` `.bz2` … | create + extract + test |
 | `Unrar` | `thirdparty\Unrar\` | `unrar64.dll`, `unrar.dll` | `.rar` `.r00` `.cbr` | extract + test |
-| `zstd` | `thirdparty\zstd\` | `libzstd.<bits>.dll` | `.zst` `.zstd` `.tzst` | extract + test |
-| `brotli` | `thirdparty\brotli\<bits>\` | `libbrotlidec.dll` (+ common, enc) | `.br` | extract + test |
-| `lz4` | `thirdparty\lz4\` | `liblz4.<bits>.dll` | `.lz4` `.tlz4` | extract + test |
-| `lz5` | `thirdparty\lz5\` | `liblz5.<bits>.dll` | `.lz5` | extract + test |
+| `zstd` | `thirdparty\zstd\` | `libzstd.<bits>.dll` | `.zst` `.zstd` `.tzst`; ZSTD in 7z/ZIP | 7z/ZIP compress; extract + test |
+| `brotli` | `thirdparty\brotli\<bits>\` | common + dec + enc DLLs | `.br`; Brotli in 7z | compress + extract + test |
+| `lz4` | `thirdparty\lz4\` or `thirdparty\brunsli\` | `liblz4.<bits>.dll` | `.lz4` `.tlz4`; LZ4 in 7z | compress + extract + test |
+| `lz5` | `thirdparty\lz5\` or `thirdparty\brunsli\` | `liblz5.<bits>.dll` | `.lz5`; LZ5 in 7z | compress + extract + test |
 | `lizard` | `thirdparty\lizard\` | `liblizard.<bits>.dll` | `.liz` | extract + test |
 | `WimLib` | `thirdparty\WimLib\` | `libwim-15.<bits>.dll` | `.wim` `.swm` `.esd` | extract + verify |
 
@@ -129,9 +132,11 @@ keeps working.
 **Brotli, LZ4, LZ5, Lizard, Zstandard** are single-stream codecs, not
 archive formats: the file holds one compressed stream and no file names.
 ArchiveFldr shows exactly one entry, named by removing the suffix —
-`notes.txt.zst` → `notes.txt`, `backup.tzst` → `backup.tar`. Only zstd
+`notes.txt.zst` → `notes.txt`, `backup.tlz4` → `backup.tar`. Only zstd
 records the original size in its header, so the other four show their size
-only after extraction. Writing is deliberately not offered.
+only after extraction. Brotli, LZ4 and LZ5 streams can also be created from
+one selected ordinary file; their encoders are additionally published to
+7z.dll for Brotli/LZ4/LZ5 methods inside 7z archives.
 
 **LZ5 and Lizard** must export the *frame* API (`LZ5F_…` / `LizardF_…`).
 A build that exports only the raw block functions cannot read framed
@@ -149,9 +154,10 @@ ArchiveFldr asks `7z.dll` which formats it supports (`GetNumberOfFormats` /
 exactly what your copy of 7-Zip reads — including formats added after
 this was written. When a file's extension does not match its contents,
 every other handler is tried as well. ArchiveFldr publishes the raw library
-under `thirdparty\zstd\` as a 7-Zip ZSTD decoder for method `04F71101` (and
-`04015D`), so the same `libzstd.<bits>.dll` supports both `.zst` files and
-ZSTD-compressed 7z archives. It also loads additional 7-Zip codec plug-ins
+under `thirdparty\zstd\` as 7-Zip ZSTD encoder/decoder methods `04F71101`
+and `04015D`, so the same `libzstd.<bits>.dll` supports both `.zst` files,
+ZSTD-compressed 7z archives, and ZIP method 93. It also publishes the native
+Brotli/LZ4/LZ5 frame libraries as 7z coders, and loads additional plug-ins
 from the `Codecs` folder adjacent to the selected engine.
 
 **WimLib** needs version **1.13.0 or newer** — in other words the

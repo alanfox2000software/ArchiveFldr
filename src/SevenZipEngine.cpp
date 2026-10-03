@@ -114,6 +114,11 @@ struct NativeZstdApi
     size_t (__cdecl* initDStream)(void*) = nullptr;
     size_t (__cdecl* decompressStream)(void*, void*, void*) = nullptr;
     size_t (__cdecl* freeDStream)(void*) = nullptr;
+    void*  (__cdecl* createCStream)() = nullptr;
+    size_t (__cdecl* initCStream)(void*, int) = nullptr;
+    size_t (__cdecl* compressStream)(void*, void*, void*) = nullptr;
+    size_t (__cdecl* endStream)(void*, void*) = nullptr;
+    size_t (__cdecl* freeCStream)(void*) = nullptr;
     unsigned (__cdecl* isError)(size_t) = nullptr;
 };
 
@@ -135,6 +140,11 @@ void InitNativeZstdOnce()
     BIND_ZSTD(initDStream, "ZSTD_initDStream");
     BIND_ZSTD(decompressStream, "ZSTD_decompressStream");
     BIND_ZSTD(freeDStream, "ZSTD_freeDStream");
+    BIND_ZSTD(createCStream, "ZSTD_createCStream");
+    BIND_ZSTD(initCStream, "ZSTD_initCStream");
+    BIND_ZSTD(compressStream, "ZSTD_compressStream");
+    BIND_ZSTD(endStream, "ZSTD_endStream");
+    BIND_ZSTD(freeCStream, "ZSTD_freeCStream");
     BIND_ZSTD(isError, "ZSTD_isError");
 #undef BIND_ZSTD
 
@@ -152,6 +162,14 @@ bool NativeZstdAvailable()
 {
     std::call_once(g_nativeZstdOnce, InitNativeZstdOnce);
     return g_nativeZstd.createDStream != nullptr;
+}
+
+bool NativeZstdEncoderAvailable()
+{
+    std::call_once(g_nativeZstdOnce, InitNativeZstdOnce);
+    return g_nativeZstd.createCStream && g_nativeZstd.initCStream &&
+           g_nativeZstd.compressStream && g_nativeZstd.endStream &&
+           g_nativeZstd.freeCStream && g_nativeZstd.isError;
 }
 
 class CNativeZstdDecoder final :
@@ -267,13 +285,16 @@ private:
                     if (g_nativeZstd.isError(reset)) return E_FAIL;
                 }
 
-                if (zout.pos)
+                size_t writtenTotal = 0;
+                while (writtenTotal < zout.pos)
                 {
                     UINT32 written = 0;
-                    HRESULT writeHr = outStream->Write(
-                        output.data(), (UINT32)zout.pos, &written);
+                    const UINT32 amount = (UINT32)(zout.pos - writtenTotal);
+                    const HRESULT writeHr = outStream->Write(
+                        output.data() + writtenTotal, amount, &written);
                     if (FAILED(writeHr)) return writeHr;
-                    if (written != zout.pos) return E_FAIL;
+                    if (!written || written > amount) return E_FAIL;
+                    writtenTotal += written;
                     totalOut += written;
                 }
 
@@ -297,6 +318,624 @@ private:
     LONG m_ref = 1;
 };
 
+class CNativeZstdEncoder final :
+    public ICompressCoder7z,
+    public ICompressSetCoderProperties7z,
+    public ICompressWriteCoderProperties7z
+{
+public:
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override
+    {
+        if (!ppv) return E_POINTER;
+        if (IsEqualIID(riid, IID_IUnknown) ||
+            IsEqualIID(riid, IID_ICompressCoder7z))
+            *ppv = static_cast<ICompressCoder7z*>(this);
+        else if (IsEqualIID(riid, IID_ICompressSetCoderProperties7z))
+            *ppv = static_cast<ICompressSetCoderProperties7z*>(this);
+        else if (IsEqualIID(riid, IID_ICompressWriteCoderProperties7z))
+            *ppv = static_cast<ICompressWriteCoderProperties7z*>(this);
+        else { *ppv = nullptr; return E_NOINTERFACE; }
+        AddRef();
+        return S_OK;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override
+        { return (ULONG)InterlockedIncrement(&m_ref); }
+    STDMETHODIMP_(ULONG) Release() override
+    {
+        ULONG n = (ULONG)InterlockedDecrement(&m_ref);
+        if (!n) delete this;
+        return n;
+    }
+
+    STDMETHODIMP SetCoderProperties(const PROPID* ids,
+                                     const PROPVARIANT* values,
+                                     UINT32 count) override
+    {
+        if ((!ids || !values) && count) return E_INVALIDARG;
+        for (UINT32 i = 0; i < count; ++i)
+            if (ids[i] == 15 /* NCoderPropID::kLevel */ &&
+                values[i].vt == VT_UI4)
+                m_level = (int)values[i].ulVal;
+        if (m_level < 1) m_level = 1;
+        if (m_level > 22) m_level = 22;
+        return S_OK;
+    }
+
+    STDMETHODIMP WriteCoderProperties(ISequentialOutStream7z* out) override
+    {
+        if (!out) return E_POINTER;
+        const BYTE props[5] = { 1, 5, (BYTE)m_level, 0, 0 };
+        UINT32 written = 0;
+        const HRESULT hr = out->Write(props, ARRAYSIZE(props), &written);
+        return FAILED(hr) ? hr : (written == ARRAYSIZE(props) ? S_OK : E_FAIL);
+    }
+
+    STDMETHODIMP Code(ISequentialInStream7z* inStream,
+                       ISequentialOutStream7z* outStream,
+                       const UINT64* inSize, const UINT64*,
+                       ICompressProgressInfo7z* progress) override
+    {
+        if (!inStream || !outStream || !NativeZstdEncoderAvailable())
+            return E_INVALIDARG;
+        void* stream = g_nativeZstd.createCStream();
+        if (!stream) return E_OUTOFMEMORY;
+        HRESULT hr = S_OK;
+        try
+        {
+            const size_t init = g_nativeZstd.initCStream(stream, m_level);
+            hr = g_nativeZstd.isError(init) ? E_FAIL
+                : Encode(stream, inStream, outStream, inSize, progress);
+        }
+        catch (const std::bad_alloc&) { hr = E_OUTOFMEMORY; }
+        catch (...) { hr = E_FAIL; }
+        g_nativeZstd.freeCStream(stream);
+        return hr;
+    }
+
+private:
+    static HRESULT WriteOutput(ISequentialOutStream7z* out,
+                               const BYTE* data, size_t size)
+    {
+        size_t done = 0;
+        while (done < size)
+        {
+            UINT32 written = 0;
+            const UINT32 want = (UINT32)std::min<size_t>(
+                size - done, std::numeric_limits<UINT32>::max());
+            const HRESULT hr = out->Write(data + done, want, &written);
+            if (FAILED(hr)) return hr;
+            if (!written || written > want) return E_FAIL;
+            done += written;
+        }
+        return S_OK;
+    }
+
+    static HRESULT Encode(void* stream,
+                          ISequentialInStream7z* in,
+                          ISequentialOutStream7z* out,
+                          const UINT64* inSize,
+                          ICompressProgressInfo7z* progress)
+    {
+        constexpr size_t kBufferSize = 256 * 1024;
+        std::vector<BYTE> input(kBufferSize), output(kBufferSize);
+        UINT64 totalIn = 0, totalOut = 0;
+        for (;;)
+        {
+            UINT32 want = (UINT32)input.size();
+            if (inSize && *inSize - totalIn < want)
+                want = (UINT32)(*inSize - totalIn);
+            UINT32 got = 0;
+            const HRESULT readHr = want ? in->Read(input.data(), want, &got) : S_FALSE;
+            if (FAILED(readHr)) return readHr;
+            if (!got) break;
+            totalIn += got;
+
+            NativeZstdInBuffer zin{ input.data(), got, 0 };
+            while (zin.pos < zin.size)
+            {
+                NativeZstdOutBuffer zout{ output.data(), output.size(), 0 };
+                const size_t rc = g_nativeZstd.compressStream(stream, &zout, &zin);
+                if (g_nativeZstd.isError(rc)) return E_FAIL;
+                const HRESULT writeHr = WriteOutput(out, output.data(), zout.pos);
+                if (FAILED(writeHr)) return writeHr;
+                totalOut += zout.pos;
+            }
+            if (progress)
+            {
+                const HRESULT progressHr = progress->SetRatioInfo(&totalIn, &totalOut);
+                if (FAILED(progressHr)) return progressHr;
+            }
+        }
+
+        for (;;)
+        {
+            NativeZstdOutBuffer zout{ output.data(), output.size(), 0 };
+            const size_t remaining = g_nativeZstd.endStream(stream, &zout);
+            if (g_nativeZstd.isError(remaining)) return E_FAIL;
+            const HRESULT writeHr = WriteOutput(out, output.data(), zout.pos);
+            if (FAILED(writeHr)) return writeHr;
+            totalOut += zout.pos;
+            if (remaining == 0) break;
+        }
+        return (!inSize || totalIn == *inSize) ? S_OK : S_FALSE;
+    }
+
+    LONG m_ref = 1;
+    int  m_level = 5;
+};
+
+enum class NativeCodecKind { None, Zstd, Brotli, Lz4, Lz5 };
+
+struct NativeBrotliApi
+{
+    HMODULE decoderModule = nullptr, encoderModule = nullptr;
+    std::wstring path;
+    void* (__cdecl* createDecoder)(void*, void*, void*) = nullptr;
+    void  (__cdecl* destroyDecoder)(void*) = nullptr;
+    int   (__cdecl* decodeStream)(void*, size_t*, const BYTE**,
+                                  size_t*, BYTE**, size_t*) = nullptr;
+    void* (__cdecl* createEncoder)(void*, void*, void*) = nullptr;
+    void  (__cdecl* destroyEncoder)(void*) = nullptr;
+    int   (__cdecl* setEncoderParameter)(void*, int, UINT32) = nullptr;
+    int   (__cdecl* encodeStream)(void*, int, size_t*, const BYTE**,
+                                  size_t*, BYTE**, size_t*) = nullptr;
+    int   (__cdecl* encoderFinished)(void*) = nullptr;
+};
+
+NativeBrotliApi g_nativeBrotli;
+std::once_flag g_nativeBrotliOnce;
+
+void InitNativeBrotliOnce()
+{
+    g_nativeBrotli.decoderModule =
+        ThirdParty::LoadComponent(L"brotli", &g_nativeBrotli.path);
+    if (!g_nativeBrotli.decoderModule) return;
+    g_nativeBrotli.encoderModule = GetModuleHandleW(L"libbrotlienc.dll");
+    if (!g_nativeBrotli.encoderModule)
+        g_nativeBrotli.encoderModule = GetModuleHandleW(L"brotlienc.dll");
+
+#define BIND_BROTLI(dst, module, name) \
+    g_nativeBrotli.dst = module ? reinterpret_cast<decltype(g_nativeBrotli.dst)>( \
+        GetProcAddress(module, name)) : nullptr
+    BIND_BROTLI(createDecoder, g_nativeBrotli.decoderModule,
+                "BrotliDecoderCreateInstance");
+    BIND_BROTLI(destroyDecoder, g_nativeBrotli.decoderModule,
+                "BrotliDecoderDestroyInstance");
+    BIND_BROTLI(decodeStream, g_nativeBrotli.decoderModule,
+                "BrotliDecoderDecompressStream");
+    BIND_BROTLI(createEncoder, g_nativeBrotli.encoderModule,
+                "BrotliEncoderCreateInstance");
+    BIND_BROTLI(destroyEncoder, g_nativeBrotli.encoderModule,
+                "BrotliEncoderDestroyInstance");
+    BIND_BROTLI(setEncoderParameter, g_nativeBrotli.encoderModule,
+                "BrotliEncoderSetParameter");
+    BIND_BROTLI(encodeStream, g_nativeBrotli.encoderModule,
+                "BrotliEncoderCompressStream");
+    BIND_BROTLI(encoderFinished, g_nativeBrotli.encoderModule,
+                "BrotliEncoderIsFinished");
+#undef BIND_BROTLI
+}
+
+bool NativeBrotliDecoderAvailable()
+{
+    std::call_once(g_nativeBrotliOnce, InitNativeBrotliOnce);
+    return g_nativeBrotli.createDecoder && g_nativeBrotli.destroyDecoder &&
+           g_nativeBrotli.decodeStream;
+}
+
+bool NativeBrotliEncoderAvailable()
+{
+    std::call_once(g_nativeBrotliOnce, InitNativeBrotliOnce);
+    return g_nativeBrotli.createEncoder && g_nativeBrotli.destroyEncoder &&
+           g_nativeBrotli.encodeStream && g_nativeBrotli.encoderFinished;
+}
+
+struct NativeLzFrameApi
+{
+    HMODULE module = nullptr;
+    std::wstring path;
+    size_t (__cdecl* createDctx)(void**, unsigned) = nullptr;
+    size_t (__cdecl* freeDctx)(void*) = nullptr;
+    size_t (__cdecl* decompress)(void*, void*, size_t*,
+                                 const void*, size_t*, const void*) = nullptr;
+    size_t (__cdecl* createCctx)(void**, unsigned) = nullptr;
+    size_t (__cdecl* freeCctx)(void*) = nullptr;
+    size_t (__cdecl* compressBegin)(void*, void*, size_t, const void*) = nullptr;
+    size_t (__cdecl* compressUpdate)(void*, void*, size_t,
+                                     const void*, size_t, const void*) = nullptr;
+    size_t (__cdecl* compressEnd)(void*, void*, size_t, const void*) = nullptr;
+    size_t (__cdecl* compressBound)(size_t, const void*) = nullptr;
+    unsigned (__cdecl* isError)(size_t) = nullptr;
+};
+
+NativeLzFrameApi g_nativeLz4, g_nativeLz5;
+std::once_flag g_nativeLz4Once, g_nativeLz5Once;
+
+void InitNativeLzFrame(NativeLzFrameApi& api, const wchar_t* component,
+                       const char* prefix)
+{
+    api.module = ThirdParty::LoadComponent(component, &api.path);
+    if (!api.module) return;
+    auto bind = [&](auto& dst, const char* suffix)
+    {
+        const std::string name = std::string(prefix) + suffix;
+        dst = reinterpret_cast<std::decay_t<decltype(dst)>>(
+            GetProcAddress(api.module, name.c_str()));
+    };
+    bind(api.createDctx, "createDecompressionContext");
+    bind(api.freeDctx, "freeDecompressionContext");
+    bind(api.decompress, "decompress");
+    bind(api.createCctx, "createCompressionContext");
+    bind(api.freeCctx, "freeCompressionContext");
+    bind(api.compressBegin, "compressBegin");
+    bind(api.compressUpdate, "compressUpdate");
+    bind(api.compressEnd, "compressEnd");
+    bind(api.compressBound, "compressBound");
+    bind(api.isError, "isError");
+}
+
+NativeLzFrameApi* GetNativeLzFrame(NativeCodecKind kind, bool encoder)
+{
+    NativeLzFrameApi* api = nullptr;
+    if (kind == NativeCodecKind::Lz4)
+    {
+        std::call_once(g_nativeLz4Once, [] {
+            InitNativeLzFrame(g_nativeLz4, L"lz4", "LZ4F_"); });
+        api = &g_nativeLz4;
+    }
+    else if (kind == NativeCodecKind::Lz5)
+    {
+        std::call_once(g_nativeLz5Once, [] {
+            InitNativeLzFrame(g_nativeLz5, L"lz5", "LZ5F_"); });
+        api = &g_nativeLz5;
+    }
+    if (!api || !api->isError) return nullptr;
+    if (encoder)
+        return api->createCctx && api->freeCctx && api->compressBegin &&
+               api->compressUpdate && api->compressEnd && api->compressBound
+            ? api : nullptr;
+    return api->createDctx && api->freeDctx && api->decompress ? api : nullptr;
+}
+
+class CNativeAuxCoder final :
+    public ICompressCoder7z,
+    public ICompressSetCoderProperties7z,
+    public ICompressSetDecoderProperties2_7z,
+    public ICompressWriteCoderProperties7z
+{
+public:
+    CNativeAuxCoder(NativeCodecKind kind, bool encode)
+        : m_kind(kind), m_encode(encode) {}
+
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override
+    {
+        if (!ppv) return E_POINTER;
+        if (IsEqualIID(riid, IID_IUnknown) ||
+            IsEqualIID(riid, IID_ICompressCoder7z))
+            *ppv = static_cast<ICompressCoder7z*>(this);
+        else if (IsEqualIID(riid, IID_ICompressSetCoderProperties7z))
+            *ppv = static_cast<ICompressSetCoderProperties7z*>(this);
+        else if (IsEqualIID(riid, IID_ICompressSetDecoderProperties2_7z))
+            *ppv = static_cast<ICompressSetDecoderProperties2_7z*>(this);
+        else if (IsEqualIID(riid, IID_ICompressWriteCoderProperties7z))
+            *ppv = static_cast<ICompressWriteCoderProperties7z*>(this);
+        else { *ppv = nullptr; return E_NOINTERFACE; }
+        AddRef();
+        return S_OK;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override
+        { return (ULONG)InterlockedIncrement(&m_ref); }
+    STDMETHODIMP_(ULONG) Release() override
+    {
+        ULONG n = (ULONG)InterlockedDecrement(&m_ref);
+        if (!n) delete this;
+        return n;
+    }
+
+    STDMETHODIMP SetCoderProperties(const PROPID* ids,
+                                     const PROPVARIANT* values,
+                                     UINT32 count) override
+    {
+        if ((!ids || !values) && count) return E_INVALIDARG;
+        for (UINT32 i = 0; i < count; ++i)
+            if (ids[i] == 15 && values[i].vt == VT_UI4)
+                m_level = (int)values[i].ulVal;
+        if (m_level < 1) m_level = 1;
+        if (m_level > (m_kind == NativeCodecKind::Brotli ? 11 : 16))
+            m_level = m_kind == NativeCodecKind::Brotli ? 11 : 16;
+        return S_OK;
+    }
+
+    STDMETHODIMP SetDecoderProperties2(const BYTE* data, UINT32 size) override
+    {
+        if (size && !data) return E_INVALIDARG;
+        return (size == 0 || size == 1 || size == 3 || size == 5)
+            ? S_OK : E_NOTIMPL;
+    }
+
+    STDMETHODIMP WriteCoderProperties(ISequentialOutStream7z* out) override
+    {
+        if (!out) return E_POINTER;
+        BYTE props[5] = { 1, 0, (BYTE)m_level, 0, 0 };
+        UINT32 size = 5;
+        if (m_kind == NativeCodecKind::Brotli)
+        {
+            props[1] = 1;
+            size = 3;
+        }
+        else if (m_kind == NativeCodecKind::Lz4) props[1] = 10;
+        else if (m_kind == NativeCodecKind::Lz5) props[1] = 5;
+        UINT32 written = 0;
+        const HRESULT hr = out->Write(props, size, &written);
+        return FAILED(hr) ? hr : (written == size ? S_OK : E_FAIL);
+    }
+
+    STDMETHODIMP Code(ISequentialInStream7z* in,
+                       ISequentialOutStream7z* out,
+                       const UINT64* inSize, const UINT64* outSize,
+                       ICompressProgressInfo7z* progress) override
+    {
+        if (!in || !out) return E_INVALIDARG;
+        try
+        {
+            if (m_kind == NativeCodecKind::Brotli)
+                return m_encode ? EncodeBrotli(in, out, inSize, progress)
+                                : DecodeBrotli(in, out, inSize, outSize, progress);
+            return m_encode ? EncodeLz(in, out, inSize, progress)
+                            : DecodeLz(in, out, inSize, outSize, progress);
+        }
+        catch (const std::bad_alloc&) { return E_OUTOFMEMORY; }
+        catch (...) { return E_FAIL; }
+    }
+
+private:
+    static HRESULT WriteAll(ISequentialOutStream7z* out,
+                            const BYTE* data, size_t size)
+    {
+        size_t done = 0;
+        while (done < size)
+        {
+            UINT32 written = 0;
+            const UINT32 want = (UINT32)std::min<size_t>(
+                size - done, std::numeric_limits<UINT32>::max());
+            const HRESULT hr = out->Write(data + done, want, &written);
+            if (FAILED(hr)) return hr;
+            if (!written || written > want) return E_FAIL;
+            done += written;
+        }
+        return S_OK;
+    }
+
+    static UINT32 ReadAmount(const UINT64* size, UINT64 done, size_t capacity)
+    {
+        if (!size) return (UINT32)capacity;
+        if (done >= *size) return 0;
+        return (UINT32)std::min<UINT64>(*size - done, capacity);
+    }
+
+    HRESULT DecodeBrotli(ISequentialInStream7z* in,
+                          ISequentialOutStream7z* out,
+                          const UINT64* inSize, const UINT64* outSize,
+                          ICompressProgressInfo7z* progress)
+    {
+        if (!NativeBrotliDecoderAvailable()) return E_NOTIMPL;
+        void* state = g_nativeBrotli.createDecoder(nullptr, nullptr, nullptr);
+        if (!state) return E_OUTOFMEMORY;
+        constexpr size_t kBuf = 256 * 1024;
+        std::vector<BYTE> input(kBuf), output(kBuf);
+        UINT64 totalIn = 0, totalOut = 0;
+        bool finished = false;
+        HRESULT result = S_OK;
+
+        while (!finished)
+        {
+            const UINT32 want = ReadAmount(inSize, totalIn, input.size());
+            UINT32 got = 0;
+            const HRESULT readHr = want ? in->Read(input.data(), want, &got) : S_FALSE;
+            if (FAILED(readHr)) { result = readHr; break; }
+            if (!got) { result = S_FALSE; break; }
+            totalIn += got;
+            size_t availableIn = got;
+            const BYTE* nextIn = input.data();
+            while (availableIn || !finished)
+            {
+                size_t availableOut = output.size();
+                if (outSize)
+                    availableOut = (size_t)std::min<UINT64>(
+                        availableOut, totalOut < *outSize ? *outSize - totalOut : 0);
+                BYTE* nextOut = output.data();
+                size_t producedTotal = 0;
+                const int rc = g_nativeBrotli.decodeStream(
+                    state, &availableIn, &nextIn,
+                    &availableOut, &nextOut, &producedTotal);
+                const size_t produced = (size_t)(nextOut - output.data());
+                const HRESULT writeHr = WriteAll(out, output.data(), produced);
+                if (FAILED(writeHr)) { result = writeHr; finished = true; break; }
+                totalOut += produced;
+                if (rc == 1) { finished = true; break; }
+                if (rc == 0) { result = S_FALSE; finished = true; break; }
+                if (rc == 2) break;       // needs more input
+                if (rc == 3 && !produced) { result = S_FALSE; finished = true; break; }
+            }
+            if (progress && SUCCEEDED(result))
+            {
+                const HRESULT hr = progress->SetRatioInfo(&totalIn, &totalOut);
+                if (FAILED(hr)) { result = hr; break; }
+            }
+        }
+        g_nativeBrotli.destroyDecoder(state);
+        if (FAILED(result) || result == S_FALSE) return result;
+        if ((inSize && totalIn != *inSize) || (outSize && totalOut != *outSize))
+            return S_FALSE;
+        return S_OK;
+    }
+
+    HRESULT EncodeBrotli(ISequentialInStream7z* in,
+                          ISequentialOutStream7z* out,
+                          const UINT64* inSize,
+                          ICompressProgressInfo7z* progress)
+    {
+        if (!NativeBrotliEncoderAvailable()) return E_NOTIMPL;
+        void* state = g_nativeBrotli.createEncoder(nullptr, nullptr, nullptr);
+        if (!state) return E_OUTOFMEMORY;
+        if (g_nativeBrotli.setEncoderParameter)
+            g_nativeBrotli.setEncoderParameter(state, 1 /* quality */, (UINT32)m_level);
+        constexpr size_t kBuf = 256 * 1024;
+        std::vector<BYTE> input(kBuf), output(kBuf);
+        UINT64 totalIn = 0, totalOut = 0;
+        HRESULT result = S_OK;
+        bool eof = false;
+        while (!g_nativeBrotli.encoderFinished(state))
+        {
+            UINT32 got = 0;
+            if (!eof)
+            {
+                const UINT32 want = ReadAmount(inSize, totalIn, input.size());
+                const HRESULT readHr = want ? in->Read(input.data(), want, &got) : S_FALSE;
+                if (FAILED(readHr)) { result = readHr; break; }
+                eof = got == 0;
+                totalIn += got;
+            }
+            size_t availableIn = got;
+            const BYTE* nextIn = input.data();
+            do
+            {
+                size_t availableOut = output.size();
+                BYTE* nextOut = output.data();
+                size_t producedTotal = 0;
+                const int op = eof ? 2 /* FINISH */ : 0 /* PROCESS */;
+                if (!g_nativeBrotli.encodeStream(state, op,
+                        &availableIn, &nextIn, &availableOut, &nextOut,
+                        &producedTotal))
+                { result = E_FAIL; break; }
+                const size_t produced = (size_t)(nextOut - output.data());
+                const HRESULT writeHr = WriteAll(out, output.data(), produced);
+                if (FAILED(writeHr)) { result = writeHr; break; }
+                totalOut += produced;
+                if (!produced && !availableIn && eof &&
+                    !g_nativeBrotli.encoderFinished(state))
+                { result = E_FAIL; break; }
+            } while (availableIn || (eof && !g_nativeBrotli.encoderFinished(state)));
+            if (FAILED(result)) break;
+            if (progress)
+            {
+                const HRESULT hr = progress->SetRatioInfo(&totalIn, &totalOut);
+                if (FAILED(hr)) { result = hr; break; }
+            }
+        }
+        g_nativeBrotli.destroyEncoder(state);
+        if (FAILED(result)) return result;
+        return (!inSize || totalIn == *inSize) ? S_OK : S_FALSE;
+    }
+
+    HRESULT DecodeLz(ISequentialInStream7z* in,
+                      ISequentialOutStream7z* out,
+                      const UINT64* inSize, const UINT64* outSize,
+                      ICompressProgressInfo7z* progress)
+    {
+        NativeLzFrameApi* api = GetNativeLzFrame(m_kind, false);
+        if (!api) return E_NOTIMPL;
+        void* ctx = nullptr;
+        size_t rc = api->createDctx(&ctx, 100);
+        if (api->isError(rc) || !ctx) return E_FAIL;
+        constexpr size_t kBuf = 256 * 1024;
+        std::vector<BYTE> input(kBuf), output(kBuf);
+        UINT64 totalIn = 0, totalOut = 0;
+        size_t hint = 1;
+        HRESULT result = S_OK;
+        for (;;)
+        {
+            const UINT32 want = ReadAmount(inSize, totalIn, input.size());
+            UINT32 got = 0;
+            const HRESULT readHr = want ? in->Read(input.data(), want, &got) : S_FALSE;
+            if (FAILED(readHr)) { result = readHr; break; }
+            if (!got) break;
+            totalIn += got;
+            size_t pos = 0;
+            while (pos < got)
+            {
+                size_t srcSize = got - pos;
+                size_t dstSize = output.size();
+                if (outSize)
+                    dstSize = (size_t)std::min<UINT64>(
+                        dstSize, totalOut < *outSize ? *outSize - totalOut : 0);
+                hint = api->decompress(ctx, output.data(), &dstSize,
+                                       input.data() + pos, &srcSize, nullptr);
+                if (api->isError(hint) || (!srcSize && !dstSize))
+                { result = S_FALSE; break; }
+                pos += srcSize;
+                const HRESULT writeHr = WriteAll(out, output.data(), dstSize);
+                if (FAILED(writeHr)) { result = writeHr; break; }
+                totalOut += dstSize;
+            }
+            if (FAILED(result) || result == S_FALSE) break;
+            if (progress)
+            {
+                const HRESULT hr = progress->SetRatioInfo(&totalIn, &totalOut);
+                if (FAILED(hr)) { result = hr; break; }
+            }
+        }
+        api->freeDctx(ctx);
+        if (FAILED(result) || result == S_FALSE) return result;
+        if (hint != 0 || (inSize && totalIn != *inSize) ||
+            (outSize && totalOut != *outSize)) return S_FALSE;
+        return S_OK;
+    }
+
+    HRESULT EncodeLz(ISequentialInStream7z* in,
+                      ISequentialOutStream7z* out,
+                      const UINT64* inSize,
+                      ICompressProgressInfo7z* progress)
+    {
+        NativeLzFrameApi* api = GetNativeLzFrame(m_kind, true);
+        if (!api) return E_NOTIMPL;
+        void* ctx = nullptr;
+        size_t rc = api->createCctx(&ctx, 100);
+        if (api->isError(rc) || !ctx) return E_FAIL;
+        constexpr size_t kBuf = 256 * 1024;
+        const size_t bound = api->compressBound(kBuf, nullptr);
+        std::vector<BYTE> input(kBuf), output(std::max(kBuf * 2, bound));
+        UINT64 totalIn = 0, totalOut = 0;
+        HRESULT result = S_OK;
+
+        size_t made = api->compressBegin(ctx, output.data(), output.size(), nullptr);
+        if (api->isError(made)) result = E_FAIL;
+        else { result = WriteAll(out, output.data(), made); totalOut += made; }
+        while (SUCCEEDED(result))
+        {
+            const UINT32 want = ReadAmount(inSize, totalIn, input.size());
+            UINT32 got = 0;
+            const HRESULT readHr = want ? in->Read(input.data(), want, &got) : S_FALSE;
+            if (FAILED(readHr)) { result = readHr; break; }
+            if (!got) break;
+            totalIn += got;
+            made = api->compressUpdate(ctx, output.data(), output.size(),
+                                       input.data(), got, nullptr);
+            if (api->isError(made)) { result = E_FAIL; break; }
+            result = WriteAll(out, output.data(), made);
+            totalOut += made;
+            if (progress && SUCCEEDED(result))
+            {
+                const HRESULT hr = progress->SetRatioInfo(&totalIn, &totalOut);
+                if (FAILED(hr)) { result = hr; break; }
+            }
+        }
+        if (SUCCEEDED(result))
+        {
+            made = api->compressEnd(ctx, output.data(), output.size(), nullptr);
+            result = api->isError(made) ? E_FAIL : WriteAll(out, output.data(), made);
+        }
+        api->freeCctx(ctx);
+        if (FAILED(result)) return result;
+        return (!inSize || totalIn == *inSize) ? S_OK : S_FALSE;
+    }
+
+    LONG m_ref = 1;
+    NativeCodecKind m_kind;
+    bool m_encode;
+    int m_level = 5;
+};
+
 struct ExternalCodecMethod
 {
     size_t moduleIndex = 0;
@@ -306,7 +945,7 @@ struct ExternalCodecMethod
     GUID   encoder{};
     bool   hasDecoder = false;
     bool   hasEncoder = false;
-    bool   nativeZstd = false;
+    NativeCodecKind nativeKind = NativeCodecKind::None;
 };
 
 class CExternalCodecsInfo final : public ICompressCodecsInfo7z
@@ -331,23 +970,37 @@ public:
         return n;
     }
 
-    bool AddNativeZstd()
+    bool AddNativeCodecs()
     {
-        if (!NativeZstdAvailable()) return false;
-
-        // 04F71101 is the long-standing 7-Zip ZS external method. 04015D is
-        // the newer official ZSTD coder ID and costs nothing to expose for
-        // older 7z.dll builds that do not yet provide it internally.
-        const UINT64 ids[] = { 0x04F71101ULL, 0x04015DULL };
-        for (UINT64 id : ids)
+        auto add = [&](UINT64 id, NativeCodecKind kind,
+                       bool decoder, bool encoder)
         {
+            if (!decoder && !encoder) return;
             ExternalCodecMethod method;
             method.methodId = id;
-            method.hasDecoder = true;
-            method.nativeZstd = true;
+            method.hasDecoder = decoder;
+            method.hasEncoder = encoder;
+            method.nativeKind = kind;
             m_methods.push_back(method);
-        }
-        return true;
+        };
+
+        // ZSTD has both the long-standing 7-Zip ZS ID and the newer official
+        // coder ID. The other IDs are from 7-Zip's external-method registry.
+        // Publish the official ID first so ZIP's method-name lookup chooses
+        // its standardized ZSTD method; keep the ZS ID for older 7z archives.
+        add(0x04015DULL, NativeCodecKind::Zstd,
+            NativeZstdAvailable(), NativeZstdEncoderAvailable());
+        add(0x04F71101ULL, NativeCodecKind::Zstd,
+            NativeZstdAvailable(), NativeZstdEncoderAvailable());
+        add(0x04F71102ULL, NativeCodecKind::Brotli,
+            NativeBrotliDecoderAvailable(), NativeBrotliEncoderAvailable());
+        add(0x04F71104ULL, NativeCodecKind::Lz4,
+            GetNativeLzFrame(NativeCodecKind::Lz4, false) != nullptr,
+            GetNativeLzFrame(NativeCodecKind::Lz4, true) != nullptr);
+        add(0x04F71105ULL, NativeCodecKind::Lz5,
+            GetNativeLzFrame(NativeCodecKind::Lz5, false) != nullptr,
+            GetNativeLzFrame(NativeCodecKind::Lz5, true) != nullptr);
+        return !m_methods.empty();
     }
 
     STDMETHODIMP GetNumMethods(UINT32* numMethods) override
@@ -365,7 +1018,7 @@ public:
         if (index >= m_methods.size()) return E_INVALIDARG;
         const ExternalCodecMethod& method = m_methods[index];
 
-        if (method.nativeZstd)
+        if (method.nativeKind != NativeCodecKind::None)
         {
             if (propID == k7zMethodID)
             {
@@ -375,17 +1028,22 @@ public:
             }
             if (propID == k7zMethodName)
             {
-                value->bstrVal = SysAllocString(L"ZSTD");
+                const wchar_t* name = method.nativeKind == NativeCodecKind::Zstd ? L"ZSTD" :
+                    method.nativeKind == NativeCodecKind::Brotli ? L"BROTLI" :
+                    method.nativeKind == NativeCodecKind::Lz4 ? L"LZ4" : L"LZ5";
+                value->bstrVal = SysAllocString(name);
                 if (!value->bstrVal) return E_OUTOFMEMORY;
                 value->vt = VT_BSTR;
                 return S_OK;
             }
-            if (propID == k7zMethodDecoder)
+            if ((propID == k7zMethodDecoder && method.hasDecoder) ||
+                (propID == k7zMethodEncoder && method.hasEncoder))
             {
                 GUID clsid{};
                 clsid.Data1 = 0x23170F69;
                 clsid.Data2 = 0x40C1;
-                clsid.Data3 = 0x2790; // k_7zip_GUID_Data3_Decoder
+                clsid.Data3 = propID == k7zMethodDecoder
+                    ? 0x2790 : 0x2791; // decoder / encoder class
                 memcpy(clsid.Data4, &method.methodId, sizeof(clsid.Data4));
                 value->bstrVal = SysAllocStringByteLen(
                     reinterpret_cast<const char*>(&clsid), sizeof(clsid));
@@ -415,7 +1073,7 @@ public:
             return S_OK;
         }
 
-        if (method.nativeZstd) return S_OK;
+        if (method.nativeKind != NativeCodecKind::None) return S_OK;
 
         const ExternalCodecModule& module = m_modules[method.moduleIndex];
         return module.getProperty
@@ -567,12 +1225,18 @@ private:
         const bool assigned = encode ? method.hasEncoder : method.hasDecoder;
         if (!assigned) return S_OK;
 
-        if (method.nativeZstd)
+        if (method.nativeKind != NativeCodecKind::None)
         {
             if (!IsEqualIID(*iid, IID_ICompressCoder7z)) return E_NOINTERFACE;
-            auto* decoder = new(std::nothrow) CNativeZstdDecoder();
-            if (!decoder) return E_OUTOFMEMORY;
-            *coder = static_cast<ICompressCoder7z*>(decoder);
+            ICompressCoder7z* native = nullptr;
+            if (method.nativeKind == NativeCodecKind::Zstd)
+                native = encode
+                    ? static_cast<ICompressCoder7z*>(new(std::nothrow) CNativeZstdEncoder())
+                    : static_cast<ICompressCoder7z*>(new(std::nothrow) CNativeZstdDecoder());
+            else
+                native = new(std::nothrow) CNativeAuxCoder(method.nativeKind, encode);
+            if (!native) return E_OUTOFMEMORY;
+            *coder = native;
             return S_OK;
         }
 
@@ -607,9 +1271,9 @@ void InitExternalCodecsOnce()
 
     auto* codecs = new(std::nothrow) CExternalCodecsInfo();
     if (!codecs) return;
-    const bool nativeZstd = codecs->AddNativeZstd();
+    const bool nativeCodecs = codecs->AddNativeCodecs();
     const bool pluginCodecs = codecs->LoadFolder(folder);
-    if (!nativeZstd && !pluginCodecs)
+    if (!nativeCodecs && !pluginCodecs)
     {
         codecs->Release();
         return;
@@ -1013,6 +1677,7 @@ private:
 // CArchiveOpenCallback
 // ═════════════════════════════════════════════════════════
 class CArchiveOpenCallback final : public IArchiveOpenCallback7z,
+                                    public IArchiveOpenVolumeCallback7z,
                                     public ICryptoGetTextPassword7z
 {
 public:
@@ -1020,14 +1685,18 @@ public:
     // headers). `askedFlag`, when given, is set the moment it asks — that
     // is how the engine learns the open needed a password at all.
     explicit CArchiveOpenCallback(std::wstring password = std::wstring(),
-                                  bool* askedFlag = nullptr)
-        : m_password(std::move(password)), m_asked(askedFlag) {}
+                                  bool* askedFlag = nullptr,
+                                  std::wstring archivePath = std::wstring())
+        : m_password(std::move(password)), m_asked(askedFlag),
+          m_archivePath(std::move(archivePath)) {}
 
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override
     {
         if (!ppv) return E_POINTER;
         if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, IID_IArchiveOpenCallback7z))
             *ppv = static_cast<IArchiveOpenCallback7z*>(this);
+        else if (IsEqualIID(riid, IID_IArchiveOpenVolumeCallback7z))
+            *ppv = static_cast<IArchiveOpenVolumeCallback7z*>(this);
         else if (IsEqualIID(riid, IID_ICryptoGetTextPassword7z))
             *ppv = static_cast<ICryptoGetTextPassword7z*>(this);
         else { *ppv = nullptr; return E_NOINTERFACE; }
@@ -1045,6 +1714,38 @@ public:
     STDMETHODIMP SetTotal(const UINT64*, const UINT64*) override { return S_OK; }
     STDMETHODIMP SetCompleted(const UINT64*, const UINT64*) override { return S_OK; }
 
+    STDMETHODIMP GetProperty(PROPID propID, PROPVARIANT* value) override
+    {
+        if (!value) return E_POINTER;
+        PropVariantInit(value);
+        if (propID == k7zPidName && !m_archivePath.empty())
+        {
+            value->bstrVal = SysAllocString(PathFindFileNameW(m_archivePath.c_str()));
+            if (!value->bstrVal) return E_OUTOFMEMORY;
+            value->vt = VT_BSTR;
+        }
+        return S_OK;
+    }
+
+    STDMETHODIMP GetStream(const wchar_t* name, IInStream7z** stream) override
+    {
+        if (!stream) return E_POINTER;
+        *stream = nullptr;
+        if (!name || !*name || m_archivePath.empty()) return S_FALSE;
+        std::wstring folder = m_archivePath;
+        if (!PathRemoveFileSpecW(&folder[0])) folder.clear();
+        else folder.resize(wcslen(folder.c_str()));
+        if (!folder.empty() && folder.back() != L'\\') folder += L'\\';
+        // Volume names come from the archive handler. Keep lookup in the
+        // archive's own directory even if a malformed name contains a path.
+        const std::wstring candidate = folder + PathFindFileNameW(name);
+        auto* file = new(std::nothrow) CInFileStream();
+        if (!file) return E_OUTOFMEMORY;
+        if (!file->OpenFile(candidate)) { file->Release(); return S_FALSE; }
+        *stream = static_cast<IInStream7z*>(file);
+        return S_OK;
+    }
+
     STDMETHODIMP CryptoGetTextPassword(BSTR* password) override
     {
         if (m_asked) *m_asked = true;
@@ -1061,6 +1762,7 @@ private:
     LONG         m_ref = 1;
     std::wstring m_password;
     bool*        m_asked = nullptr;
+    std::wstring m_archivePath;
 };
 
 // ═════════════════════════════════════════════════════════
@@ -1469,7 +2171,19 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
     // a fresh stream, because a failed Open leaves the position anywhere.
     LPCWSTR ext = PathFindExtensionW(path.c_str());
 
-    std::vector<const Handler7z*> candidates = HandlersForExt(ext);
+    std::vector<const Handler7z*> candidates;
+    if (ext && _wcsicmp(ext, L".001") == 0)
+    {
+        // For our raw split volumes, prefer the handler named by the extension
+        // immediately before .001 (archive.7z.001, archive.zip.001, ...).
+        std::wstring base = path.substr(0, path.size() - 4);
+        candidates = HandlersForExt(PathFindExtensionW(base.c_str()));
+        const auto splitHandlers = HandlersForExt(ext);
+        for (const Handler7z* h : splitHandlers)
+            if (std::find(candidates.begin(), candidates.end(), h) == candidates.end())
+                candidates.push_back(h);
+    }
+    else candidates = HandlersForExt(ext);
     const size_t preferred = candidates.size();
     for (const auto& h : Handlers())
     {
@@ -1509,7 +2223,8 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
         // handler may subsequently claim the same bytes as an empty archive.
         bool askedThisHandler = false;
         ComPtr<IArchiveOpenCallback7z> openCb;
-        openCb.Attach(new CArchiveOpenCallback(m_password, &askedThisHandler));
+        openCb.Attach(new CArchiveOpenCallback(
+            m_password, &askedThisHandler, path));
 
         UINT64 maxCheckStartPosition = 1 << 20;   // tolerate SFX stubs etc.
         const HRESULT openHr = candidate->Open(
@@ -1962,12 +2677,20 @@ bool C7zArchiveEngine::ExtractIndices(const std::vector<UINT32>& indices,
                 L"\nExternal codec methods loaded: " + count;
             if (NativeZstdAvailable())
                 m_lastError += L"\nNative ZSTD library: " + g_nativeZstd.path;
+            if (NativeBrotliDecoderAvailable())
+                m_lastError += L"\nNative Brotli library: " + g_nativeBrotli.path;
+            if (GetNativeLzFrame(NativeCodecKind::Lz4, false))
+                m_lastError += L"\nNative LZ4 library: " + g_nativeLz4.path;
+            if (GetNativeLzFrame(NativeCodecKind::Lz5, false))
+                m_lastError += L"\nNative LZ5 library: " + g_nativeLz5.path;
             if (!g_externalCodecsFolder.empty())
                 m_lastError += L"\nCodecs folder: " + g_externalCodecsFolder;
-            else if (!NativeZstdAvailable())
+            else if (!NativeZstdAvailable() && !NativeBrotliDecoderAvailable() &&
+                     !GetNativeLzFrame(NativeCodecKind::Lz4, false) &&
+                     !GetNativeLzFrame(NativeCodecKind::Lz5, false))
                 m_lastError +=
-                    L"\nNo compatible raw ZSTD library or adjacent Codecs "
-                    L"folder was found.";
+                    L"\nNo compatible native ZSTD/Brotli/LZ4/LZ5 library "
+                    L"or adjacent Codecs folder was found.";
         }
         else
         {
@@ -2446,9 +3169,9 @@ private:
 // Shared by Compress (new archive) and C7zArchiveEngine::AddItems
 // (update): one place decides which property names each format gets,
 // because one unknown name fails the whole SetProperties call.
-void ApplyWriterProps(IOutArchive7z* outArc,
-                      const ArchiveWriter::Options& opt,
-                      const std::wstring& handlerName)
+HRESULT ApplyWriterProps(IOutArchive7z* outArc,
+                         const ArchiveWriter::Options& opt,
+                         const std::wstring& handlerName)
 {
     std::vector<std::wstring> names;
     std::vector<PROPVARIANT>  values;
@@ -2511,6 +3234,7 @@ void ApplyWriterProps(IOutArchive7z* outArc,
         addUInt(L"mt", (UINT32)opt.threads);
     }
 
+    HRESULT result = E_NOINTERFACE;
     Microsoft::WRL::ComPtr<ISetProperties7z> setProps;
     if (SUCCEEDED(outArc->QueryInterface(IID_ISetProperties7z,
                                          (void**)setProps.GetAddressOf())) && setProps)
@@ -2518,21 +3242,223 @@ void ApplyWriterProps(IOutArchive7z* outArc,
         std::vector<const wchar_t*> namePtrs;
         namePtrs.reserve(names.size());
         for (const auto& n : names) namePtrs.push_back(n.c_str());
-        // A rejected setting is not worth failing the archive over:
-        // the default would still produce a valid file.
-        setProps->SetProperties(namePtrs.data(), values.data(),
-                                (UINT32)namePtrs.size());
+        result = setProps->SetProperties(namePtrs.data(), values.data(),
+                                         (UINT32)namePtrs.size());
     }
     for (auto& pv : values) PropVariantClear(&pv);
+    return result;
 }
 
 } // anonymous namespace
 
 namespace ArchiveWriter {
 
+NativeCodecKind NativeKindForFormat(const std::wstring& format)
+{
+    if (_wcsicmp(format.c_str(), L"brotli") == 0) return NativeCodecKind::Brotli;
+    if (_wcsicmp(format.c_str(), L"lz4") == 0) return NativeCodecKind::Lz4;
+    if (_wcsicmp(format.c_str(), L"lz5") == 0) return NativeCodecKind::Lz5;
+    return NativeCodecKind::None;
+}
+
+bool NativeFormatWritable(const std::wstring& format)
+{
+    const NativeCodecKind kind = NativeKindForFormat(format);
+    if (kind == NativeCodecKind::Brotli) return NativeBrotliEncoderAvailable();
+    if (kind == NativeCodecKind::Lz4 || kind == NativeCodecKind::Lz5)
+        return GetNativeLzFrame(kind, true) != nullptr;
+    return false;
+}
+
+bool FinalizeCompressedOutput(const std::wstring& tempPath,
+                              const std::wstring& outPath,
+                              uint64_t volumeBytes,
+                              std::wstring* error)
+{
+    auto fail = [&](const std::wstring& msg)
+        { if (error) *error = msg; return false; };
+    if (!volumeBytes)
+    {
+        if (MoveFileExW(tempPath.c_str(), outPath.c_str(),
+                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            return true;
+        const DWORD code = GetLastError();
+        ::DeleteFileW(tempPath.c_str());
+        return fail(L"The archive was built but could not be moved into place (error " +
+                    std::to_wstring(code) + L").");
+    }
+
+    HANDLE in = CreateFileW(tempPath.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (in == INVALID_HANDLE_VALUE)
+    {
+        ::DeleteFileW(tempPath.c_str());
+        return fail(L"The completed archive could not be reopened for splitting.");
+    }
+
+    LARGE_INTEGER fileSize{};
+    if (!GetFileSizeEx(in, &fileSize) || fileSize.QuadPart <= 0)
+    { CloseHandle(in); ::DeleteFileW(tempPath.c_str());
+      return fail(L"The completed archive is empty and cannot be split."); }
+
+    std::vector<std::wstring> staged, finalPaths;
+    std::vector<BYTE> buffer(1024 * 1024);
+    bool ok = true;
+    uint64_t remaining = (uint64_t)fileSize.QuadPart;
+    for (UINT32 part = 1; ok && remaining; ++part)
+    {
+        wchar_t suffix[24] = {};
+        swprintf_s(suffix, L".%03u", part);
+        const std::wstring finalPath = outPath + suffix;
+        const std::wstring stagePath = tempPath + suffix;
+        HANDLE out = CreateFileW(stagePath.c_str(), GENERIC_WRITE, 0, nullptr,
+                                 CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (out == INVALID_HANDLE_VALUE) { ok = false; break; }
+        staged.push_back(stagePath);
+        finalPaths.push_back(finalPath);
+        uint64_t left = std::min<uint64_t>(volumeBytes, remaining);
+        while (left)
+        {
+            const DWORD want = (DWORD)std::min<uint64_t>(left, buffer.size());
+            DWORD got = 0;
+            if (!ReadFile(in, buffer.data(), want, &got, nullptr) || !got)
+            { ok = false; break; }
+            DWORD written = 0;
+            if (!WriteFile(out, buffer.data(), got, &written, nullptr) || written != got)
+            { ok = false; break; }
+            left -= got;
+            remaining -= got;
+        }
+        CloseHandle(out);
+    }
+    CloseHandle(in);
+    ::DeleteFileW(tempPath.c_str());
+    if (!ok)
+    {
+        for (const auto& p : staged) ::DeleteFileW(p.c_str());
+        return fail(L"The archive was built but could not be split into volumes.");
+    }
+
+    // Do not touch an older volume set until every new part has been written.
+    size_t installed = 0;
+    for (; installed < staged.size(); ++installed)
+        if (!MoveFileExW(staged[installed].c_str(), finalPaths[installed].c_str(),
+                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            break;
+    if (installed != staged.size())
+    {
+        for (size_t i = installed; i < staged.size(); ++i)
+            ::DeleteFileW(staged[i].c_str());
+        for (size_t i = 0; i < installed; ++i)
+            ::DeleteFileW(finalPaths[i].c_str());
+        return fail(L"The archive was split but its volumes could not be moved into place.");
+    }
+
+    // Remove stale tail parts left by an older, larger split archive.
+    for (UINT32 part = (UINT32)finalPaths.size() + 1; ; ++part)
+    {
+        wchar_t suffix[24] = {};
+        swprintf_s(suffix, L".%03u", part);
+        if (!::DeleteFileW((outPath + suffix).c_str())) break;
+    }
+    ::DeleteFileW(outPath.c_str());
+    return true;
+}
+
+bool CompressNativeStream(const std::wstring& outPath,
+                          const std::vector<Item>& items,
+                          const Options& opt,
+                          ProgressFn progress,
+                          std::wstring* error)
+{
+    auto fail = [&](const std::wstring& msg)
+        { if (error) *error = msg; return false; };
+    if (items.size() != 1 || items[0].isDir || items[0].diskPath.empty())
+        return fail(L"This format stores exactly one file stream. Select one file, not a folder.");
+
+    const NativeCodecKind kind = NativeKindForFormat(opt.format);
+    if (kind == NativeCodecKind::None || !NativeFormatWritable(opt.format))
+        return fail(L"The required native encoder DLL is unavailable.");
+
+    std::wstring tempPath = outPath + L".part";
+    for (int n = 2; PathFileExistsW(tempPath.c_str()) && n < 100; ++n)
+        tempPath = outPath + L".part" + std::to_wstring(n);
+
+    auto* inRaw = new(std::nothrow) CInFileStream();
+    if (!inRaw) return fail(L"Out of memory.");
+    if (!inRaw->OpenFile(items[0].diskPath))
+    { delete inRaw; return fail(L"The source file could not be opened."); }
+    ComPtr<ISequentialInStream7z> in;
+    in.Attach(inRaw);
+
+    auto* outRaw = new(std::nothrow) COutSeekFileStream();
+    if (!outRaw) return fail(L"Out of memory.");
+    if (!outRaw->CreateOutputFile(tempPath))
+    { outRaw->Release(); return fail(L"The output file could not be created."); }
+    ComPtr<ISequentialOutStream7z> out;
+    out.Attach(static_cast<ISequentialOutStream7z*>(outRaw));
+
+    auto* coderRaw = new(std::nothrow) CNativeAuxCoder(kind, true);
+    if (!coderRaw)
+    { outRaw->CloseFile(); ::DeleteFileW(tempPath.c_str()); return fail(L"Out of memory."); }
+    ComPtr<ICompressCoder7z> coder;
+    coder.Attach(static_cast<ICompressCoder7z*>(coderRaw));
+
+    ComPtr<ICompressSetCoderProperties7z> props;
+    if (coder->QueryInterface(IID_ICompressSetCoderProperties7z,
+                              (void**)props.GetAddressOf()) == S_OK && props)
+    {
+        const PROPID id = 15;
+        PROPVARIANT value; PropVariantInit(&value);
+        value.vt = VT_UI4; value.ulVal = (ULONG)opt.level;
+        props->SetCoderProperties(&id, &value, 1);
+    }
+
+    class CProgress final : public ICompressProgressInfo7z
+    {
+    public:
+        explicit CProgress(ProgressFn fn) : m_fn(std::move(fn)) {}
+        STDMETHODIMP QueryInterface(REFIID iid, void** ppv) override
+        {
+            if (!ppv) return E_POINTER;
+            if (IsEqualIID(iid, IID_IUnknown) ||
+                IsEqualIID(iid, IID_ICompressProgressInfo7z))
+                *ppv = static_cast<ICompressProgressInfo7z*>(this);
+            else { *ppv = nullptr; return E_NOINTERFACE; }
+            AddRef(); return S_OK;
+        }
+        STDMETHODIMP_(ULONG) AddRef() override
+            { return (ULONG)InterlockedIncrement(&m_ref); }
+        STDMETHODIMP_(ULONG) Release() override
+        { ULONG n=(ULONG)InterlockedDecrement(&m_ref); if(!n) delete this; return n; }
+        STDMETHODIMP SetRatioInfo(const UINT64*, const UINT64* outSize) override
+        { if (m_fn) m_fn(0, L""); (void)outSize; return S_OK; }
+    private:
+        LONG m_ref = 1; ProgressFn m_fn;
+    };
+
+    ComPtr<ICompressProgressInfo7z> progressObj;
+    if (progress) progressObj.Attach(new CProgress(progress));
+    const UINT64 size = items[0].size;
+    const HRESULT hr = coder->Code(in.Get(), out.Get(), &size, nullptr,
+                                   progressObj.Get());
+    outRaw->CloseFile();
+    out.Reset();
+    if (hr != S_OK)
+    {
+        ::DeleteFileW(tempPath.c_str());
+        wchar_t code[32] = {}; swprintf_s(code, L"0x%08X", (unsigned)hr);
+        return fail(L"Native compression failed (" + std::wstring(code) + L").");
+    }
+    return FinalizeCompressedOutput(tempPath, outPath, opt.volumeBytes, error);
+}
+
 bool IsAvailable()
 {
-    return Get7zCreateObjectFunc() != nullptr && !WritableHandlers().empty();
+    return (Get7zCreateObjectFunc() != nullptr && !WritableHandlers().empty()) ||
+           NativeBrotliEncoderAvailable() ||
+           GetNativeLzFrame(NativeCodecKind::Lz4, true) ||
+           GetNativeLzFrame(NativeCodecKind::Lz5, true);
 }
 
 std::vector<std::wstring> WritableFormats()
@@ -2540,11 +3466,17 @@ std::vector<std::wstring> WritableFormats()
     std::vector<std::wstring> out;
     for (const auto& h : WritableHandlers())
         if (!h.name.empty()) out.push_back(h.name);
+    for (const wchar_t* format : { L"brotli", L"lz4", L"lz5" })
+        if (NativeFormatWritable(format) &&
+            std::none_of(out.begin(), out.end(), [&](const std::wstring& f) {
+                return _wcsicmp(f.c_str(), format) == 0; }))
+            out.emplace_back(format);
     return out;
 }
 
 bool FormatIsWritable(const std::wstring& format)
 {
+    if (NativeFormatWritable(format)) return true;
     for (const auto& h : WritableHandlers())
         if (_wcsicmp(h.name.c_str(), format.c_str()) == 0) return true;
     return false;
@@ -2553,15 +3485,22 @@ bool FormatIsWritable(const std::wstring& format)
 // ── Choice lists for the Add to Archive dialog ───────────
 std::vector<std::wstring> MethodsFor(const std::wstring& format)
 {
-    // First entry is the format's own default. Only the coders every
-    // stock 7z.dll ships are offered; an exotic build may know more,
-    // but a rejected method name would fail quietly, so stay standard.
+    // First entry is the format's own default. Native runtime adapters
+    // publish the additional ZSTD/Brotli/LZ4/LZ5 coder names to 7z.dll;
+    // an explicitly rejected selection is reported by Compress().
     if (_wcsicmp(format.c_str(), L"7z") == 0)
-        return { L"LZMA2", L"LZMA", L"PPMd", L"BZip2", L"Copy" };
+        return { L"LZMA2", L"ZSTD", L"BROTLI", L"LZ4", L"LZ5",
+                 L"LZMA", L"PPMd", L"BZip2", L"Copy" };
     if (_wcsicmp(format.c_str(), L"zip") == 0)
-        return { L"Deflate", L"Deflate64", L"BZip2", L"LZMA", L"PPMd", L"Copy" };
-    // tar, wim and the single-stream formats have exactly one way to
-    // store data; nothing to choose.
+        return { L"Deflate", L"ZSTD", L"Deflate64", L"BZip2", L"LZMA",
+                 L"PPMd", L"Copy" };
+    if (_wcsicmp(format.c_str(), L"xz") == 0)    return { L"LZMA2" };
+    if (_wcsicmp(format.c_str(), L"gzip") == 0)  return { L"Deflate" };
+    if (_wcsicmp(format.c_str(), L"bzip2") == 0) return { L"BZip2" };
+    if (_wcsicmp(format.c_str(), L"brotli") == 0)return { L"Brotli" };
+    if (_wcsicmp(format.c_str(), L"lz4") == 0)   return { L"LZ4" };
+    if (_wcsicmp(format.c_str(), L"lz5") == 0)   return { L"LZ5" };
+    // tar and wim have exactly one way to store data.
     return {};
 }
 
@@ -2616,6 +3555,10 @@ static const ExtAlias kExtAliases[] =
     { L"tbz2",  L"bzip2" },
     { L"dz",    L"gzip"  },
     { L"zsd",   L"zstd"  },
+    // native single-stream writers
+    { L"br",    L"brotli"},
+    { L"lz4",   L"lz4"   },
+    { L"lz5",   L"lz5"   },
 };
 
 std::wstring FormatForTargetName(const std::wstring& fileName)
@@ -2642,6 +3585,7 @@ std::wstring DefaultExtensionFor(const std::wstring& format)
     for (const auto& h : WritableHandlers())
         if (_wcsicmp(h.name.c_str(), format.c_str()) == 0 && !h.exts.empty())
             return L"." + h.exts.front();
+    if (_wcsicmp(format.c_str(), L"brotli") == 0) return L".br";
     return L"." + format;
 }
 
@@ -2771,6 +3715,10 @@ bool Compress(const std::wstring& outPath,
 
     if (items.empty()) return fail(L"Nothing to compress.");
 
+    if (NativeKindForFormat(opt.format) != NativeCodecKind::None &&
+        NativeFormatWritable(opt.format))
+        return CompressNativeStream(outPath, items, opt, progress, error);
+
     Func7z_CreateObject createObj = Get7zCreateObjectFunc();
     if (!createObj)
         return fail(L"7z.dll could not be loaded, so ArchiveFldr cannot create "
@@ -2806,7 +3754,13 @@ bool Compress(const std::wstring& outPath,
     AttachExternalCodecs(outArc.Get());
 
     // ── Compression settings ─────────────────────────────
-    ApplyWriterProps(outArc.Get(), opt, handler->name);
+    hr = ApplyWriterProps(outArc.Get(), opt, handler->name);
+    const bool methodWasApplied =
+        _wcsicmp(handler->name.c_str(), L"7z") == 0 ||
+        _wcsicmp(handler->name.c_str(), L"zip") == 0;
+    if (FAILED(hr) && methodWasApplied && !opt.method.empty())
+        return fail(L"The selected compression method is not accepted by this "
+                    L"7-Zip handler.");
 
     // ── Write to a temporary, then move into place ───────
     std::wstring tempPath = outPath + L".part";
@@ -2842,15 +3796,8 @@ bool Compress(const std::wstring& outPath,
         return fail(L"Compression failed (" + std::wstring(buf) + L").");
     }
 
-    ::DeleteFileW(outPath.c_str());
-    if (!MoveFileW(tempPath.c_str(), outPath.c_str()))
-    {
-        const DWORD err = GetLastError();
-        ::DeleteFileW(tempPath.c_str());
-        wchar_t buf[64]; swprintf_s(buf, L"%u", err);
-        return fail(L"The archive was built but could not be moved into place "
-                    L"(error " + std::wstring(buf) + L").");
-    }
+    if (!FinalizeCompressedOutput(tempPath, outPath, opt.volumeBytes, error))
+        return false;
 
     if (!skipped.empty() && error)
     {
@@ -2944,7 +3891,17 @@ bool C7zArchiveEngine::AddItems(const std::vector<ArchiveWriter::Item>& items,
                     std::to_wstring(e) + L").");
     }
 
-    ApplyWriterProps(outArc.Get(), opt, m_handlerName);
+    const HRESULT propsHr = ApplyWriterProps(outArc.Get(), opt, m_handlerName);
+    const bool methodWasApplied =
+        _wcsicmp(m_handlerName.c_str(), L"7z") == 0 ||
+        _wcsicmp(m_handlerName.c_str(), L"zip") == 0;
+    if (FAILED(propsHr) && methodWasApplied && !opt.method.empty())
+    {
+        outStream->CloseFile(); outStream->Release();
+        ::DeleteFileW(tempPath.c_str());
+        return fail(L"The selected compression method is not accepted by this "
+                    L"7-Zip handler.");
+    }
 
     // opt.password encrypts the new items; m_password (the one the
     // archive was opened with) decrypts old ones if recoding needs it.

@@ -961,12 +961,24 @@ void CContextMenu::DoCompress(bool here)
         return;
     }
 
+    const bool singleStreamAllowed =
+        items.size() == 1 && !items[0].isDir && !items[0].diskPath.empty();
     std::wstring format = Settings::Get().defaultFormat;
-    if (!ArchiveWriter::FormatIsWritable(format))
+    if (!ArchiveWriter::FormatIsWritable(format) ||
+        (!singleStreamAllowed && !ArchiveWriter::CanAddToFormat(format)))
     {
         const auto formats = ArchiveWriter::WritableFormats();
-        if (formats.empty()) return;
-        format = formats.front();
+        format.clear();
+        for (const auto& candidate : formats)
+            if (singleStreamAllowed || ArchiveWriter::CanAddToFormat(candidate))
+            { format = candidate; break; }
+        if (format.empty())
+        {
+            MessageBoxW(m_hwnd,
+                L"No available writer can store all selected items.",
+                L"ArchiveFldr", MB_ICONWARNING | MB_OK);
+            return;
+        }
     }
 
     std::wstring outPath = ArchiveWriter::SuggestOutputPath(
@@ -980,6 +992,7 @@ void CContextMenu::DoCompress(bool here)
         rq.path       = outPath;
         rq.format     = format;
         rq.lockFormat = false;
+        rq.singleStreamAllowed = singleStreamAllowed;
         rq.fileCount  = items.size();
 
         AddToArchiveDialog::Result result;
@@ -1016,7 +1029,9 @@ void CContextMenu::DoCompress(bool here)
         return;
     }
 
-    SHChangeNotify(SHCNE_CREATE, SHCNF_PATH, outPath.c_str(), nullptr);
+    const std::wstring createdPath = options.volumeBytes
+        ? outPath + L".001" : outPath;
+    SHChangeNotify(SHCNE_CREATE, SHCNF_PATH, createdPath.c_str(), nullptr);
     std::wstring dir = outPath;
     if (PathRemoveFileSpecW(&dir[0]))
     {
@@ -1046,12 +1061,13 @@ void CContextMenu::DoCompressEmail()
 
     // Mail attachments go in a zip: it is the one format every mail
     // client and recipient can open without installing anything.
-    std::wstring format = L"zip";
+    const std::wstring format = L"zip";
     if (!ArchiveWriter::FormatIsWritable(format))
     {
-        const auto fmts = ArchiveWriter::WritableFormats();
-        if (fmts.empty()) return;
-        format = fmts.front();
+        MessageBoxW(m_hwnd,
+            L"A writable ZIP handler is unavailable, so the mail attachment could not be created.",
+            L"ArchiveFldr", MB_ICONWARNING | MB_OK);
+        return;
     }
 
     // Built in a private temp folder so a second run cannot collide with

@@ -503,8 +503,8 @@ EngineCaps CCodecEngine::GetCaps() const
         caps.isStub     = false;
         caps.canExtract = true;
         caps.canTest    = true;
-        // Writing is deliberately not offered: re-compressing would mean
-        // choosing a level and silently rewriting the user's file.
+        // An opened stream cannot be modified in place. New Brotli/LZ4/LZ5
+        // streams are created separately by ArchiveWriter's Add dialog.
         caps.canAdd = caps.canDelete = caps.canRename = false;
         return caps;
     }

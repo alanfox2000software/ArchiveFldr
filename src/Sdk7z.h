@@ -118,9 +118,21 @@ struct ICompressCoder7z : public IUnknown
                     ICompressProgressInfo7z* progress) PURE;
 };
 
+struct ICompressSetCoderProperties7z : public IUnknown
+{
+    STDMETHOD(SetCoderProperties)(const PROPID* propIDs,
+                                  const PROPVARIANT* props,
+                                  UINT32 numProps) PURE;
+};
+
 struct ICompressSetDecoderProperties2_7z : public IUnknown
 {
     STDMETHOD(SetDecoderProperties2)(const BYTE* data, UINT32 size) PURE;
+};
+
+struct ICompressWriteCoderProperties7z : public IUnknown
+{
+    STDMETHOD(WriteCoderProperties)(ISequentialOutStream7z* outStream) PURE;
 };
 
 struct ICompressCodecsInfo7z : public IUnknown
@@ -162,6 +174,12 @@ struct IArchiveOpenCallback7z : public IUnknown
 {
     STDMETHOD(SetTotal)(const UINT64* files, const UINT64* bytes) PURE;
     STDMETHOD(SetCompleted)(const UINT64* files, const UINT64* bytes) PURE;
+};
+
+struct IArchiveOpenVolumeCallback7z : public IUnknown
+{
+    STDMETHOD(GetProperty)(PROPID propID, PROPVARIANT* value) PURE;
+    STDMETHOD(GetStream)(const wchar_t* name, IInStream7z** inStream) PURE;
 };
 
 struct IArchiveExtractCallback7z : public IProgress7z
@@ -265,8 +283,12 @@ DEFINE_GUID(IID_ICompressProgressInfo7z,
     0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x04,0x00,0x04,0x00,0x00);
 DEFINE_GUID(IID_ICompressCoder7z,
     0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x04,0x00,0x05,0x00,0x00);
+DEFINE_GUID(IID_ICompressSetCoderProperties7z,
+    0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x04,0x00,0x20,0x00,0x00);
 DEFINE_GUID(IID_ICompressSetDecoderProperties2_7z,
     0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x04,0x00,0x22,0x00,0x00);
+DEFINE_GUID(IID_ICompressWriteCoderProperties7z,
+    0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x04,0x00,0x23,0x00,0x00);
 DEFINE_GUID(IID_ICompressCodecsInfo7z,
     0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x04,0x00,0x60,0x00,0x00);
 DEFINE_GUID(IID_ISetCompressCodecsInfo7z,
@@ -275,6 +297,8 @@ DEFINE_GUID(IID_IArchiveOpenCallback7z,
     0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x06,0x00,0x10,0x00,0x00);
 DEFINE_GUID(IID_IArchiveExtractCallback7z,
     0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x06,0x00,0x20,0x00,0x00);
+DEFINE_GUID(IID_IArchiveOpenVolumeCallback7z,
+    0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x06,0x00,0x30,0x00,0x00);
 DEFINE_GUID(IID_IInArchive7z,
     0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x06,0x00,0x60,0x00,0x00);
 DEFINE_GUID(IID_ICryptoGetTextPassword7z,

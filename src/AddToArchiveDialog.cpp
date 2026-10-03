@@ -57,8 +57,9 @@ std::wstring GetText(HWND hDlg, int id)
 {
     HWND h = GetDlgItem(hDlg, id);
     const int len = GetWindowTextLengthW(h);
-    std::wstring s((size_t)len, L'\0');
+    std::wstring s((size_t)len + 1, L'\0');
     if (len) GetWindowTextW(h, &s[0], len + 1);
+    s.resize((size_t)len);
     return s;
 }
 
@@ -221,6 +222,24 @@ bool TakeResult(HWND hDlg, State* st)
     sel = (int)SendDlgItemMessageW(hDlg, IDC_CMB_ADD_THREADS, CB_GETCURSEL, 0, 0);
     if (sel >= 0 && sel < (int)ARRAYSIZE(kThreads)) r.opt.threads = kThreads[sel].value;
 
+    const std::wstring volume = GetText(hDlg, IDC_EDIT_ADD_VOLUME);
+    if (!volume.empty())
+    {
+        wchar_t* end = nullptr;
+        errno = 0;
+        const unsigned __int64 bytes = _wcstoui64(volume.c_str(), &end, 10);
+        if (!end || *end || bytes == 0 || errno == ERANGE ||
+            volume.find_first_not_of(L"0123456789") != std::wstring::npos)
+        {
+            MessageBoxW(hDlg,
+                L"Enter a positive volume size in bytes, or leave it empty.",
+                L"ArchiveFldr", MB_ICONWARNING | MB_OK);
+            SetFocus(GetDlgItem(hDlg, IDC_EDIT_ADD_VOLUME));
+            return false;
+        }
+        r.opt.volumeBytes = (uint64_t)bytes;
+    }
+
     return true;
 }
 
@@ -257,10 +276,17 @@ INT_PTR CALLBACK DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
         }
         else
         {
-            // Stable, familiar order; only what this 7z.dll can write.
+            // Stable, familiar order; only what the available handlers and
+            // native codec DLLs can write. Stream formats are valid only for
+            // one ordinary source file.
             for (const wchar_t* f : { L"zip", L"7z", L"tar", L"wim" })
                 if (ArchiveWriter::FormatIsWritable(f))
                     st->formats.push_back(f);
+            if (st->rq->singleStreamAllowed)
+                for (const wchar_t* f : { L"xz", L"gzip", L"bzip2",
+                                           L"brotli", L"lz4", L"lz5" })
+                    if (ArchiveWriter::FormatIsWritable(f))
+                        st->formats.push_back(f);
             if (st->formats.empty() && !st->rq->format.empty())
                 st->formats.push_back(st->rq->format);
         }
@@ -270,7 +296,11 @@ INT_PTR CALLBACK DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
                 { fmtSel = (int)i; break; }
         FillCombo(hDlg, IDC_CMB_ADD_FORMAT, st->formats, fmtSel);
         if (st->rq->lockFormat)
+        {
             EnableWindow(GetDlgItem(hDlg, IDC_CMB_ADD_FORMAT), FALSE);
+            EnableWindow(GetDlgItem(hDlg, IDC_EDIT_ADD_VOLUME), FALSE);
+            EnableWindow(GetDlgItem(hDlg, IDC_LBL_ADD_VOLUME), FALSE);
+        }
 
         // Levels: default from the saved preference.
         {

@@ -88,12 +88,11 @@ void ForgetPassword(const std::wstring& path, const std::wstring& password)
 
 // ── External 7-Zip codec catalogue ──────────────────────────────────────
 //
-// 7z.dll contains archive handlers, but methods supplied by DLLs in the
-// adjacent Codecs folder are discovered and wired up by 7z.exe, not by the
-// handler itself. ArchiveFldr is also a raw 7z.dll client, so it must provide
-// the same ICompressCodecsInfo catalogue. Without it a perfectly valid
-// ZSTD+7zAES archive lists normally and then fails extraction with operation
-// result kUnsupportedMethod (1).
+// 7z.dll contains archive handlers, but outside methods must be supplied by
+// the host through ICompressCodecsInfo. ArchiveFldr publishes both adapters
+// for its existing raw codec runtimes and genuine plug-ins discovered in the
+// engine's adjacent Codecs folder. Without that catalogue a valid ZSTD+7zAES
+// archive lists normally and extraction fails with kUnsupportedMethod (1).
 struct ExternalCodecModule
 {
     HMODULE                     module = nullptr;
@@ -104,14 +103,210 @@ struct ExternalCodecModule
     Func7z_SetCodecs            setCodecs = nullptr;
 };
 
+// The ordinary libzstd DLL already used for standalone .zst files can also
+// satisfy the ZSTD coder requested from inside a 7z container. It is a C API,
+// not a 7-Zip plug-in, so this small COM adapter presents it as ICompressCoder.
+struct NativeZstdApi
+{
+    HMODULE module = nullptr;
+    std::wstring path;
+    void*  (__cdecl* createDStream)() = nullptr;
+    size_t (__cdecl* initDStream)(void*) = nullptr;
+    size_t (__cdecl* decompressStream)(void*, void*, void*) = nullptr;
+    size_t (__cdecl* freeDStream)(void*) = nullptr;
+    unsigned (__cdecl* isError)(size_t) = nullptr;
+};
+
+struct NativeZstdInBuffer  { const void* src; size_t size; size_t pos; };
+struct NativeZstdOutBuffer { void* dst; size_t size; size_t pos; };
+
+NativeZstdApi g_nativeZstd;
+std::once_flag g_nativeZstdOnce;
+
+void InitNativeZstdOnce()
+{
+    g_nativeZstd.module = ThirdParty::LoadComponent(L"zstd", &g_nativeZstd.path);
+    if (!g_nativeZstd.module) return;
+
+#define BIND_ZSTD(member, name) \
+    g_nativeZstd.member = reinterpret_cast<decltype(g_nativeZstd.member)>( \
+        GetProcAddress(g_nativeZstd.module, name))
+    BIND_ZSTD(createDStream, "ZSTD_createDStream");
+    BIND_ZSTD(initDStream, "ZSTD_initDStream");
+    BIND_ZSTD(decompressStream, "ZSTD_decompressStream");
+    BIND_ZSTD(freeDStream, "ZSTD_freeDStream");
+    BIND_ZSTD(isError, "ZSTD_isError");
+#undef BIND_ZSTD
+
+    if (!g_nativeZstd.createDStream || !g_nativeZstd.initDStream ||
+        !g_nativeZstd.decompressStream || !g_nativeZstd.freeDStream ||
+        !g_nativeZstd.isError)
+    {
+        // Keep the module loaded for process lifetime, just as CodecEngine
+        // does, but don't publish a decoder backed by an incomplete ABI.
+        g_nativeZstd.createDStream = nullptr;
+    }
+}
+
+bool NativeZstdAvailable()
+{
+    std::call_once(g_nativeZstdOnce, InitNativeZstdOnce);
+    return g_nativeZstd.createDStream != nullptr;
+}
+
+class CNativeZstdDecoder final :
+    public ICompressCoder7z,
+    public ICompressSetDecoderProperties2_7z
+{
+public:
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override
+    {
+        if (!ppv) return E_POINTER;
+        if (IsEqualIID(riid, IID_IUnknown) ||
+            IsEqualIID(riid, IID_ICompressCoder7z))
+            *ppv = static_cast<ICompressCoder7z*>(this);
+        else if (IsEqualIID(riid, IID_ICompressSetDecoderProperties2_7z))
+            *ppv = static_cast<ICompressSetDecoderProperties2_7z*>(this);
+        else { *ppv = nullptr; return E_NOINTERFACE; }
+        AddRef();
+        return S_OK;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override
+        { return (ULONG)InterlockedIncrement(&m_ref); }
+    STDMETHODIMP_(ULONG) Release() override
+    {
+        ULONG n = (ULONG)InterlockedDecrement(&m_ref);
+        if (!n) delete this;
+        return n;
+    }
+
+    STDMETHODIMP SetDecoderProperties2(const BYTE* data, UINT32 size) override
+    {
+        // 7-Zip ZS used 3/5 informational bytes; newer versions use one flag
+        // byte. libzstd gets everything needed from the frame itself.
+        if (size != 0 && !data) return E_INVALIDARG;
+        return (size == 0 || size == 1 || size == 3 || size == 5)
+            ? S_OK : E_NOTIMPL;
+    }
+
+    STDMETHODIMP Code(ISequentialInStream7z* inStream,
+                       ISequentialOutStream7z* outStream,
+                       const UINT64* inSize, const UINT64* outSize,
+                       ICompressProgressInfo7z* progress) override
+    {
+        if (!inStream || !outStream || !NativeZstdAvailable()) return E_INVALIDARG;
+        void* stream = g_nativeZstd.createDStream();
+        if (!stream) return E_OUTOFMEMORY;
+
+        HRESULT hr = S_OK;
+        try
+        {
+            const size_t init = g_nativeZstd.initDStream(stream);
+            hr = g_nativeZstd.isError(init) ? E_FAIL
+                : Decode(stream, inStream, outStream, inSize, outSize, progress);
+        }
+        catch (const std::bad_alloc&) { hr = E_OUTOFMEMORY; }
+        catch (...) { hr = E_FAIL; }
+        g_nativeZstd.freeDStream(stream);
+        return hr;
+    }
+
+private:
+    static HRESULT Decode(void* stream,
+                          ISequentialInStream7z* inStream,
+                          ISequentialOutStream7z* outStream,
+                          const UINT64* inSize, const UINT64* outSize,
+                          ICompressProgressInfo7z* progress)
+    {
+        constexpr size_t kBufferSize = 256 * 1024;
+        std::vector<BYTE> input(kBufferSize), output(kBufferSize);
+        UINT64 totalIn = 0, totalOut = 0;
+        size_t zstdResult = 1; // non-zero means a frame still needs data
+        bool sawInput = false;
+
+        for (;;)
+        {
+            UINT32 want = (UINT32)input.size();
+            if (inSize)
+            {
+                if (totalIn >= *inSize) want = 0;
+                else if (*inSize - totalIn < want)
+                    want = (UINT32)(*inSize - totalIn);
+            }
+
+            UINT32 got = 0;
+            HRESULT readHr = want ? inStream->Read(input.data(), want, &got) : S_FALSE;
+            if (FAILED(readHr)) return readHr;
+            if (got > want) return E_FAIL;
+            if (!got) break;
+            sawInput = true;
+            totalIn += got;
+
+            NativeZstdInBuffer zin{ input.data(), got, 0 };
+            while (zin.pos < zin.size)
+            {
+                size_t outCapacity = output.size();
+                if (outSize)
+                {
+                    if (totalOut >= *outSize) outCapacity = 0;
+                    else if (*outSize - totalOut < outCapacity)
+                        outCapacity = (size_t)(*outSize - totalOut);
+                }
+
+                NativeZstdOutBuffer zout{ output.data(), outCapacity, 0 };
+                const size_t oldInPos = zin.pos;
+                zstdResult = g_nativeZstd.decompressStream(stream, &zout, &zin);
+                if (g_nativeZstd.isError(zstdResult)) return S_FALSE;
+                if (zout.pos > outCapacity) return E_FAIL;
+
+                // A solid/multithreaded stream can contain concatenated or
+                // skippable frames. Reset explicitly for older libzstd ABIs.
+                if (zstdResult == 0)
+                {
+                    const size_t reset = g_nativeZstd.initDStream(stream);
+                    if (g_nativeZstd.isError(reset)) return E_FAIL;
+                }
+
+                if (zout.pos)
+                {
+                    UINT32 written = 0;
+                    HRESULT writeHr = outStream->Write(
+                        output.data(), (UINT32)zout.pos, &written);
+                    if (FAILED(writeHr)) return writeHr;
+                    if (written != zout.pos) return E_FAIL;
+                    totalOut += written;
+                }
+
+                if (zin.pos == oldInPos && zout.pos == 0)
+                    return S_FALSE; // output limit reached or no forward progress
+            }
+
+            if (progress)
+            {
+                HRESULT progressHr = progress->SetRatioInfo(&totalIn, &totalOut);
+                if (FAILED(progressHr)) return progressHr;
+            }
+        }
+
+        if (!sawInput || zstdResult != 0) return S_FALSE;
+        if (inSize && totalIn != *inSize) return S_FALSE;
+        if (outSize && totalOut != *outSize) return S_FALSE;
+        return S_OK;
+    }
+
+    LONG m_ref = 1;
+};
+
 struct ExternalCodecMethod
 {
     size_t moduleIndex = 0;
     UINT32 methodIndex = 0;
+    UINT64 methodId = 0;
     GUID   decoder{};
     GUID   encoder{};
     bool   hasDecoder = false;
     bool   hasEncoder = false;
+    bool   nativeZstd = false;
 };
 
 class CExternalCodecsInfo final : public ICompressCodecsInfo7z
@@ -136,6 +331,25 @@ public:
         return n;
     }
 
+    bool AddNativeZstd()
+    {
+        if (!NativeZstdAvailable()) return false;
+
+        // 04F71101 is the long-standing 7-Zip ZS external method. 04015D is
+        // the newer official ZSTD coder ID and costs nothing to expose for
+        // older 7z.dll builds that do not yet provide it internally.
+        const UINT64 ids[] = { 0x04F71101ULL, 0x04015DULL };
+        for (UINT64 id : ids)
+        {
+            ExternalCodecMethod method;
+            method.methodId = id;
+            method.hasDecoder = true;
+            method.nativeZstd = true;
+            m_methods.push_back(method);
+        }
+        return true;
+    }
+
     STDMETHODIMP GetNumMethods(UINT32* numMethods) override
     {
         if (!numMethods) return E_POINTER;
@@ -151,6 +365,43 @@ public:
         if (index >= m_methods.size()) return E_INVALIDARG;
         const ExternalCodecMethod& method = m_methods[index];
 
+        if (method.nativeZstd)
+        {
+            if (propID == k7zMethodID)
+            {
+                value->vt = VT_UI8;
+                value->uhVal.QuadPart = method.methodId;
+                return S_OK;
+            }
+            if (propID == k7zMethodName)
+            {
+                value->bstrVal = SysAllocString(L"ZSTD");
+                if (!value->bstrVal) return E_OUTOFMEMORY;
+                value->vt = VT_BSTR;
+                return S_OK;
+            }
+            if (propID == k7zMethodDecoder)
+            {
+                GUID clsid{};
+                clsid.Data1 = 0x23170F69;
+                clsid.Data2 = 0x40C1;
+                clsid.Data3 = 0x2790; // k_7zip_GUID_Data3_Decoder
+                memcpy(clsid.Data4, &method.methodId, sizeof(clsid.Data4));
+                value->bstrVal = SysAllocStringByteLen(
+                    reinterpret_cast<const char*>(&clsid), sizeof(clsid));
+                if (!value->bstrVal) return E_OUTOFMEMORY;
+                value->vt = VT_BSTR;
+                return S_OK;
+            }
+            if (propID == k7zMethodIsFilter)
+            {
+                value->vt = VT_BOOL;
+                value->boolVal = VARIANT_FALSE;
+                return S_OK;
+            }
+            // All other native-method properties are intentionally VT_EMPTY.
+        }
+
         // Older plug-ins only publish the decoder/encoder CLSIDs. Newer
         // archive handlers ask these synthesized boolean properties first.
         if (propID == k7zMethodDecoderIsAssigned ||
@@ -163,6 +414,8 @@ public:
                 ? VARIANT_TRUE : VARIANT_FALSE;
             return S_OK;
         }
+
+        if (method.nativeZstd) return S_OK;
 
         const ExternalCodecModule& module = m_modules[method.moduleIndex];
         return module.getProperty
@@ -184,6 +437,7 @@ public:
 
     bool LoadFolder(const std::wstring& folder)
     {
+        const size_t oldMethodCount = m_methods.size();
         WIN32_FIND_DATAW fd{};
         HANDLE find = FindFirstFileW((folder + L"\\*.dll").c_str(), &fd);
         if (find == INVALID_HANDLE_VALUE) return false;
@@ -193,7 +447,7 @@ public:
                 LoadModule(folder + L"\\" + fd.cFileName);
         } while (FindNextFileW(find, &fd));
         FindClose(find);
-        return !m_methods.empty();
+        return m_methods.size() > oldMethodCount;
     }
 
     size_t MethodCount() const { return m_methods.size(); }
@@ -218,6 +472,26 @@ private:
         if (ok) memcpy(&clsid, value.bstrVal, sizeof(GUID));
         PropVariantClear(&value);
         return ok;
+    }
+
+    static bool GetMethodId(Func7z_GetMethodProperty getProperty,
+                            UINT32 index, UINT64& methodId)
+    {
+        PROPVARIANT value; PropVariantInit(&value);
+        const HRESULT hr = getProperty(index, k7zMethodID, &value);
+        bool ok = hr == S_OK;
+        if (value.vt == VT_UI8) methodId = value.uhVal.QuadPart;
+        else if (value.vt == VT_UI4) methodId = value.ulVal;
+        else ok = false;
+        PropVariantClear(&value);
+        return ok;
+    }
+
+    bool HasMethodId(UINT64 methodId) const
+    {
+        for (const auto& method : m_methods)
+            if (method.methodId == methodId) return true;
+        return false;
     }
 
     void LoadModule(const std::wstring& path)
@@ -264,6 +538,9 @@ private:
             ExternalCodecMethod method;
             method.moduleIndex = moduleIndex;
             method.methodIndex = i;
+            const bool hasId = GetMethodId(module.getProperty, i, method.methodId);
+            if (hasId && HasMethodId(method.methodId))
+                continue; // prefer the already-published native decoder
             method.hasDecoder = GetClass(module.getProperty, i,
                                          k7zMethodDecoder, method.decoder);
             method.hasEncoder = GetClass(module.getProperty, i,
@@ -287,10 +564,19 @@ private:
         if (!iid || index >= m_methods.size()) return E_INVALIDARG;
 
         const ExternalCodecMethod& method = m_methods[index];
-        const ExternalCodecModule& module = m_modules[method.moduleIndex];
         const bool assigned = encode ? method.hasEncoder : method.hasDecoder;
         if (!assigned) return S_OK;
 
+        if (method.nativeZstd)
+        {
+            if (!IsEqualIID(*iid, IID_ICompressCoder7z)) return E_NOINTERFACE;
+            auto* decoder = new(std::nothrow) CNativeZstdDecoder();
+            if (!decoder) return E_OUTOFMEMORY;
+            *coder = static_cast<ICompressCoder7z*>(decoder);
+            return S_OK;
+        }
+
+        const ExternalCodecModule& module = m_modules[method.moduleIndex];
         Func7z_CreateCoder direct =
             encode ? module.createEncoder : module.createDecoder;
         if (direct) return direct(method.methodIndex, iid, coder);
@@ -321,14 +607,16 @@ void InitExternalCodecsOnce()
 
     auto* codecs = new(std::nothrow) CExternalCodecsInfo();
     if (!codecs) return;
-    if (!codecs->LoadFolder(folder))
+    const bool nativeZstd = codecs->AddNativeZstd();
+    const bool pluginCodecs = codecs->LoadFolder(folder);
+    if (!nativeZstd && !pluginCodecs)
     {
         codecs->Release();
         return;
     }
 
     g_externalCodecs = codecs; // keep its original ref for process lifetime
-    g_externalCodecsFolder = folder;
+    if (pluginCodecs) g_externalCodecsFolder = folder;
     codecs->ConnectModules();
 
     // 7-Zip 15+ accepts the catalogue once at module scope. Older/custom
@@ -1672,12 +1960,14 @@ bool C7zArchiveEngine::ExtractIndices(const std::vector<UINT32>& indices,
                 L"The loaded 7-Zip engine has no decoder for this item's "
                 L"compression method.\n\nEngine: " + Get7zEnginePath() +
                 L"\nExternal codec methods loaded: " + count;
+            if (NativeZstdAvailable())
+                m_lastError += L"\nNative ZSTD library: " + g_nativeZstd.path;
             if (!g_externalCodecsFolder.empty())
                 m_lastError += L"\nCodecs folder: " + g_externalCodecsFolder;
-            else
+            else if (!NativeZstdAvailable())
                 m_lastError +=
-                    L"\nNo adjacent Codecs folder containing compatible "
-                    L"7-Zip codec plug-ins was found.";
+                    L"\nNo compatible raw ZSTD library or adjacent Codecs "
+                    L"folder was found.";
         }
         else
         {

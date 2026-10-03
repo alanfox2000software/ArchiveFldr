@@ -99,12 +99,30 @@ struct IProgress7z : public IUnknown
 };
 
 // ─────────────────────────────────────────────────────────
-// External compression codecs (CPP/7zip/ICoder.h) — group 4
+// Compression coders and external codecs (CPP/7zip/ICoder.h) — group 4
 //
-// 7z.exe discovers DLLs in its Codecs folder and gives this catalogue to
-// archive handlers. A raw 7z.dll client must do the same or a valid archive
-// using an external method such as ZSTD fails with kUnsupportedMethod.
+// The coder interfaces let ArchiveFldr adapt its existing raw codec DLLs to
+// methods requested by a 7z archive. The catalogue also exposes real 7-Zip
+// plug-ins discovered in the engine's adjacent Codecs directory.
 // ─────────────────────────────────────────────────────────
+struct ICompressProgressInfo7z : public IUnknown
+{
+    STDMETHOD(SetRatioInfo)(const UINT64* inSize, const UINT64* outSize) PURE;
+};
+
+struct ICompressCoder7z : public IUnknown
+{
+    STDMETHOD(Code)(ISequentialInStream7z* inStream,
+                    ISequentialOutStream7z* outStream,
+                    const UINT64* inSize, const UINT64* outSize,
+                    ICompressProgressInfo7z* progress) PURE;
+};
+
+struct ICompressSetDecoderProperties2_7z : public IUnknown
+{
+    STDMETHOD(SetDecoderProperties2)(const BYTE* data, UINT32 size) PURE;
+};
+
 struct ICompressCodecsInfo7z : public IUnknown
 {
     STDMETHOD(GetNumMethods)(UINT32* numMethods) PURE;
@@ -243,6 +261,12 @@ DEFINE_GUID(IID_IInStream7z,
     0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x03,0x00,0x03,0x00,0x00);
 DEFINE_GUID(IID_IOutStream7z,
     0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x03,0x00,0x04,0x00,0x00);
+DEFINE_GUID(IID_ICompressProgressInfo7z,
+    0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x04,0x00,0x04,0x00,0x00);
+DEFINE_GUID(IID_ICompressCoder7z,
+    0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x04,0x00,0x05,0x00,0x00);
+DEFINE_GUID(IID_ICompressSetDecoderProperties2_7z,
+    0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x04,0x00,0x22,0x00,0x00);
 DEFINE_GUID(IID_ICompressCodecsInfo7z,
     0x23170F69, 0x40C1, 0x278A, 0x00,0x00,0x00,0x04,0x00,0x60,0x00,0x00);
 DEFINE_GUID(IID_ISetCompressCodecsInfo7z,

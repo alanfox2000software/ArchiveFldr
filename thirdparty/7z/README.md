@@ -26,24 +26,33 @@ if you don't want to rename the file.
 
 A 7z archive can refer to a compression method that is not built into the
 selected `7z.dll`. For example, 7-Zip ZS uses method `04F71101` for ZSTD.
-Copy the matching 7-Zip codec plug-ins into a `Codecs` folder **beside the
-engine DLL**:
+ArchiveFldr adapts the same raw ZSTD runtime already used for `.zst` files and
+publishes it to the 7z handler through `ICompressCodecsInfo`:
+
+```
+thirdparty\zstd\
+├─ libzstd.64.dll
+└─ libzstd.32.dll
+```
+
+No separate 7-Zip ZSTD plug-in is required when the matching raw library is
+present. The adapter supports both the 7-Zip ZS method (`04F71101`) and the
+official ZSTD coder ID (`04015D`), including concatenated/skippable frames.
+
+ArchiveFldr additionally discovers genuine 7-Zip codec plug-ins from a
+`Codecs` folder beside the selected engine. This remains useful for other
+external methods:
 
 ```
 thirdparty\7z\
 ├─ 7z.64.dll
 └─ Codecs\
-   └─ zstd-x64.dll
+   └─ another-codec-x64.dll
 ```
 
-ArchiveFldr now discovers those plug-ins and supplies their decoders to the
-7z archive handler through `ICompressCodecsInfo`, as 7z.exe does. A raw
-`libzstd.dll` is not the same thing; it must be the 7-Zip codec plug-in from
-the same 7-Zip/7-Zip ZS installation that can extract the archive. Bitness
-must match Explorer and the selected engine DLL.
-
-When ArchiveFldr falls back to an installed `C:\Program Files\7-Zip\7z.dll`,
-it automatically scans that installation's adjacent `Codecs` folder.
+All DLLs must match Explorer's bitness. When ArchiveFldr falls back to an
+installed `C:\Program Files\7-Zip\7z.dll`, it automatically scans that
+installation's adjacent `Codecs` folder.
 
 ### Full runtime search order
 

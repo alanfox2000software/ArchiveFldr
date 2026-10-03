@@ -861,6 +861,8 @@ INT_PTR CALLBACK CSettingsDialog::DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM
 
 INT_PTR CSettingsDialog::WndProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
 {
+    UNREFERENCED_PARAMETER(hDlg);   // the handler works off m_hDlg / m_hTab
+
     switch (msg)
     {
     case WM_COMMAND:

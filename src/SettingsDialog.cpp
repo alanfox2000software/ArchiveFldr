@@ -1071,10 +1071,9 @@ void CPageInstall::Run(bool install, bool x64)
     // file types, and the Default apps entry with them -- stays while
     // it is, so this is also the question of whether the stored
     // "list in Default apps" answer still has an owner.
+    bool otherStillThere = false;   // 32-bit Windows: there is no other
 #ifdef _WIN64
-    const bool otherStillThere = DllRegistered(!x64);
-#else
-    const bool otherStillThere = false;   // 32-bit Windows: there is no other
+    otherStillThere = DllRegistered(!x64);
 #endif
 
     // The settings have to be on disk before regsvr32 starts:
@@ -1248,6 +1247,8 @@ void CPageLanguage::Retranslate()
 
 INT_PTR CALLBACK CPageLanguage::DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
 {
+    UNREFERENCED_PARAMETER(wp);   // this page listens to the list, not to commands
+
     CPageLanguage* p = nullptr;
     if (msg == WM_INITDIALOG)
     {
@@ -1352,18 +1353,19 @@ void CSettingsDialog::OnInit(HWND hDlg)
     m_hTab = GetDlgItem(hDlg, IDC_TAB_PAGES);
 
     // Three of the pages are reached by name later on, so keep a raw
-    // pointer to each before the vector takes ownership.
+    // pointer to each before the vector takes ownership. Not "inst":
+    // that name is the module handle, a few lines up.
     auto lang = std::make_unique<CPageLanguage>();
     m_langPage = lang.get();
     auto ctx  = std::make_unique<CPageArchiveFldr>();
     m_ctxPage = ctx.get();
-    auto inst = std::make_unique<CPageInstall>();
-    m_installPage = inst.get();
+    auto setup = std::make_unique<CPageInstall>();
+    m_installPage = setup.get();
 
     m_pages.push_back(std::make_unique<CPageSystem>());
     m_pages.push_back(std::move(ctx));
     m_pages.push_back(std::make_unique<CPageFolders>());
-    m_pages.push_back(std::move(inst));
+    m_pages.push_back(std::move(setup));
     m_pages.push_back(std::move(lang));
 
     for (int i = 0; i < (int)m_pages.size(); ++i)

@@ -19,7 +19,7 @@ class CArchiveDataObject : public IDataObject
 {
 public:
     // Builds a data object for `cidl` children of `folder`.
-    static HRESULT Create(CShellFolder* folder, UINT cidl,
+    static HRESULT Create(CShellFolder* folder, HWND owner, UINT cidl,
                           LPCITEMIDLIST* apidl, REFIID riid, void** ppv);
 
     // IUnknown
@@ -58,7 +58,7 @@ private:
     HRESULT RenderHDrop       (STGMEDIUM* pmed);
     HRESULT RenderDropEffect  (STGMEDIUM* pmed);
 
-    bool EnsureStaged(Item& it);
+    bool EnsureStaged(Item& it, HWND promptOwner = nullptr);
     bool EnsureTempRoot();
 
     long  m_cRef = 1;

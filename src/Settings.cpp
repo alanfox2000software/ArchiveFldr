@@ -62,6 +62,44 @@ void Settings::WriteStr(HKEY hk, const wchar_t* n, const std::wstring& v) {
         (BYTE*)v.c_str(), (DWORD)((v.size()+1)*sizeof(wchar_t)));
 }
 
+ContextMenuPrefs Settings::ReadContextMenuPrefs()
+{
+    ContextMenuPrefs p;
+    HKEY hk = nullptr;
+
+    // ArchiveFldrSetting writes one machine-wide settings key in the
+    // 64-bit registry view. Read that same view even in a 32-bit shell
+    // host, exactly as Load() does below.
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, kRegKeySettings, 0,
+                      KEY_READ | KEY_WOW64_64KEY, &hk) != ERROR_SUCCESS)
+        return p;
+
+    p.show          = ReadBool(hk, L"ShowContextMenu", p.show);
+#ifdef _WIN64
+    p.enabledHere   = ReadBool(hk, L"ContextMenu64", p.enabledHere);
+#else
+    p.enabledHere   = ReadBool(hk, L"ContextMenu32", p.enabledHere);
+#endif
+    p.extract       = ReadBool(hk, L"CtxExtract",     p.extract);
+    p.extractHere   = ReadBool(hk, L"CtxExtractHere", p.extractHere);
+    p.addToArchive  = ReadBool(hk, L"CtxAdd",         p.addToArchive);
+    p.compressHere  = ReadBool(hk, L"CtxCompressHere",p.compressHere);
+    p.compressEmail = ReadBool(hk, L"CtxEmail",       p.compressEmail);
+    p.openInShell   = ReadBool(hk, L"CtxOpen",        p.openInShell);
+    p.testArchive   = ReadBool(hk, L"CtxTest",        p.testArchive);
+    p.archiveInfo   = ReadBool(hk, L"CtxInfo",        p.archiveInfo);
+    p.settings      = ReadBool(hk, L"CtxSettings",    p.settings);
+    p.useSubMenu    = ReadBool(hk, L"CtxSubmenu",     p.useSubMenu);
+    p.menuIcons     = ReadBool(hk, L"CtxMenuIcons",   p.menuIcons);
+    p.subMenuTitle  = ReadStr (hk, L"CtxSubmenuTitle",p.subMenuTitle.c_str());
+    p.defaultFormat = ReadStr (hk, L"DefaultFormat",  p.defaultFormat.c_str());
+    RegCloseKey(hk);
+
+    if (p.subMenuTitle.empty()) p.subMenuTitle = L"ArchiveFldr";
+    if (p.defaultFormat.empty()) p.defaultFormat = L"zip";
+    return p;
+}
+
 // A ";"-separated extension list -- of the formats the user switched
 // OFF, not the ones left on.
 //

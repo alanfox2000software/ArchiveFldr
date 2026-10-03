@@ -234,14 +234,18 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
 
     m_cmdBase = idCmdFirst;
 
+    // Explorer keeps shell extensions loaded, sometimes for the whole
+    // login session. Take a fresh immutable registry snapshot for every
+    // menu so Apply in ArchiveFldrSetting is visible on the next right-click.
+    const ContextMenuPrefs menu = Settings::ReadContextMenuPrefs();
+
     // The ArchiveFldr page controls Explorer-level integration only.
     // Menus on items and background *inside an opened archive* belong to
     // the namespace folder and must remain available: its default Open
     // command is also how double-click navigation works.
     const bool explorerMenu =
         m_mode == ModeArchiveFile || m_mode == ModePlainFile;
-    if (explorerMenu &&
-        (!Settings::Get().showContextMenu || !Settings::Get().CtxMenuHere()))
+    if (explorerMenu && (!menu.show || !menu.enabledHere))
         return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
 
     // CMF_DEFAULTONLY = "tell me the one command a double-click should run".
@@ -266,8 +270,6 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
         return MAKE_HRESULT(SEVERITY_SUCCESS, 0, CMD_OPEN_ITEM + 1);
     }
 
-    auto& s = Settings::Get();
-
     // The shell loads this DLL into Explorer once and keeps it, so the
     // language file is read on the first right-click and then reused.
     // Function-local static initialisation serialises simultaneous menu
@@ -282,7 +284,7 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
     // archive-file and plain-file menus show it.
     if (m_mode == ModeArchiveFile || m_mode == ModePlainFile)
     {
-        const std::wstring ext = L"." + s.defaultFormat;
+        const std::wstring ext = L"." + menu.defaultFormat;
         const std::wstring out = ArchiveWriter::SuggestOutputPath(m_paths, ext);
         m_quickName = Lang::Format1(LNG_CTX_ADDHERE, L"Add to \"%s\"",
                                     out.empty()
@@ -292,7 +294,7 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
 
     // The "collect everything under one ArchiveFldr sub-menu" preference only
     // applies to the crowded file menu in a normal Explorer folder.
-    m_useSubMenu = s.ctxUseSubMenu &&
+    m_useSubMenu = menu.useSubMenu &&
                    (m_mode == ModeArchiveFile || m_mode == ModePlainFile);
 
     HMENU hTarget = m_useSubMenu ? CreatePopupMenu() : hMenu;
@@ -304,7 +306,7 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
     // One bitmap shared by every entry, created on first use and kept
     // for the life of the process. Null when the user turned icons off,
     // in which case MIIM_BITMAP is simply not requested.
-    HBITMAP hIcon = s.ctxMenuIcons ? MenuIconBitmap() : nullptr;
+    HBITMAP hIcon = menu.menuIcons ? MenuIconBitmap() : nullptr;
 
     auto addItem = [&](UINT cmd, const wchar_t* text, bool enabled = true) {
         // idCmdFirst..idCmdLast is the range the shell lends us, and it
@@ -371,10 +373,10 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
     // right-clicks in Explorer. Only compression applies.
     case ModePlainFile:
     {
-        if (s.ctxAddToArchive)  addItem(CMD_ADD, CtxText(LNG_CTX_ADD, L"Add to archive...").c_str());
-        if (s.ctxCompressHere)  addItem(CMD_COMPRESS_HERE, m_quickName.c_str());
-        if (s.ctxCompressEmail) addItem(CMD_COMPRESS_EMAIL, CtxText(LNG_CTX_EMAIL, L"Compress and email...").c_str());
-        if (s.ctxSettings) { addSep(); addItem(CMD_SETTINGS, CtxText(LNG_CTX_SETTINGS, L"ArchiveFldr settings...").c_str()); }
+        if (menu.addToArchive)  addItem(CMD_ADD, CtxText(LNG_CTX_ADD, L"Add to archive...").c_str());
+        if (menu.compressHere)  addItem(CMD_COMPRESS_HERE, m_quickName.c_str());
+        if (menu.compressEmail) addItem(CMD_COMPRESS_EMAIL, CtxText(LNG_CTX_EMAIL, L"Compress and email...").c_str());
+        if (menu.settings) { addSep(); addItem(CMD_SETTINGS, CtxText(LNG_CTX_SETTINGS, L"ArchiveFldr settings...").c_str()); }
         break;
     }
 
@@ -382,17 +384,17 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
     case ModeArchiveFile:
     default:
     {
-        if (s.ctxExtract)       addItem(CMD_EXTRACT,        CtxText(LNG_CTX_EXTRACT, L"Extract files...").c_str());
-        if (s.ctxExtractHere)   addItem(CMD_EXTRACTHERE,    CtxText(LNG_CTX_EXTHERE, L"Extract Here").c_str());
+        if (menu.extract)       addItem(CMD_EXTRACT,        CtxText(LNG_CTX_EXTRACT, L"Extract files...").c_str());
+        if (menu.extractHere)   addItem(CMD_EXTRACTHERE,    CtxText(LNG_CTX_EXTHERE, L"Extract Here").c_str());
         addSep();
-        if (s.ctxAddToArchive)  addItem(CMD_ADD,            CtxText(LNG_CTX_ADD, L"Add to archive...").c_str());
-        if (s.ctxCompressHere)  addItem(CMD_COMPRESS_HERE,  m_quickName.c_str());
-        if (s.ctxCompressEmail) addItem(CMD_COMPRESS_EMAIL, CtxText(LNG_CTX_EMAIL, L"Compress and email...").c_str());
+        if (menu.addToArchive)  addItem(CMD_ADD,            CtxText(LNG_CTX_ADD, L"Add to archive...").c_str());
+        if (menu.compressHere)  addItem(CMD_COMPRESS_HERE,  m_quickName.c_str());
+        if (menu.compressEmail) addItem(CMD_COMPRESS_EMAIL, CtxText(LNG_CTX_EMAIL, L"Compress and email...").c_str());
         addSep();
-        if (s.ctxOpenInShell)   addItem(CMD_OPEN_SHELL,     CtxText(LNG_CTX_OPEN, L"Open archive").c_str());
-        if (s.ctxTestArchive)   addItem(CMD_TEST,           CtxText(LNG_CTX_TEST, L"Test archive").c_str());
-        if (s.ctxArchiveInfo)   addItem(CMD_INFO,           CtxText(LNG_CTX_INFO, L"Archive information").c_str());
-        if (s.ctxSettings)      addItem(CMD_SETTINGS,       CtxText(LNG_CTX_SETTINGS, L"ArchiveFldr settings...").c_str());
+        if (menu.openInShell)   addItem(CMD_OPEN_SHELL,     CtxText(LNG_CTX_OPEN, L"Open archive").c_str());
+        if (menu.testArchive)   addItem(CMD_TEST,           CtxText(LNG_CTX_TEST, L"Test archive").c_str());
+        if (menu.archiveInfo)   addItem(CMD_INFO,           CtxText(LNG_CTX_INFO, L"Archive information").c_str());
+        if (menu.settings)      addItem(CMD_SETTINGS,       CtxText(LNG_CTX_SETTINGS, L"ArchiveFldr settings...").c_str());
         break;
     }
     }
@@ -403,7 +405,7 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
         {
             MENUITEMINFOW mi{sizeof(mi),MIIM_STRING|MIIM_SUBMENU|MIIM_STATE};
             mi.hSubMenu   = hTarget;
-            mi.dwTypeData = (LPWSTR)s.ctxSubMenuTitle.c_str();
+            mi.dwTypeData = (LPWSTR)menu.subMenuTitle.c_str();
             mi.fState     = MFS_ENABLED;
             if (hIcon) { mi.fMask |= MIIM_BITMAP; mi.hbmpItem = hIcon; }
             InsertMenuItemW(hMenu, indexMenu, TRUE, &mi);
@@ -749,7 +751,7 @@ HRESULT CContextMenu::MakeDataObject(REFIID riid, void** ppv)
 {
     if (!m_pFolder || m_pidls.empty()) return E_FAIL;
     std::vector<LPCITEMIDLIST> items(m_pidls.begin(), m_pidls.end());
-    return CArchiveDataObject::Create(m_pFolder, (UINT)items.size(),
+    return CArchiveDataObject::Create(m_pFolder, m_hwnd, (UINT)items.size(),
                                       items.data(), riid, ppv);
 }
 

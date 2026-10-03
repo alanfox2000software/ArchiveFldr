@@ -36,6 +36,30 @@ enum class DateFmt : int {
     Relative   = 3    // 2 hours ago
 };
 
+// A context menu is hosted by Explorer, which can keep ArchiveFldr.dll
+// loaded long after ArchiveFldrSetting.exe saves a change. Reading these
+// values into a short-lived snapshot for each menu avoids serving the
+// singleton's startup-time copy forever, without mutating that singleton
+// while another shell thread may be using it.
+struct ContextMenuPrefs
+{
+    bool show             = true;
+    bool enabledHere       = true;
+    bool extract           = true;
+    bool extractHere       = true;
+    bool addToArchive      = true;
+    bool compressHere      = true;
+    bool compressEmail     = true;
+    bool openInShell       = true;
+    bool testArchive       = true;
+    bool archiveInfo       = true;
+    bool settings          = true;
+    bool useSubMenu        = true;
+    bool menuIcons         = true;
+    std::wstring subMenuTitle = L"ArchiveFldr";
+    std::wstring defaultFormat = L"zip";
+};
+
 // ─────────────────────────────────────────────────────────
 // Settings — Singleton holding all user preferences
 // ─────────────────────────────────────────────────────────
@@ -59,6 +83,10 @@ public:
     void Load();
     void Save() const;
     void Reset();
+
+    // Fresh registry view for Explorer's next context menu. This is
+    // intentionally independent of the process-lifetime singleton.
+    static ContextMenuPrefs ReadContextMenuPrefs();
 
     // ── Language ──────────────────────────────────────────
     // File stem under Lang\, so "en" means Lang\en.txt.

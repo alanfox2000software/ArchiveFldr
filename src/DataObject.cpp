@@ -126,7 +126,7 @@ CArchiveDataObject::~CArchiveDataObject()
     InterlockedDecrement(&g_cDllRefCount);
 }
 
-HRESULT CArchiveDataObject::Create(CShellFolder* folder, UINT cidl,
+HRESULT CArchiveDataObject::Create(CShellFolder* folder, HWND owner, UINT cidl,
                                    LPCITEMIDLIST* apidl, REFIID riid, void** ppv)
 {
     if (!ppv) return E_POINTER;
@@ -177,6 +177,22 @@ HRESULT CArchiveDataObject::Create(CShellFolder* folder, UINT cidl,
 
     if (p->m_roots.empty()) { p->Release(); return E_FAIL; }
 
+    // Do not put up a password dialog from IDataObject::GetData. Explorer
+    // calls GetData in the middle of an OLE transfer; a modal prompt there
+    // can make the destination abandon the request and report the opaque
+    // "Error Copying File or Folder: Unspecified error" even after a valid
+    // password was entered. Stage encrypted selections now, while
+    // GetUIObjectOf still gives us the source window and before OLE starts
+    // asking for FILECONTENTS / CF_HDROP.
+    for (auto& item : p->m_items)
+    {
+        if (item.entry.isEncrypted && !p->EnsureStaged(item, owner))
+        {
+            p->Release();
+            return HRESULT_FROM_WIN32(ERROR_CANCELLED);
+        }
+    }
+
     HRESULT hr = p->QueryInterface(riid, ppv);
     p->Release();
     return hr;
@@ -209,17 +225,19 @@ bool CArchiveDataObject::EnsureTempRoot()
     return !m_tempRoot.empty();
 }
 
-bool CArchiveDataObject::EnsureStaged(Item& it)
+bool CArchiveDataObject::EnsureStaged(Item& it, HWND promptOwner)
 {
     if (!it.staged.empty())
         return GetFileAttributesW(it.staged.c_str()) != INVALID_FILE_ATTRIBUTES;
     if (!EnsureTempRoot()) return false;
 
     std::wstring produced;
-    // Rendering happens inside a drag-drop or paste, where no window of
-    // ours exists — the prompt parents to whatever window is active so
-    // an encrypted entry can still ask for its password.
-    if (!ArchiveOps::ExtractEntryPrompting(GetActiveWindow(), m_engine,
+    // Encrypted selections are staged before OLE starts (see Create).
+    // This fallback remains for an entry whose format did not advertise
+    // encryption correctly; use the active window only when the caller
+    // could not provide the archive view that owns the operation.
+    if (!promptOwner) promptOwner = GetActiveWindow();
+    if (!ArchiveOps::ExtractEntryPrompting(promptOwner, m_engine,
                                            it.entry, m_tempRoot, &produced))
         return false;
     it.staged = produced;

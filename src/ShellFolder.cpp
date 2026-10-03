@@ -685,7 +685,7 @@ STDMETHODIMP CShellFolder::GetUIObjectOf(
     // no way to ask for the bytes, so dragging an entry to the desktop did
     // nothing at all.
     if (IsEqualIID(riid, IID_IDataObject)) {
-        return CArchiveDataObject::Create(this, cidl, apidl, riid, ppv);
+        return CArchiveDataObject::Create(this, hwnd, cidl, apidl, riid, ppv);
     }
     if (IsEqualIID(riid, IID_IExtractIconW) ||
         IsEqualIID(riid, IID_IExtractIconA)) {

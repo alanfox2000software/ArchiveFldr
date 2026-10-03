@@ -125,29 +125,42 @@
        same resource.res, and MSBuild's file trackers (CL.*.tlog,
        link.*.tlog, mt.*.tlog) collided in the same place: that is
        warning MSB8028, and it makes clean and incremental builds
-       unreliable. -->
+       unreliable.
+
+       TargetName is plain ArchiveFldrSetting on every platform. The
+       bitness tag the two builds used to carry (ArchiveFldrSetting.32
+       / .64) existed only because both landed in one folder; they do
+       not any more, and the suffix outlived its reason. It also
+       contradicted the program's own version resource, which says
+       OriginalFilename = ArchiveFldrSetting.exe, and made the name
+       the user sees depend on which platform produced the build.
+
+       The DLL keeps its tag: ArchiveFldr.32.dll and ArchiveFldr.64.dll
+       are both registered on a 64-bit machine, both are named in the
+       registry, and the settings program has to be able to talk about
+       one while running as the other. -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <OutDir>$(SolutionDir)$(Configuration)\x32\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x86\$(ProjectName)\</IntDir>
-    <TargetName>ArchiveFldrSetting.32</TargetName>
+    <TargetName>ArchiveFldrSetting</TargetName>
     <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <OutDir>$(SolutionDir)$(Configuration)\x32\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x86\$(ProjectName)\</IntDir>
-    <TargetName>ArchiveFldrSetting.32</TargetName>
+    <TargetName>ArchiveFldrSetting</TargetName>
     <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(SolutionDir)$(Configuration)\x64\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x64\$(ProjectName)\</IntDir>
-    <TargetName>ArchiveFldrSetting.64</TargetName>
+    <TargetName>ArchiveFldrSetting</TargetName>
     <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(SolutionDir)$(Configuration)\x64\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x64\$(ProjectName)\</IntDir>
-    <TargetName>ArchiveFldrSetting.64</TargetName>
+    <TargetName>ArchiveFldrSetting</TargetName>
     <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <!-- ═══════════════════════════════════════════════════

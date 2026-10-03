@@ -520,9 +520,13 @@ static std::wstring TypeNameFor(const wchar_t* ext)
 // upgraded keeps advertising a program that no longer opens anything.
 void CRegistry::UnregisterOpenWithApp()
 {
-    const wchar_t* names[] = { L"ArchiveFldrSetting.64.exe",
+    // Every name the settings program has ever shipped under. It is
+    // ArchiveFldrSetting.exe now that each platform builds into its own
+    // folder, but a machine upgraded from a build that wrote the tagged
+    // spellings still has those keys, and they have to go too.
+    const wchar_t* names[] = { L"ArchiveFldrSetting.exe",
+                               L"ArchiveFldrSetting.64.exe",
                                L"ArchiveFldrSetting.32.exe",
-                               L"ArchiveFldrSetting.exe",
                                kLegacyOpenHelperExe };
     for (const wchar_t* n : names)
         DelRegKey(HKEY_LOCAL_MACHINE,

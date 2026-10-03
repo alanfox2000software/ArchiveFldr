@@ -1458,13 +1458,26 @@ void CContextMenu::DoSettings()
                     L"ArchiveFldr", MB_ICONERROR | MB_OK);
         return;
     }
-    // Both builds land in the same folder, so the executable carries the
-    // same bitness tag the DLL does. Prefer the matching one; accept an
-    // untagged build too, for anyone who renames it.
-    std::wstring exeStr = dir + L"\\ArchiveFldrSetting." +
-                          ThirdParty::BitnessTag() + L".exe";
+    // ArchiveFldrSetting.exe, plainly named: each platform builds into
+    // its own folder (<Config>\x32, <Config>\x64), so the copy sitting
+    // beside this DLL is already the matching bitness and there is
+    // nothing for a suffix to disambiguate.
+    //
+    // The two tagged spellings are still accepted so that an install
+    // upgraded from a build that produced them keeps working — looked
+    // for after the plain name, never instead of it.
+    const std::wstring preferred = dir + L"\\ArchiveFldrSetting.exe";
+    std::wstring exeStr = preferred;
     if (!PathFileExistsW(exeStr.c_str()))
-        exeStr = dir + L"\\ArchiveFldrSetting.exe";
+    {
+        const std::wstring legacy[] = {
+            dir + L"\\ArchiveFldrSetting." + ThirdParty::BitnessTag() + L".exe",
+            dir + L"\\ArchiveFldrSetting.64.exe",
+            dir + L"\\ArchiveFldrSetting.32.exe",
+        };
+        for (const auto& candidate : legacy)
+            if (PathFileExistsW(candidate.c_str())) { exeStr = candidate; break; }
+    }
     const wchar_t* exe = exeStr.c_str();
 
     if (!PathFileExistsW(exe))
@@ -1473,7 +1486,7 @@ void CContextMenu::DoSettings()
             (std::wstring(
                 L"The settings program is missing. It is built alongside "
                 L"ArchiveFldr and belongs in the same folder:\n\n") +
-             exeStr).c_str(),
+             preferred).c_str(),
             L"ArchiveFldr", MB_ICONWARNING | MB_OK);
         return;
     }

@@ -93,9 +93,17 @@ Outputs land in `<Configuration>\x32` (Win32) or `<Configuration>\x64` (x64):
 |---|---|---|
 | `ArchiveFldr.64.dll` | the shell extension, for 64-bit hosts | x64 |
 | `ArchiveFldr.32.dll` | the shell extension, for 32-bit hosts | Win32 |
-| `ArchiveFldrSetting.64.exe` / `ArchiveFldrSetting.32.exe` | the settings window, started by "ArchiveFldr settings..." | x64 / Win32 |
+| `ArchiveFldrSetting.exe` | the settings window, started by "ArchiveFldr settings..." | x64 / Win32 |
 | `Lang\*.txt` | the language files, copied from `Lang\` | both |
 | `thirdparty\**\*.dll` | the codec engines, copied from `thirdparty\` | both |
+
+The settings program is named the same in both folders — `x32` and `x64`
+each hold one `ArchiveFldrSetting.exe`, matching the bitness of the DLL
+beside it. (Earlier builds tagged it `ArchiveFldrSetting.64.exe` /
+`.32.exe`, from when both landed in one folder. Nothing looks for those
+names any more except the upgrade paths that clean them up.) The DLLs
+keep their tags, because both are registered on a 64-bit machine and the
+registry has to name each one.
 
 A Win32 build writes only `Release\x32` (or `Debug\x32`). An x64 build
 writes only `Release\x64` (or `Debug\x64`) — it does not also build the

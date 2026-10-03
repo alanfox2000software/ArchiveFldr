@@ -627,6 +627,53 @@ std::wstring CContextMenu::AskForFolder(const wchar_t* title)
     return buf;
 }
 
+// The Desktop exposes an IShellBrowser too, but it is not a reusable folder
+// window. Its BrowseObject implementation can accept an absolute PIDL and do
+// nothing, which prevents the new-window fallback from ever running.
+static bool IsDesktopBrowser(IShellBrowser* psb)
+{
+    if (!psb) return false;
+
+    HWND browserWindow = nullptr;
+    if (SUCCEEDED(psb->GetWindow(&browserWindow)) && browserWindow)
+    {
+        HWND root = GetAncestor(browserWindow, GA_ROOT);
+        wchar_t cls[64] = {};
+        if (root && GetClassNameW(root, cls, ARRAYSIZE(cls)) &&
+            (_wcsicmp(cls, L"Progman") == 0 ||
+             _wcsicmp(cls, L"WorkerW") == 0))
+            return true;
+    }
+
+    // Window ownership differs across Windows releases, so also compare the
+    // active view's folder with the Desktop PIDL.
+    IShellView* view = nullptr;
+    if (FAILED(psb->QueryActiveShellView(&view)) || !view) return false;
+
+    IFolderView* folderView = nullptr;
+    HRESULT hr = view->QueryInterface(IID_IFolderView, (void**)&folderView);
+    view->Release();
+    if (FAILED(hr) || !folderView) return false;
+
+    IPersistFolder2* folder = nullptr;
+    hr = folderView->GetFolder(IID_IPersistFolder2, (void**)&folder);
+    folderView->Release();
+    if (FAILED(hr) || !folder) return false;
+
+    LPITEMIDLIST current = nullptr;
+    hr = folder->GetCurFolder(&current);
+    folder->Release();
+    if (FAILED(hr) || !current) return false;
+
+    LPITEMIDLIST desktop = nullptr;
+    const bool isDesktop =
+        SUCCEEDED(SHGetSpecialFolderLocation(nullptr, CSIDL_DESKTOP, &desktop)) &&
+        desktop && ILIsEqual(current, desktop);
+    ILFree(current);
+    if (desktop) ILFree(desktop);
+    return isDesktop;
+}
+
 // Ask one site object for the browser that hosts this view and navigate it.
 static bool BrowseWithSite(IUnknown* punk, LPCITEMIDLIST pidlRel,
                            LPCITEMIDLIST pidlAbs)
@@ -641,15 +688,26 @@ static bool BrowseWithSite(IUnknown* punk, LPCITEMIDLIST pidlRel,
                                          (void**)&psb)) || !psb)
             continue;
 
+        // The Desktop's browser reports success without opening a folder.
+        // Decline it so the caller reaches ShellBrowseToFolder and creates a
+        // real Explorer window instead.
+        if (IsDesktopBrowser(psb))
+        {
+            psb->Release();
+            continue;
+        }
+
         // pidlRel is null when the caller only has an absolute PIDL. Handing
         // one to SBSP_RELATIVE asks the browser to append it to the folder
         // it is already showing, which navigates somewhere that does not
-        // exist — and can report success doing it.
+        // exist — and can report success doing it. Explicitly request the
+        // current browser as well: SBSP_DEFBROWSER is zero and allowed the
+        // host to accept the request without navigating this window.
         HRESULT hr = E_FAIL;
         if (pidlRel)
-            hr = psb->BrowseObject(pidlRel, SBSP_RELATIVE | SBSP_DEFBROWSER);
+            hr = psb->BrowseObject(pidlRel, SBSP_RELATIVE | SBSP_SAMEBROWSER);
         if (FAILED(hr) && pidlAbs)      // not the browser's current folder
-            hr = psb->BrowseObject(pidlAbs, SBSP_ABSOLUTE | SBSP_DEFBROWSER);
+            hr = psb->BrowseObject(pidlAbs, SBSP_ABSOLUTE | SBSP_SAMEBROWSER);
         psb->Release();
         if (SUCCEEDED(hr)) return true;
     }
@@ -676,13 +734,15 @@ static bool BrowseWithWindow(HWND hwnd, LPCITEMIDLIST pidlRel,
             if (_wcsicmp(cls, L"SHELLDLL_DefView") != 0) continue;
 
             auto* psb = (IShellBrowser*)SendMessageW(c, kGetIShellBrowser, 0, 0);
-            if (!psb) continue;
+            if (!psb || IsDesktopBrowser(psb)) continue;
 
             HRESULT hr = E_FAIL;
             if (pidlRel)
-                hr = psb->BrowseObject(pidlRel, SBSP_RELATIVE | SBSP_DEFBROWSER);
+                hr = psb->BrowseObject(pidlRel,
+                                       SBSP_RELATIVE | SBSP_SAMEBROWSER);
             if (FAILED(hr) && pidlAbs)
-                hr = psb->BrowseObject(pidlAbs, SBSP_ABSOLUTE | SBSP_DEFBROWSER);
+                hr = psb->BrowseObject(pidlAbs,
+                                       SBSP_ABSOLUTE | SBSP_SAMEBROWSER);
             if (SUCCEEDED(hr)) return true;
         }
     }

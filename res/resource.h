@@ -148,6 +148,12 @@
 #define IDC_CHK_ADD_ENCNAMES        1920
 #define IDC_LBL_ADD_VOLUME          1921
 #define IDC_EDIT_ADD_VOLUME         1922
+#define IDC_LBL_ADD_DICTIONARY      1923
+#define IDC_CMB_ADD_DICTIONARY      1924
+#define IDC_LBL_ADD_WORD            1925
+#define IDC_CMB_ADD_WORD            1926
+#define IDC_LBL_ADD_SOLIDBLOCK      1927
+#define IDC_CMB_ADD_SOLIDBLOCK      1928
 
 // Next default values for new objects
 //
@@ -155,7 +161,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        2000
 #define _APS_NEXT_COMMAND_VALUE         32771
-#define _APS_NEXT_CONTROL_VALUE         1923
+#define _APS_NEXT_CONTROL_VALUE         1929
 #define _APS_NEXT_SYMED_VALUE           110
 #endif
 #endif

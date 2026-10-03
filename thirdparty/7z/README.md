@@ -41,8 +41,9 @@ encodes/decodes both the 7-Zip ZS method (`04F71101`) and official ZSTD coder
 ID (`04015D`), including concatenated/skippable frames. ZIP creation uses
 standardized ZSTD method 93.
 
-The same adapter publishes Brotli (`04F71102`), LZ4 (`04F71104`) and LZ5
-(`04F71105`) encoders and decoders from these raw runtime libraries:
+The same adapter publishes Brotli (`04F71102`), LZ4 (`04F71104`), LZ5
+(`04F71105`) and Lizard (`04F71106`) encoders and decoders from these raw
+runtime libraries:
 
 ```
 thirdparty\brotli\32\libbrotlicommon.dll
@@ -55,11 +56,16 @@ thirdparty\brunsli\liblz4.32.dll
 thirdparty\brunsli\liblz4.64.dll
 thirdparty\brunsli\liblz5.32.dll
 thirdparty\brunsli\liblz5.64.dll
+thirdparty\lizard\liblizard.32.dll
+thirdparty\lizard\liblizard.64.dll
 ```
 
 Only the matching process bitness is loaded. Dedicated `thirdparty\lz4` and
 `thirdparty\lz5` folders remain accepted; `thirdparty\brunsli` is their
-shared fallback location.
+shared fallback location. Lizard creation and extraction support all four
+families: fastLZ4 (levels 10–19), LIZv1 (20–29), fastLZ4 + Huffman (30–39),
+and LIZv1 + Huffman (40–49). The same choices are available for standalone
+`.liz` streams and Lizard-compressed 7z archives.
 
 ArchiveFldr additionally discovers genuine 7-Zip codec plug-ins from a
 `Codecs` folder beside the selected engine. This remains useful for other
@@ -124,10 +130,12 @@ or dragging items out, and creating formats for which the selected `7z.dll` publ
 writer. An archive opened as an Explorer folder is intentionally read-only:
 Paste, Ctrl+V, and dragging files into it are not accepted.
 
-The Add to Archive dialog can split a completed archive at an exact byte
-count. Parts are named `archive.ext.001`, `.002`, and so on; opening `.001`
-uses the extension before that suffix to select the underlying handler and
-supplies sibling volumes through 7-Zip's volume callback.
+The Add to Archive dialog exposes Dictionary size and Word size (`d` and
+`fb` writer properties), plus a sized Solid Block setting (`s`) for solid 7z
+archives. It can also split a completed archive at an exact byte count. Parts
+are named `archive.ext.001`, `.002`, and so on; opening `.001` uses the
+extension before that suffix to select the underlying handler and supplies
+sibling volumes through 7-Zip's volume callback.
 
 Per-item Delete and Rename are not currently offered. Capabilities are read
 from the loaded handler, so commands that its particular `7z.dll` cannot

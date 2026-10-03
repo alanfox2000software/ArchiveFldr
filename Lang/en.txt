@@ -146,6 +146,9 @@
 1918 = "Encryption method:"
 1920 = "Encrypt file names (7z)"
 1921 = "Split to volumes, bytes:"
+1923 = "Dictionary size:"
+1925 = "Word size:"
+1927 = "Solid block size:"
 
 ; Caption when the number of files is known; %s is the count.
 2060 = "Add to Archive — %s file(s)"

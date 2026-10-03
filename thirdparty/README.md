@@ -117,7 +117,7 @@ drop the DLL at any one of them and retry.
 | `brotli` | `thirdparty\brotli\<bits>\` | common + dec + enc DLLs | `.br`; Brotli in 7z | compress + extract + test |
 | `lz4` | `thirdparty\lz4\` or `thirdparty\brunsli\` | `liblz4.<bits>.dll` | `.lz4` `.tlz4`; LZ4 in 7z | compress + extract + test |
 | `lz5` | `thirdparty\lz5\` or `thirdparty\brunsli\` | `liblz5.<bits>.dll` | `.lz5`; LZ5 in 7z | compress + extract + test |
-| `lizard` | `thirdparty\lizard\` | `liblizard.<bits>.dll` | `.liz` | extract + test |
+| `lizard` | `thirdparty\lizard\` | `liblizard.<bits>.dll` | `.liz`; Lizard in 7z | compress + extract + test |
 | `WimLib` | `thirdparty\WimLib\` | `libwim-15.<bits>.dll` | `.wim` `.swm` `.esd` | extract + verify |
 
 Registry hints: `7z` → `HKLM\SOFTWARE\7-Zip\Path`, `Unrar` →
@@ -132,11 +132,16 @@ keeps working.
 **Brotli, LZ4, LZ5, Lizard, Zstandard** are single-stream codecs, not
 archive formats: the file holds one compressed stream and no file names.
 ArchiveFldr shows exactly one entry, named by removing the suffix —
-`notes.txt.zst` → `notes.txt`, `backup.tlz4` → `backup.tar`. Only zstd
-records the original size in its header, so the other four show their size
-only after extraction. Zstandard, Brotli, LZ4 and LZ5 streams can be created
-from one selected ordinary file; their encoders are additionally published
-to 7z.dll for those methods inside 7z archives (and ZSTD in ZIP).
+`notes.txt.zst` → `notes.txt`, `backup.tlz4` → `backup.tar`. Zstandard and
+Lizard streams created by ArchiveFldr record the original size in their
+frame; streams without that field show their size only after extraction.
+Zstandard, Brotli, LZ4, LZ5 and Lizard streams can be
+created from one selected ordinary file; their encoders are additionally
+published to 7z.dll for those methods inside 7z archives (and ZSTD in ZIP).
+Lizard offers all four algorithm families through its standard level bands:
+fastLZ4 (10–19), LIZv1 (20–29), fastLZ4 + Huffman (30–39), and LIZv1 +
+Huffman (40–49). The Add to Archive Dictionary size selects a Lizard frame
+block from 128 KB through 256 MB.
 
 **LZ5 and Lizard** must export the *frame* API (`LZ5F_…` / `LizardF_…`).
 A build that exports only the raw block functions cannot read framed
@@ -157,8 +162,9 @@ every other handler is tried as well. ArchiveFldr publishes the raw library
 under `thirdparty\zstd\` as 7-Zip ZSTD encoder/decoder methods `04F71101`
 and `04015D`, so the same `libzstd.<bits>.dll` supports both `.zst` files,
 ZSTD-compressed 7z archives, and ZIP method 93. It also publishes the native
-Brotli/LZ4/LZ5 frame libraries as 7z coders, and loads additional plug-ins
-from the `Codecs` folder adjacent to the selected engine.
+Brotli/LZ4/LZ5/Lizard frame libraries as 7z coders (Lizard method
+`04F71106`), and loads additional plug-ins from the `Codecs` folder adjacent
+to the selected engine.
 
 **WimLib** needs version **1.13.0 or newer** — in other words the
 `libwim-15` builds. `struct wimlib_dir_entry` grew fields in 1.9.1 and

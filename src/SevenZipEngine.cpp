@@ -471,7 +471,30 @@ private:
     int  m_level = 5;
 };
 
-enum class NativeCodecKind { None, Zstd, Brotli, Lz4, Lz5 };
+enum class NativeCodecKind { None, Zstd, Brotli, Lz4, Lz5, Lizard };
+
+// Binary layout from lizard_frame.h.  Keep this local instead of including
+// a deployment-specific SDK: ArchiveFldr loads the requested DLL at runtime.
+struct NativeLizardFrameInfo
+{
+    int blockSizeID;
+    int blockMode;
+    int contentChecksumFlag;
+    int frameType;
+    unsigned long long contentSize;
+    unsigned reserved[2];
+};
+struct NativeLizardPreferences
+{
+    NativeLizardFrameInfo frameInfo;
+    int compressionLevel;
+    unsigned autoFlush;
+    unsigned reserved[4];
+};
+static_assert(sizeof(NativeLizardFrameInfo) == 32,
+              "Lizard frame-info ABI layout changed");
+static_assert(sizeof(NativeLizardPreferences) == 56,
+              "Lizard preferences ABI layout changed");
 
 struct NativeBrotliApi
 {
@@ -555,11 +578,11 @@ struct NativeLzFrameApi
     unsigned (__cdecl* isError)(size_t) = nullptr;
 };
 
-NativeLzFrameApi g_nativeLz4, g_nativeLz5;
-std::once_flag g_nativeLz4Once, g_nativeLz5Once;
+NativeLzFrameApi g_nativeLz4, g_nativeLz5, g_nativeLizard;
+std::once_flag g_nativeLz4Once, g_nativeLz5Once, g_nativeLizardOnce;
 
 void InitNativeLzFrame(NativeLzFrameApi& api, const wchar_t* component,
-                       const char* prefix)
+                       const char* prefix, const char* fallbackPrefix = nullptr)
 {
     api.module = ThirdParty::LoadComponent(component, &api.path);
     if (!api.module) return;
@@ -568,6 +591,12 @@ void InitNativeLzFrame(NativeLzFrameApi& api, const wchar_t* component,
         const std::string name = std::string(prefix) + suffix;
         dst = reinterpret_cast<std::decay_t<decltype(dst)>>(
             GetProcAddress(api.module, name.c_str()));
+        if (!dst && fallbackPrefix)
+        {
+            const std::string fallback = std::string(fallbackPrefix) + suffix;
+            dst = reinterpret_cast<std::decay_t<decltype(dst)>>(
+                GetProcAddress(api.module, fallback.c_str()));
+        }
     };
     bind(api.createDctx, "createDecompressionContext");
     bind(api.freeDctx, "freeDecompressionContext");
@@ -596,6 +625,12 @@ NativeLzFrameApi* GetNativeLzFrame(NativeCodecKind kind, bool encoder)
             InitNativeLzFrame(g_nativeLz5, L"lz5", "LZ5F_"); });
         api = &g_nativeLz5;
     }
+    else if (kind == NativeCodecKind::Lizard)
+    {
+        std::call_once(g_nativeLizardOnce, [] {
+            InitNativeLzFrame(g_nativeLizard, L"lizard", "LizardF_", "LZ5F_"); });
+        api = &g_nativeLizard;
+    }
     if (!api || !api->isError) return nullptr;
     if (encoder)
         return api->createCctx && api->freeCctx && api->compressBegin &&
@@ -612,7 +647,8 @@ class CNativeAuxCoder final :
 {
 public:
     CNativeAuxCoder(NativeCodecKind kind, bool encode)
-        : m_kind(kind), m_encode(encode) {}
+        : m_kind(kind), m_encode(encode),
+          m_level(kind == NativeCodecKind::Lizard ? 15 : 5) {}
 
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override
     {
@@ -645,11 +681,29 @@ public:
     {
         if ((!ids || !values) && count) return E_INVALIDARG;
         for (UINT32 i = 0; i < count; ++i)
+        {
             if (ids[i] == 15 && values[i].vt == VT_UI4)
                 m_level = (int)values[i].ulVal;
-        if (m_level < 1) m_level = 1;
-        if (m_level > (m_kind == NativeCodecKind::Brotli ? 11 : 16))
-            m_level = m_kind == NativeCodecKind::Brotli ? 11 : 16;
+            else if (ids[i] == 1 || ids[i] == 4)
+            {
+                // 7-Zip uses DictionarySize (1) for -md and some external
+                // handlers forward the same frame choice as BlockSize (4).
+                if (values[i].vt == VT_UI4) m_dictionaryBytes = values[i].ulVal;
+                else if (values[i].vt == VT_UI8)
+                    m_dictionaryBytes = values[i].uhVal.QuadPart;
+            }
+        }
+        if (m_kind == NativeCodecKind::Lizard)
+        {
+            if (m_level < 10) m_level = 10;
+            if (m_level > 49) m_level = 49;
+        }
+        else
+        {
+            if (m_level < 1) m_level = 1;
+            if (m_level > (m_kind == NativeCodecKind::Brotli ? 11 : 16))
+                m_level = m_kind == NativeCodecKind::Brotli ? 11 : 16;
+        }
         return S_OK;
     }
 
@@ -672,6 +726,7 @@ public:
         }
         else if (m_kind == NativeCodecKind::Lz4) props[1] = 10;
         else if (m_kind == NativeCodecKind::Lz5) props[1] = 5;
+        else if (m_kind == NativeCodecKind::Lizard) size = 3;
         UINT32 written = 0;
         const HRESULT hr = out->Write(props, size, &written);
         return FAILED(hr) ? hr : (written == size ? S_OK : E_FAIL);
@@ -889,6 +944,18 @@ private:
         return S_OK;
     }
 
+    static int LizardBlockSizeId(UINT64 bytes)
+    {
+        if (!bytes) return 0; // library default
+        if (bytes <= (128ull << 10)) return 1;
+        if (bytes <= (256ull << 10)) return 2;
+        if (bytes <= (1ull << 20)) return 3;
+        if (bytes <= (4ull << 20)) return 4;
+        if (bytes <= (16ull << 20)) return 5;
+        if (bytes <= (64ull << 20)) return 6;
+        return 7; // 256 MB, the largest Lizard frame block
+    }
+
     HRESULT EncodeLz(ISequentialInStream7z* in,
                       ISequentialOutStream7z* out,
                       const UINT64* inSize,
@@ -899,13 +966,26 @@ private:
         void* ctx = nullptr;
         size_t rc = api->createCctx(&ctx, 100);
         if (api->isError(rc) || !ctx) return E_FAIL;
+
+        NativeLizardPreferences lizardPrefs{};
+        const void* preferences = nullptr;
+        if (m_kind == NativeCodecKind::Lizard)
+        {
+            lizardPrefs.frameInfo.blockSizeID =
+                LizardBlockSizeId(m_dictionaryBytes);
+            lizardPrefs.frameInfo.contentSize = inSize ? *inSize : 0;
+            lizardPrefs.compressionLevel = m_level;
+            preferences = &lizardPrefs;
+        }
+
         constexpr size_t kBuf = 256 * 1024;
-        const size_t bound = api->compressBound(kBuf, nullptr);
+        const size_t bound = api->compressBound(kBuf, preferences);
+        if (api->isError(bound)) { api->freeCctx(ctx); return E_FAIL; }
         std::vector<BYTE> input(kBuf), output(std::max(kBuf * 2, bound));
         UINT64 totalIn = 0, totalOut = 0;
         HRESULT result = S_OK;
 
-        size_t made = api->compressBegin(ctx, output.data(), output.size(), nullptr);
+        size_t made = api->compressBegin(ctx, output.data(), output.size(), preferences);
         if (api->isError(made)) result = E_FAIL;
         else { result = WriteAll(out, output.data(), made); totalOut += made; }
         while (SUCCEEDED(result))
@@ -941,6 +1021,7 @@ private:
     NativeCodecKind m_kind;
     bool m_encode;
     int m_level = 5;
+    UINT64 m_dictionaryBytes = 0;
 };
 
 struct ExternalCodecMethod
@@ -1007,6 +1088,9 @@ public:
         add(0x04F71105ULL, NativeCodecKind::Lz5,
             GetNativeLzFrame(NativeCodecKind::Lz5, false) != nullptr,
             GetNativeLzFrame(NativeCodecKind::Lz5, true) != nullptr);
+        add(0x04F71106ULL, NativeCodecKind::Lizard,
+            GetNativeLzFrame(NativeCodecKind::Lizard, false) != nullptr,
+            GetNativeLzFrame(NativeCodecKind::Lizard, true) != nullptr);
         return !m_methods.empty();
     }
 
@@ -1037,7 +1121,8 @@ public:
             {
                 const wchar_t* name = method.nativeKind == NativeCodecKind::Zstd ? L"ZSTD" :
                     method.nativeKind == NativeCodecKind::Brotli ? L"BROTLI" :
-                    method.nativeKind == NativeCodecKind::Lz4 ? L"LZ4" : L"LZ5";
+                    method.nativeKind == NativeCodecKind::Lz4 ? L"LZ4" :
+                    method.nativeKind == NativeCodecKind::Lz5 ? L"LZ5" : L"LIZARD";
                 value->bstrVal = SysAllocString(name);
                 if (!value->bstrVal) return E_OUTOFMEMORY;
                 value->vt = VT_BSTR;
@@ -2690,13 +2775,16 @@ bool C7zArchiveEngine::ExtractIndices(const std::vector<UINT32>& indices,
                 m_lastError += L"\nNative LZ4 library: " + g_nativeLz4.path;
             if (GetNativeLzFrame(NativeCodecKind::Lz5, false))
                 m_lastError += L"\nNative LZ5 library: " + g_nativeLz5.path;
+            if (GetNativeLzFrame(NativeCodecKind::Lizard, false))
+                m_lastError += L"\nNative Lizard library: " + g_nativeLizard.path;
             if (!g_externalCodecsFolder.empty())
                 m_lastError += L"\nCodecs folder: " + g_externalCodecsFolder;
             else if (!NativeZstdAvailable() && !NativeBrotliDecoderAvailable() &&
                      !GetNativeLzFrame(NativeCodecKind::Lz4, false) &&
-                     !GetNativeLzFrame(NativeCodecKind::Lz5, false))
+                     !GetNativeLzFrame(NativeCodecKind::Lz5, false) &&
+                     !GetNativeLzFrame(NativeCodecKind::Lizard, false))
                 m_lastError +=
-                    L"\nNo compatible native ZSTD/Brotli/LZ4/LZ5 library "
+                    L"\nNo compatible native ZSTD/Brotli/LZ4/LZ5/Lizard library "
                     L"or adjacent Codecs folder was found.";
         }
         else
@@ -3172,6 +3260,25 @@ private:
     std::wstring m_readPassword;         // for decrypting those
 };
 
+bool IsLizardVariant(const std::wstring& method)
+{
+    return _wcsicmp(method.c_str(), L"Lizard, fastLZ4") == 0 ||
+           _wcsicmp(method.c_str(), L"Lizard, LIZv1") == 0 ||
+           _wcsicmp(method.c_str(), L"Lizard, fastLZ4 + Huffman") == 0 ||
+           _wcsicmp(method.c_str(), L"Lizard, LIZv1 + Huffman") == 0;
+}
+
+int LizardLevelFor(const std::wstring& method, int uiLevel)
+{
+    int base = 10;
+    if (_wcsicmp(method.c_str(), L"Lizard, LIZv1") == 0) base = 20;
+    else if (_wcsicmp(method.c_str(), L"Lizard, fastLZ4 + Huffman") == 0) base = 30;
+    else if (_wcsicmp(method.c_str(), L"Lizard, LIZv1 + Huffman") == 0) base = 40;
+    if (uiLevel < 0) uiLevel = 0;
+    if (uiLevel > 9) uiLevel = 9;
+    return base + uiLevel;
+}
+
 // ── Apply Options to a writer ────────────────────────────
 // Shared by Compress (new archive) and C7zArchiveEngine::AddItems
 // (update): one place decides which property names each format gets,
@@ -3209,22 +3316,35 @@ HRESULT ApplyWriterProps(IOutArchive7z* outArc,
     const bool is7z  = _wcsicmp(handlerName.c_str(), L"7z")  == 0;
     const bool isZip = _wcsicmp(handlerName.c_str(), L"zip") == 0;
 
-    int level = opt.level;
-    if (level < 0) level = 0;
-    if (level > 9) level = 9;
+    const bool lizardVariant = IsLizardVariant(opt.method);
+    int level = lizardVariant ? LizardLevelFor(opt.method, opt.level) : opt.level;
+    if (!lizardVariant)
+    {
+        if (level < 0) level = 0;
+        if (level > 9) level = 9;
+    }
     addUInt(L"x", (UINT32)level);
 
     // The compression method, under the name each format uses for it:
-    // -mm=Deflate for zip, -m0=LZMA2 for 7z.
+    // -mm=Deflate for zip, -m0=LZMA2 for 7z. All four Lizard choices
+    // share one external coder; their 10..49 level band chooses the variant.
     if (!opt.method.empty())
     {
-        if (isZip)      addStr(L"m", opt.method);
-        else if (is7z)  addStr(L"0", opt.method);
+        const std::wstring method = lizardVariant ? L"LIZARD" : opt.method;
+        if (isZip)      addStr(L"m", method);
+        else if (is7z)  addStr(L"0", method);
     }
 
     if (is7z)
     {
-        addBool(L"s", opt.solid);
+        if (opt.dictionaryBytes)
+            addUInt(L"d", (UINT32)std::min<uint64_t>(
+                opt.dictionaryBytes, std::numeric_limits<UINT32>::max()));
+        if (opt.wordBytes) addUInt(L"fb", opt.wordBytes);
+        if (opt.solid && opt.solidBlockBytes)
+            addStr(L"s", std::to_wstring(opt.solidBlockBytes));
+        else
+            addBool(L"s", opt.solid);
         if (!opt.password.empty() && opt.encryptNames)
             addBool(L"he", true);
     }
@@ -3266,6 +3386,7 @@ NativeCodecKind NativeKindForFormat(const std::wstring& format)
     if (_wcsicmp(format.c_str(), L"brotli") == 0) return NativeCodecKind::Brotli;
     if (_wcsicmp(format.c_str(), L"lz4") == 0) return NativeCodecKind::Lz4;
     if (_wcsicmp(format.c_str(), L"lz5") == 0) return NativeCodecKind::Lz5;
+    if (_wcsicmp(format.c_str(), L"lizard") == 0) return NativeCodecKind::Lizard;
     return NativeCodecKind::None;
 }
 
@@ -3274,7 +3395,8 @@ bool NativeFormatWritable(const std::wstring& format)
     const NativeCodecKind kind = NativeKindForFormat(format);
     if (kind == NativeCodecKind::Zstd) return NativeZstdEncoderAvailable();
     if (kind == NativeCodecKind::Brotli) return NativeBrotliEncoderAvailable();
-    if (kind == NativeCodecKind::Lz4 || kind == NativeCodecKind::Lz5)
+    if (kind == NativeCodecKind::Lz4 || kind == NativeCodecKind::Lz5 ||
+        kind == NativeCodecKind::Lizard)
         return GetNativeLzFrame(kind, true) != nullptr;
     return false;
 }
@@ -3416,14 +3538,25 @@ bool CompressNativeStream(const std::wstring& outPath,
     ComPtr<ICompressCoder7z> coder;
     coder.Attach(coderRaw);
 
+    HRESULT propsHr = S_OK;
     ComPtr<ICompressSetCoderProperties7z> props;
     if (coder->QueryInterface(IID_ICompressSetCoderProperties7z,
                               (void**)props.GetAddressOf()) == S_OK && props)
     {
-        const PROPID id = 15;
-        PROPVARIANT value; PropVariantInit(&value);
-        value.vt = VT_UI4; value.ulVal = (ULONG)opt.level;
-        props->SetCoderProperties(&id, &value, 1);
+        PROPID ids[2] = { 15, 1 }; // level, dictionary/block size
+        PROPVARIANT values[2];
+        PropVariantInit(&values[0]); PropVariantInit(&values[1]);
+        values[0].vt = VT_UI4;
+        values[0].ulVal = (ULONG)(kind == NativeCodecKind::Lizard
+            ? LizardLevelFor(opt.method, opt.level) : opt.level);
+        UINT32 count = 1;
+        if (kind == NativeCodecKind::Lizard && opt.dictionaryBytes)
+        {
+            values[1].vt = VT_UI8;
+            values[1].uhVal.QuadPart = opt.dictionaryBytes;
+            count = 2;
+        }
+        propsHr = props->SetCoderProperties(ids, values, count);
     }
 
     class CProgress final : public ICompressProgressInfo7z
@@ -3452,8 +3585,8 @@ bool CompressNativeStream(const std::wstring& outPath,
     ComPtr<ICompressProgressInfo7z> progressObj;
     if (progress) progressObj.Attach(new CProgress(progress));
     const UINT64 size = items[0].size;
-    const HRESULT hr = coder->Code(in.Get(), out.Get(), &size, nullptr,
-                                   progressObj.Get());
+    const HRESULT hr = FAILED(propsHr) ? propsHr :
+        coder->Code(in.Get(), out.Get(), &size, nullptr, progressObj.Get());
     outRaw->CloseFile();
     out.Reset();
     if (hr != S_OK)
@@ -3471,7 +3604,8 @@ bool IsAvailable()
            NativeZstdEncoderAvailable() ||
            NativeBrotliEncoderAvailable() ||
            GetNativeLzFrame(NativeCodecKind::Lz4, true) ||
-           GetNativeLzFrame(NativeCodecKind::Lz5, true);
+           GetNativeLzFrame(NativeCodecKind::Lz5, true) ||
+           GetNativeLzFrame(NativeCodecKind::Lizard, true);
 }
 
 std::vector<std::wstring> WritableFormats()
@@ -3479,7 +3613,7 @@ std::vector<std::wstring> WritableFormats()
     std::vector<std::wstring> out;
     for (const auto& h : WritableHandlers())
         if (!h.name.empty()) out.push_back(h.name);
-    for (const wchar_t* format : { L"zstd", L"brotli", L"lz4", L"lz5" })
+    for (const wchar_t* format : { L"zstd", L"brotli", L"lz4", L"lz5", L"lizard" })
         if (NativeFormatWritable(format) &&
             std::none_of(out.begin(), out.end(), [&](const std::wstring& f) {
                 return _wcsicmp(f.c_str(), format) == 0; }))
@@ -3499,10 +3633,12 @@ bool FormatIsWritable(const std::wstring& format)
 std::vector<std::wstring> MethodsFor(const std::wstring& format)
 {
     // First entry is the format's own default. Native runtime adapters
-    // publish the additional ZSTD/Brotli/LZ4/LZ5 coder names to 7z.dll;
-    // an explicitly rejected selection is reported by Compress().
+    // publish the additional ZSTD/Brotli/LZ4/LZ5/Lizard coder names to
+    // 7z.dll; an explicitly rejected selection is reported by Compress().
     if (_wcsicmp(format.c_str(), L"7z") == 0)
         return { L"LZMA2", L"ZSTD", L"BROTLI", L"LZ4", L"LZ5",
+                 L"Lizard, fastLZ4", L"Lizard, LIZv1",
+                 L"Lizard, fastLZ4 + Huffman", L"Lizard, LIZv1 + Huffman",
                  L"LZMA", L"PPMd", L"BZip2", L"Copy" };
     if (_wcsicmp(format.c_str(), L"zip") == 0)
         return { L"Deflate", L"ZSTD", L"Deflate64", L"BZip2", L"LZMA",
@@ -3514,6 +3650,9 @@ std::vector<std::wstring> MethodsFor(const std::wstring& format)
     if (_wcsicmp(format.c_str(), L"brotli") == 0)return { L"Brotli" };
     if (_wcsicmp(format.c_str(), L"lz4") == 0)   return { L"LZ4" };
     if (_wcsicmp(format.c_str(), L"lz5") == 0)   return { L"LZ5" };
+    if (_wcsicmp(format.c_str(), L"lizard") == 0)
+        return { L"Lizard, fastLZ4", L"Lizard, LIZv1",
+                 L"Lizard, fastLZ4 + Huffman", L"Lizard, LIZv1 + Huffman" };
     // tar and wim have exactly one way to store data.
     return {};
 }
@@ -3576,6 +3715,7 @@ static const ExtAlias kExtAliases[] =
     { L"br",    L"brotli"},
     { L"lz4",   L"lz4"   },
     { L"lz5",   L"lz5"   },
+    { L"liz",   L"lizard"},
 };
 
 std::wstring FormatForTargetName(const std::wstring& fileName)
@@ -3601,6 +3741,7 @@ std::wstring DefaultExtensionFor(const std::wstring& format)
 {
     if (_wcsicmp(format.c_str(), L"zstd") == 0) return L".zst";
     if (_wcsicmp(format.c_str(), L"brotli") == 0) return L".br";
+    if (_wcsicmp(format.c_str(), L"lizard") == 0) return L".liz";
     for (const auto& h : WritableHandlers())
         if (_wcsicmp(h.name.c_str(), format.c_str()) == 0 && !h.exts.empty())
             return L"." + h.exts.front();

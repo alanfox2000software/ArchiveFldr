@@ -46,6 +46,29 @@ const ThreadDef kThreads[] = {
     { L"8",    8 },
 };
 
+struct SizeDef { const wchar_t* label; uint64_t value; };
+const SizeDef kDictionaries[] = {
+    { L"Auto",   0 },
+    { L"128 KB", 128ull << 10 },
+    { L"256 KB", 256ull << 10 },
+    { L"1 MB",   1ull << 20 },
+    { L"4 MB",   4ull << 20 },
+    { L"16 MB", 16ull << 20 },
+    { L"64 MB", 64ull << 20 },
+    { L"256 MB", 256ull << 20 },
+};
+const SizeDef kWordSizes[] = {
+    { L"Auto", 0 }, { L"8", 8 }, { L"16", 16 }, { L"32", 32 },
+    { L"64", 64 }, { L"128", 128 }, { L"256", 256 }, { L"273", 273 },
+};
+const SizeDef kSolidBlocks[] = {
+    { L"Auto", 0 },
+    { L"1 MB", 1ull << 20 }, { L"4 MB", 4ull << 20 },
+    { L"16 MB", 16ull << 20 }, { L"64 MB", 64ull << 20 },
+    { L"256 MB", 256ull << 20 }, { L"1 GB", 1ull << 30 },
+    { L"4 GB", 4ull << 30 },
+};
+
 struct State
 {
     const AddToArchiveDialog::Request* rq;
@@ -84,6 +107,36 @@ void FillCombo(HWND hDlg, int id, const std::vector<std::wstring>& rows,
     EnableWindow(h, !rows.empty());
 }
 
+template <size_t N>
+void FillSizeCombo(HWND hDlg, int id, const SizeDef (&defs)[N])
+{
+    std::vector<std::wstring> rows;
+    rows.reserve(N);
+    for (const auto& d : defs) rows.push_back(d.label);
+    FillCombo(hDlg, id, rows, 0);
+}
+
+template <size_t N>
+uint64_t SelectedSize(HWND hDlg, int id, const SizeDef (&defs)[N])
+{
+    const int sel = (int)SendDlgItemMessageW(hDlg, id, CB_GETCURSEL, 0, 0);
+    return sel >= 0 && sel < (int)N ? defs[sel].value : 0;
+}
+
+void EnablePair(HWND hDlg, int labelId, int controlId, bool enable)
+{
+    EnableWindow(GetDlgItem(hDlg, labelId), enable);
+    EnableWindow(GetDlgItem(hDlg, controlId), enable);
+}
+
+void SyncSolidBlock(HWND hDlg, bool is7z)
+{
+    const bool enabled = is7z &&
+        IsDlgButtonChecked(hDlg, IDC_CHK_ADD_SOLID) == BST_CHECKED;
+    EnablePair(hDlg, IDC_LBL_ADD_SOLIDBLOCK,
+              IDC_CMB_ADD_SOLIDBLOCK, enabled);
+}
+
 // Re-fill everything that depends on the chosen format: methods,
 // encryption methods, the 7z-only ticks, and the path's extension.
 void SyncFormat(HWND hDlg, State* st)
@@ -110,11 +163,16 @@ void SyncFormat(HWND hDlg, State* st)
 
     EnableWindow(GetDlgItem(hDlg, IDC_CHK_ADD_SOLID),    is7z);
     EnableWindow(GetDlgItem(hDlg, IDC_CHK_ADD_ENCNAMES), is7z && canEncrypt);
+    const bool isLizard = _wcsicmp(fmt.c_str(), L"lizard") == 0;
+    EnablePair(hDlg, IDC_LBL_ADD_DICTIONARY,
+              IDC_CMB_ADD_DICTIONARY, is7z || isLizard);
+    EnablePair(hDlg, IDC_LBL_ADD_WORD, IDC_CMB_ADD_WORD, is7z);
     if (!is7z)
     {
         CheckDlgButton(hDlg, IDC_CHK_ADD_SOLID,    BST_UNCHECKED);
         CheckDlgButton(hDlg, IDC_CHK_ADD_ENCNAMES, BST_UNCHECKED);
     }
+    SyncSolidBlock(hDlg, is7z);
 
     // Swap the path's extension to match, but only the extension: the
     // user's name and folder are theirs.
@@ -222,6 +280,18 @@ bool TakeResult(HWND hDlg, State* st)
     sel = (int)SendDlgItemMessageW(hDlg, IDC_CMB_ADD_THREADS, CB_GETCURSEL, 0, 0);
     if (sel >= 0 && sel < (int)ARRAYSIZE(kThreads)) r.opt.threads = kThreads[sel].value;
 
+    const bool is7z = _wcsicmp(r.opt.format.c_str(), L"7z") == 0;
+    const bool isLizard = _wcsicmp(r.opt.format.c_str(), L"lizard") == 0;
+    if (is7z || isLizard)
+        r.opt.dictionaryBytes = SelectedSize(hDlg, IDC_CMB_ADD_DICTIONARY,
+                                             kDictionaries);
+    if (is7z)
+        r.opt.wordBytes = (uint32_t)SelectedSize(hDlg, IDC_CMB_ADD_WORD,
+                                                 kWordSizes);
+    if (is7z && r.opt.solid)
+        r.opt.solidBlockBytes = SelectedSize(hDlg, IDC_CMB_ADD_SOLIDBLOCK,
+                                              kSolidBlocks);
+
     const std::wstring volume = GetText(hDlg, IDC_EDIT_ADD_VOLUME);
     if (!volume.empty())
     {
@@ -284,7 +354,8 @@ INT_PTR CALLBACK DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
                     st->formats.push_back(f);
             if (st->rq->singleStreamAllowed)
                 for (const wchar_t* f : { L"xz", L"gzip", L"bzip2",
-                                           L"zstd", L"brotli", L"lz4", L"lz5" })
+                                           L"zstd", L"brotli", L"lz4", L"lz5",
+                                           L"lizard" })
                     if (ArchiveWriter::FormatIsWritable(f))
                         st->formats.push_back(f);
             if (st->formats.empty() && !st->rq->format.empty())
@@ -314,12 +385,15 @@ INT_PTR CALLBACK DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
             FillCombo(hDlg, IDC_CMB_ADD_LEVEL, rows, sel);
         }
 
-        // Threads.
+        // Threads and advanced compression sizes.
         {
             std::vector<std::wstring> rows;
             for (const auto& t : kThreads) rows.push_back(t.label);
             FillCombo(hDlg, IDC_CMB_ADD_THREADS, rows, 0);
         }
+        FillSizeCombo(hDlg, IDC_CMB_ADD_DICTIONARY, kDictionaries);
+        FillSizeCombo(hDlg, IDC_CMB_ADD_WORD, kWordSizes);
+        FillSizeCombo(hDlg, IDC_CMB_ADD_SOLIDBLOCK, kSolidBlocks);
 
         if (Settings::Get().createSolidArchive)
             CheckDlgButton(hDlg, IDC_CHK_ADD_SOLID, BST_CHECKED);
@@ -343,6 +417,12 @@ INT_PTR CALLBACK DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
 
         case IDC_CHK_ADD_SHOWPW:
             if (HIWORD(wp) == BN_CLICKED) ApplyShowPassword(hDlg);
+            return TRUE;
+
+        case IDC_CHK_ADD_SOLID:
+            if (HIWORD(wp) == BN_CLICKED && st)
+                SyncSolidBlock(hDlg,
+                    _wcsicmp(CurrentFormat(hDlg, st).c_str(), L"7z") == 0);
             return TRUE;
 
         case IDOK:

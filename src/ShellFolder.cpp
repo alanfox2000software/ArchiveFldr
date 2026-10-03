@@ -4,7 +4,6 @@
 #include "SysInfo.h"
 #include "ShellView.h"
 #include "ContextMenu.h"
-#include "DropTarget.h"
 #include "DataObject.h"
 #include "ArchiveOps.h"
 #include "ThumbnailProvider.h"
@@ -273,8 +272,6 @@ STDMETHODIMP CShellFolder::QueryInterface(REFIID riid, void** ppv)
         *ppv = static_cast<IPersistFolder2*>(this);
     else if (IsEqualIID(riid, IID_IShellDetails))
         *ppv = static_cast<IShellDetails*>(this);
-    else if (IsEqualIID(riid, IID_IDropTarget))
-        *ppv = static_cast<IDropTarget*>(this);
     else
         return E_NOINTERFACE;
 
@@ -601,7 +598,7 @@ STDMETHODIMP CShellFolder::CreateViewObject(HWND hwnd, REFIID riid, void** ppv)
         pView->Release(); return hr;
     }
     // Right-click on empty space in the view: the background menu belongs to
-    // the folder, not to any item (Extract all, Paste, Refresh, Info...).
+    // the folder, not to any item (Extract all, Refresh, Info...).
     if (IsEqualIID(riid, IID_IContextMenu)  ||
         IsEqualIID(riid, IID_IContextMenu2) ||
         IsEqualIID(riid, IID_IContextMenu3)) {
@@ -612,10 +609,6 @@ STDMETHODIMP CShellFolder::CreateViewObject(HWND hwnd, REFIID riid, void** ppv)
         p->Release(); return hr;
     }
 
-    if (IsEqualIID(riid, IID_IDropTarget)) {
-        AddRef(); *ppv = static_cast<IDropTarget*>(this);
-        return S_OK;
-    }
     return E_NOINTERFACE;
 }
 
@@ -633,7 +626,7 @@ STDMETHODIMP CShellFolder::GetAttributesOf(
     // shell give up on the archive.
     if (cidl == 0 || !apidl) {
         *rgfInOut &= (SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_BROWSABLE |
-                      SFGAO_DROPTARGET | SFGAO_HASPROPSHEET);
+                      SFGAO_HASPROPSHEET);
         return S_OK;
     }
 
@@ -689,14 +682,6 @@ STDMETHODIMP CShellFolder::GetUIObjectOf(
         auto* p = new(std::nothrow) CContextMenu();
         if (!p) return E_OUTOFMEMORY;
         p->SetFolder(this, hwnd, cidl, apidl);
-        HRESULT hr = p->QueryInterface(riid, ppv);
-        p->Release(); return hr;
-    }
-    if (IsEqualIID(riid, IID_IDropTarget)) {
-        auto* p = new(std::nothrow) CDropTarget();
-        if (!p) return E_OUTOFMEMORY;
-        p->SetFolder(this);
-        p->SetSite(hwnd);
         HRESULT hr = p->QueryInterface(riid, ppv);
         p->Release(); return hr;
     }
@@ -1015,41 +1000,6 @@ STDMETHODIMP CShellFolder::MapColumnToSCID(UINT col, SHCOLUMNID* pscid)
 }
 
 STDMETHODIMP CShellFolder::ColumnClick(UINT /*col*/) { return S_FALSE; }
-
-// ─────────────────────────────────────────────────────────
-// IDropTarget (folder-level — accept drops FROM Explorer)
-// ─────────────────────────────────────────────────────────
-STDMETHODIMP CShellFolder::DragEnter(
-    IDataObject* pObj, DWORD /*grfKey*/, POINTL pt, DWORD* pdwEffect)
-{
-    (void)pt;
-    if (!pdwEffect) return E_POINTER;
-    // Dropping into an archive is always a COPY: the engine cannot promise
-    // the data landed, so the source must never delete its originals.
-    m_lastEffect = ArchiveDrop::EffectFor(pObj);
-    *pdwEffect   = m_lastEffect;
-    return S_OK;
-}
-STDMETHODIMP CShellFolder::DragOver(DWORD grfKeyState, POINTL pt, DWORD* pdwEffect)
-{
-    (void)grfKeyState;
-    (void)pt;
-    if (pdwEffect) *pdwEffect = m_lastEffect;
-    return S_OK;
-}
-STDMETHODIMP CShellFolder::DragLeave()
-{
-    m_lastEffect = DROPEFFECT_NONE;
-    return S_OK;
-}
-STDMETHODIMP CShellFolder::Drop(IDataObject* pObj,DWORD,POINTL,DWORD* pdwEffect)
-{
-    if (!pdwEffect) return E_POINTER;
-    HRESULT hr = ArchiveDrop::Perform(nullptr, this, pObj);
-    *pdwEffect = (hr == S_OK) ? DROPEFFECT_COPY : DROPEFFECT_NONE;
-    m_lastEffect = DROPEFFECT_NONE;
-    return S_OK;
-}
 
 // ─────────────────────────────────────────────────────────
 // CEnumIDList::Next

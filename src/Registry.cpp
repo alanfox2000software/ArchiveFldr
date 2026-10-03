@@ -279,11 +279,11 @@ HRESULT CRegistry::RegisterNamespaceFolder(const wchar_t* dllPath)
         (base + L"\\Implemented Categories\\" + kCatidBrowsableShellExt).c_str(),
         nullptr, L""));
 
-    // The value Windows ships for CompressedFolder, the .zip junction this
-    // one is modelled on: 0x200001A0.
+    // Start from the value Windows ships for CompressedFolder, but omit
+    // SFGAO_DROPTARGET (0x00000100). Opened archives are intentionally not
+    // writable through Explorer drag/drop or paste.
     //
     //   0x20000000  SFGAO_FOLDER      — the file browses as a folder
-    //   0x00000100  SFGAO_DROPTARGET  — things can be dropped on it
     //   0x00000020  SFGAO_CANDELETE
     //   0x00000080  undocumented, and shipped anyway
     //
@@ -292,15 +292,10 @@ HRESULT CRegistry::RegisterNamespaceFolder(const wchar_t* dllPath)
     // sets: the first hangs an expand arrow off every archive in the
     // navigation pane, and the second describes a root that can be hosted
     // in a browser frame, which a file junction is not.
-    const DWORD kFolderAttributes = 0x200001A0;
+    const DWORD kFolderAttributes = 0x200000A0;
 
     RETURN_IF_FAILED(SetRegDword(HKEY_LOCAL_MACHINE,
         (base + L"\\ShellFolder").c_str(), L"Attributes", kFolderAttributes));
-
-    // Send drops to the DropHandler registered on the file type rather than
-    // to the folder object. Also copied from CompressedFolder.
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
-        (base + L"\\ShellFolder").c_str(), L"UseDropHandler", L""));
 
     // WantsFORPARSING is gone with the rest of the guesswork: the parsing
     // name of an archive is its path, which is what the shell uses anyway
@@ -311,6 +306,7 @@ HRESULT CRegistry::RegisterNamespaceFolder(const wchar_t* dllPath)
                           0, KEY_SET_VALUE, &hk) == ERROR_SUCCESS)
         {
             RegDeleteValueW(hk, L"WantsFORPARSING");
+            RegDeleteValueW(hk, L"UseDropHandler");
             RegCloseKey(hk);
         }
     }
@@ -318,8 +314,9 @@ HRESULT CRegistry::RegisterNamespaceFolder(const wchar_t* dllPath)
     return S_OK;
 }
 
-// Register ContextMenu / Drop / Thumbnail / Preview under a
+// Register ContextMenu / Thumbnail / Preview under a
 // Software\Classes\... base path (extension, ProgID, or SystemFileAssociations).
+// Any legacy DropHandler key is removed.
 // Where the compress commands are offered: every file, every folder.
 // "Directory" covers folders themselves; "Directory\\Background" is
 // deliberately absent, since right-clicking empty space selects nothing
@@ -416,7 +413,6 @@ HRESULT CRegistry::RegisterShellExOnBase(const std::wstring& base,
                                          bool withContextMenu)
 {
     const std::wstring ctx  = ClsidToStr(CLSID_ArchiveFldrContextMenu);
-    const std::wstring drop = ClsidToStr(CLSID_ArchiveFldrDropTarget);
     const std::wstring th   = ClsidToStr(CLSID_ArchiveFldrThumbnail);
     const std::wstring pv   = ClsidToStr(CLSID_ArchiveFldrPreview);
 
@@ -432,9 +428,9 @@ HRESULT CRegistry::RegisterShellExOnBase(const std::wstring& base,
         DelRegKey(HKEY_LOCAL_MACHINE,
             (base + L"\\shellex\\ContextMenuHandlers\\ArchiveFldr").c_str());
 
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
-        (base + L"\\shellex\\DropHandler").c_str(),
-        nullptr, drop.c_str()));
+    // Incoming drops are intentionally unsupported. Delete a key left by an
+    // older build so dragging onto the archive file cannot modify it either.
+    DelRegKey(HKEY_LOCAL_MACHINE, (base + L"\\shellex\\DropHandler").c_str());
 
     // Thumbnail providers and preview handlers are Vista-era shell
     // features. On XP nothing reads these keys, and a build without the
@@ -1211,8 +1207,9 @@ HRESULT CRegistry::RegisterInternal(const wchar_t* dllPath,
             L"ArchiveFldr Context Menu Handler", dllPath));
     else
         UnregisterCOMServer(CLSID_ArchiveFldrContextMenu);
-    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrDropTarget,
-        L"ArchiveFldr Drop Target Handler", dllPath));
+    // Drop/paste into archives is deliberately disabled. Remove registration
+    // left by older builds; the no-op class remains only as a stale-key guard.
+    UnregisterCOMServer(CLSID_ArchiveFldrDropTarget);
     if constexpr (kHasVistaHandlers)
     {
         RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrThumbnail,
@@ -1241,8 +1238,7 @@ HRESULT CRegistry::RegisterInternal(const wchar_t* dllPath,
             L"ArchiveFldr Context Menu Handler"));
     else
         UnregisterApproved(CLSID_ArchiveFldrContextMenu);
-    RETURN_IF_FAILED(RegisterApproved(CLSID_ArchiveFldrDropTarget,
-        L"ArchiveFldr Drop Target Handler"));
+    UnregisterApproved(CLSID_ArchiveFldrDropTarget);
 
     // 3. The Vista-era handlers, and the global PreviewHandlers list
     //    that the preview pane is driven from.

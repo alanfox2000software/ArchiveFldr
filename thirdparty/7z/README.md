@@ -120,8 +120,9 @@ open in ArchiveFldr — there is no fake/placeholder data shown.
 
 ArchiveFldr supports browsing, password prompts (including encrypted file
 names), Details columns, opening an item, Extract/Extract-here, Test, copying
-or dragging items out, and creating/updating formats for which the selected
-`7z.dll` publishes a writer.
+or dragging items out, and creating formats for which the selected `7z.dll` publishes a
+writer. An archive opened as an Explorer folder is intentionally read-only:
+Paste, Ctrl+V, and dragging files into it are not accepted.
 
 The Add to Archive dialog can split a completed archive at an exact byte
 count. Parts are named `archive.ext.001`, `.002`, and so on; opening `.001`

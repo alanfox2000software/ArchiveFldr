@@ -1,7 +1,8 @@
 // ShellFolder.h
 // Implements the core Shell Namespace Extension folder object.
-// Interfaces: IShellFolder2, IPersistFolder2, IShellDetails,
-//             IObjectWithFetchIcon, IDropTarget (on folder)
+// Interfaces: IShellFolder2, IPersistFolder2, IShellDetails.
+// The folder is intentionally not an IDropTarget: opened archives are read-only
+// from Explorer's paste/drag-in perspective.
 #pragma once
 #include "stdafx.h"
 #include "ArchiveEngine.h"
@@ -61,8 +62,7 @@ public:
 class CShellFolder :
     public IShellFolder2,
     public IPersistFolder2,
-    public IShellDetails,
-    public IDropTarget
+    public IShellDetails
 {
 public:
     CShellFolder();
@@ -110,12 +110,6 @@ public:
     // ── IShellDetails ────────────────────────────────────
     STDMETHODIMP ColumnClick (UINT col) override;
 
-    // ── IDropTarget ──────────────────────────────────────
-    STDMETHODIMP DragEnter(IDataObject*, DWORD, POINTL, DWORD*) override;
-    STDMETHODIMP DragOver (DWORD, POINTL, DWORD*) override;
-    STDMETHODIMP DragLeave() override;
-    STDMETHODIMP Drop     (IDataObject*, DWORD, POINTL, DWORD*) override;
-
     // ── Internal helpers ─────────────────────────────────
     std::shared_ptr<IArchiveEngine> GetEngine() const { return m_engine; }
     const std::wstring& GetArchivePath() const { return m_archivePath; }
@@ -138,10 +132,6 @@ private:
     std::wstring   m_internalPath;  // path inside archive e.g. "src/utils/"
 
     std::shared_ptr<IArchiveEngine> m_engine;
-
-    // Drop feedback between DragEnter and Drop. (This used to be a file
-    // scope global shared by every folder instance.)
-    DWORD    m_lastEffect = DROPEFFECT_NONE;
 
     // Column definitions
     struct ColDef { const wchar_t* name; int width; SHCOLSTATEF state; };

@@ -75,7 +75,6 @@ private:
         CMD_TEST,
         CMD_INFO,
         CMD_COPY,
-        CMD_PASTE,
         CMD_REFRESH,
         CMD_PROPERTIES,
         CMD_SETTINGS,
@@ -93,7 +92,6 @@ private:
     void DoTest        ();
     void DoInfo        ();
     void DoCopy        ();
-    void DoPaste       ();
     void DoRefresh     ();
     void DoProperties  ();
     void DoSettings    ();

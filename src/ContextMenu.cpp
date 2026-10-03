@@ -110,7 +110,6 @@ const VerbDef kVerbs[] = {
     { L"test",        "test",        L"Test archive integrity"                },
     { L"info",        "info",        L"View archive information"              },
     { L"copy",        "copy",        L"Copy to the clipboard"                 },
-    { L"paste",       "paste",       L"Add the clipboard's files here"        },
     { L"refresh",     "refresh",     L"Refresh this view"                     },
     { L"properties",  "properties",  L"Show properties"                       },
     { L"settings",    "settings",    L"Open ArchiveFldr settings"             },
@@ -357,9 +356,7 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
     case ModeBackground:
     {
         addItem(CMD_EXTRACT,     L"E&xtract all...");
-        addItem(CMD_EXTRACTHERE, L"Extract all &here");
         addSep();
-        addItem(CMD_PASTE,       L"&Paste", ArchiveOps::ClipboardHasFiles());
         addItem(CMD_REFRESH,     L"&Refresh");
         addSep();
         addItem(CMD_TEST,        L"&Test archive");
@@ -486,7 +483,6 @@ STDMETHODIMP CContextMenu::InvokeCommand(LPCMINVOKECOMMANDINFO pici)
     case CMD_TEST:          DoTest();         break;
     case CMD_INFO:          DoInfo();         break;
     case CMD_COPY:          DoCopy();         break;
-    case CMD_PASTE:         DoPaste();        break;
     case CMD_REFRESH:       DoRefresh();      break;
     case CMD_PROPERTIES:    DoProperties();   break;
     case CMD_SETTINGS:      DoSettings();     break;
@@ -1361,58 +1357,6 @@ void CContextMenu::DoCopy()
     // as long as the clipboard holds it.
     OleSetClipboard(pdo);
     pdo->Release();
-}
-
-// Paste file-system files INTO the archive: collect what the clipboard
-// holds, show the Add to Archive dialog, and let the engine update the
-// archive in place.
-void CContextMenu::DoPaste()
-{
-    auto eng = AcquireEngine();
-    if (!ArchiveOps::EnsureCanAdd(m_hwnd, eng)) return;
-
-    IDataObject* pdo = nullptr;
-    if (FAILED(OleGetClipboard(&pdo)) || !pdo) return;
-
-    std::vector<std::wstring> roots;
-    ArchiveOps::PathsFromDataObject(pdo, roots);
-    pdo->Release();
-
-    // Never paste the archive into itself.
-    roots.erase(std::remove_if(roots.begin(), roots.end(),
-        [&](const std::wstring& p)
-        { return _wcsicmp(p.c_str(), m_archivePath.c_str()) == 0; }),
-        roots.end());
-    if (roots.empty()) return;
-
-    std::vector<ArchiveOps::AddItem> expanded;
-    ArchiveOps::ExpandForAdd(roots, expanded);
-
-    const std::wstring dir = m_pFolder ? m_pFolder->GetInternalPath() : L"";
-    std::vector<ArchiveWriter::Item> items;
-    ArchiveOps::BuildWriterItems(expanded, dir, items);
-    if (items.empty()) return;
-
-    AddToArchiveDialog::Request rq;
-    rq.path       = m_archivePath;
-    rq.format     = eng->GetHandlerName();
-    rq.lockFormat = true;                 // updating what is already there
-    rq.fileCount  = items.size();
-
-    AddToArchiveDialog::Result res;
-    if (!AddToArchiveDialog::Show(m_hwnd, rq, res)) return;
-
-    WaitCursor wait;
-    std::wstring err;
-    const bool ok = eng->AddItems(items, res.opt, res.path, nullptr, &err);
-
-    NotifyRefresh();
-    if (!ok)
-        MessageBoxW(m_hwnd,
-            (L"The files could not be added to the archive.\n\n" + err).c_str(),
-            L"ArchiveFldr", MB_ICONWARNING | MB_OK);
-    else if (!err.empty())   // succeeded, but some sources were skipped
-        MessageBoxW(m_hwnd, err.c_str(), L"ArchiveFldr", MB_ICONWARNING | MB_OK);
 }
 
 void CContextMenu::DoRefresh()

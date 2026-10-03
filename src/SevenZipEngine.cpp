@@ -627,6 +627,8 @@ public:
 
     bool HadError() const { return m_hadError; }
     bool PasswordWasRequested() const { return m_passwordRequested; }
+    INT32 LastOperationResult() const { return m_lastOperationResult; }
+    DWORD LastStreamError() const { return m_lastStreamError; }
     // The failure pattern that means "wrong or missing password" rather
     // than corruption: the handler said so outright, or a password-backed
     // item failed with the data/CRC result older handlers use for this case.
@@ -689,9 +691,15 @@ public:
         if (askExtractMode != N7zExtract::kExtract)
             return S_OK; // test / skip / read-external — no output stream needed
 
-        // Nothing to build a path out of: skip the item rather than
-        // writing to the directory itself.
-        if (path.empty()) return S_FALSE;
+        // Nothing to build a path out of: fail the item rather than writing
+        // to the destination directory itself. Record it explicitly because
+        // S_FALSE is still a successful HRESULT to COM's SUCCEEDED() macro.
+        if (path.empty())
+        {
+            m_hadError = true;
+            m_lastStreamError = ERROR_INVALID_NAME;
+            return S_FALSE;
+        }
 
         std::wstring diskPath = m_destDir;
         if (!diskPath.empty() && diskPath.back() != L'\\') diskPath += L'\\';
@@ -717,8 +725,10 @@ public:
         auto* outRaw = new COutFileStream();
         if (!outRaw->CreateOutputFile(diskPath))
         {
+            m_hadError = true;
+            m_lastStreamError = GetLastError();
             delete outRaw;
-            return S_FALSE; // per-item data error; extraction of other items continues
+            return S_FALSE; // extraction of other items can still continue
         }
 
         ComPtr<ISequentialOutStream7z> local;
@@ -759,6 +769,7 @@ public:
         else
         {
             m_hadError = true;
+            m_lastOperationResult = opRes;
             // kWrongPassword is explicit; a data/CRC error on an item that
             // either advertises encryption OR actually asked this callback
             // for a password is the same thing said less clearly.  The
@@ -808,6 +819,8 @@ private:
     ProgressFn     m_cb;
     bool           m_hadError = false;
     bool           m_wrongPassword = false;
+    INT32          m_lastOperationResult = -1;
+    DWORD          m_lastStreamError = ERROR_SUCCESS;
     bool           m_passwordRequested    = false;
     bool           m_curPasswordRequested = false;
     bool           m_curEncrypted         = false;
@@ -1344,7 +1357,11 @@ bool C7zArchiveEngine::ExtractIndices(const std::vector<UINT32>& indices,
 
     const HRESULT hr = m_archive->Extract(
         indices.data(), (UINT32)indices.size(), 0, extractCb.Get());
-    const bool ok = (hr == S_OK) && !cbRaw->HadError();
+    // Unlike IInArchive::Open (where S_FALSE specifically means "wrong
+    // format"), Extract follows normal COM success semantics. Some handlers
+    // return a non-S_OK success status after producing the requested stream;
+    // the per-item callback is the authority on actual extraction errors.
+    const bool ok = SUCCEEDED(hr) && !cbRaw->HadError();
     if (!ok)
     {
         // A decoder request with an empty engine password is the initial
@@ -1355,10 +1372,21 @@ bool C7zArchiveEngine::ExtractIndices(const std::vector<UINT32>& indices,
         m_wrongPassword = cbRaw->WrongPassword() || m_passwordMissing;
         if (m_wrongPassword && !m_passwordMissing)
             ForgetPassword(m_filePath, m_password);
-        m_lastError = m_wrongPassword
-            ? L"One or more items are encrypted and the password is "
-              L"missing or wrong."
-            : L"Extraction failed for one or more files (corrupt data).";
+        if (m_wrongPassword)
+        {
+            m_lastError = L"One or more items are encrypted and the password is "
+                          L"missing or wrong.";
+        }
+        else
+        {
+            wchar_t detail[160] = {};
+            swprintf_s(detail, ARRAYSIZE(detail),
+                       L"Extraction failed (7-Zip HRESULT 0x%08X, "
+                       L"item result %d, stream error %lu).",
+                       (unsigned)hr, (int)cbRaw->LastOperationResult(),
+                       (unsigned long)cbRaw->LastStreamError());
+            m_lastError = detail;
+        }
     }
     else
     {
@@ -1445,7 +1473,7 @@ bool C7zArchiveEngine::Test(ProgressFn cb)
 
     const HRESULT hr = m_archive->Extract(
         nullptr, (UINT32)-1, 1 /*testMode*/, extractCb.Get());
-    const bool ok = (hr == S_OK) && !cbRaw->HadError();
+    const bool ok = SUCCEEDED(hr) && !cbRaw->HadError();
     if (!ok)
     {
         m_passwordMissing =

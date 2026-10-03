@@ -68,6 +68,11 @@ public:
     STDMETHODIMP Next(ULONG celt, FORMATETC* rgelt, ULONG* pceltFetched) override
     {
         if (!rgelt) return E_POINTER;
+        // pceltFetched may only be omitted when exactly one element was
+        // asked for; otherwise the caller has no way to learn how many
+        // of its array elements were written.
+        if (celt != 1 && !pceltFetched) return E_INVALIDARG;
+
         ULONG n = 0;
         while (n < celt && m_pos < m_list.size()) rgelt[n++] = m_list[m_pos++];
         if (pceltFetched) *pceltFetched = n;
@@ -75,7 +80,12 @@ public:
     }
     STDMETHODIMP Skip(ULONG celt) override
     {
-        m_pos = (m_pos + celt < m_list.size()) ? m_pos + celt : m_list.size();
+        // S_FALSE when the end arrives first — the caller uses that to
+        // stop. Returning S_OK regardless said "skipped them all" from
+        // a position past the end.
+        const size_t left = m_list.size() - m_pos;
+        if ((size_t)celt > left) { m_pos = m_list.size(); return S_FALSE; }
+        m_pos += celt;
         return S_OK;
     }
     STDMETHODIMP Reset() override { m_pos = 0; return S_OK; }

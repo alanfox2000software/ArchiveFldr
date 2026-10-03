@@ -257,8 +257,10 @@ bool DllRegistered(bool x64)
                       KEY_QUERY_VALUE | view, &hk) != ERROR_SUCCESS)
         return false;
 
-    wchar_t buf[MAX_PATH * 2] = {};
-    DWORD sz = sizeof(buf);
+    // Read one element short of a zeroed buffer, so a REG_SZ stored
+    // without its terminator cannot run PathFileExistsW off the end.
+    wchar_t buf[MAX_PATH * 2 + 1] = {};
+    DWORD sz = sizeof(buf) - sizeof(wchar_t);
     const bool got = RegQueryValueExW(hk, nullptr, nullptr, nullptr,
                                       (BYTE*)buf, &sz) == ERROR_SUCCESS;
     RegCloseKey(hk);
@@ -1193,17 +1195,33 @@ bool CSettingsDialog::OnApply()
     for (auto& pg : m_pages) pg->Save();
     Settings::Get().Save();
 
-    // Associations changed? Rewrite the per-extension OpenWithProgids and
-    // the Capabilities key so the ticks on the System page mean something
-    // without a full re-register. Needs the DLL's own path, which is what
-    // the Capabilities icon points at.
+    // Associations changed? Rewrite the per-extension OpenWithProgids so
+    // the ticks on the System page mean something without a full
+    // re-register. This part is unconditional: being offered under "Open
+    // with" has nothing to do with being listed in Default apps, and a
+    // user who never asked for the second still expects the first.
+    CRegistry::RefreshOpenWithProgids();
+
+    // The Default apps registration follows the stored preference, the
+    // same way DllRegisterServer does. Applying it unconditionally used
+    // to re-publish the Capabilities key every time OK was pressed —
+    // including after the user had turned that off, which quietly undid
+    // their choice. Needs the DLL's own path, which is what the
+    // Capabilities icon points at.
 #ifdef _WIN64
     const std::wstring dll = DllPath(true);
 #else
     const std::wstring dll = DllPath(false);
 #endif
-    if (PathFileExistsW(dll.c_str()))
-        CRegistry::RegisterCapabilities(dll.c_str());
+    if (Settings::Get().registerAsDefaultApp)
+    {
+        if (PathFileExistsW(dll.c_str()))
+            CRegistry::RegisterCapabilities(dll.c_str());
+    }
+    else
+    {
+        CRegistry::UnregisterCapabilities();
+    }
 
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
 

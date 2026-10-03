@@ -225,7 +225,7 @@ STDMETHODIMP CContextMenu::Initialize(LPCITEMIDLIST /*pidlFolder*/,
 // ── IContextMenu::QueryContextMenu ───────────────────────
 STDMETHODIMP CContextMenu::QueryContextMenu(
     HMENU hMenu, UINT indexMenu, UINT idCmdFirst,
-    UINT /*idCmdLast*/, UINT uFlags)
+    UINT idCmdLast, UINT uFlags)
 {
     static_assert(ARRAYSIZE(kVerbs) == CMD_COUNT,
                   "verb table and Cmd enum are out of sync");
@@ -251,6 +251,8 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
     {
         if (m_mode != ModeItem || m_pidls.empty())
             return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
+        if (idCmdFirst + (UINT)CMD_OPEN_ITEM > idCmdLast)
+            return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
 
         InsertMenuW(hMenu, indexMenu, MF_BYPOSITION | MF_STRING,
                     idCmdFirst + CMD_OPEN_ITEM, L"&Open");
@@ -262,8 +264,14 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
 
     // The shell loads this DLL into Explorer once and keeps it, so the
     // language file is read on the first right-click and then reused.
-    static bool langLoaded = false;
-    if (!langLoaded) { langLoaded = true; Lang::Load(s.language); }
+    //
+    // A magic static, not a plain flag: Explorer creates context-menu
+    // handlers on more than one thread, and two of them arriving here
+    // together both saw the flag unset and both ran Lang::Load, which
+    // clears and refills the same table the other was reading. The
+    // initialisation of a function-local static is serialised for us.
+    static const bool langLoaded = [&s] { Lang::Load(s.language); return true; }();
+    (void)langLoaded;
 
     // "Add to <name>" names its own result. Built here because both the
     // archive-file and plain-file menus show it.
@@ -292,6 +300,12 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
     HBITMAP hIcon = s.ctxMenuIcons ? MenuIconBitmap() : nullptr;
 
     auto addItem = [&](UINT cmd, const wchar_t* text, bool enabled = true) {
+        // idCmdFirst..idCmdLast is the range the shell lends us, and it
+        // is a promise, not a hint: an id past the end belongs to
+        // another handler, which would then run its command when the
+        // user picked ours. Silently drop anything that will not fit.
+        if (cmd > idCmdLast - idCmdFirst) return;
+
         MENUITEMINFOW mi{sizeof(mi), MIIM_STRING | MIIM_ID | MIIM_STATE};
         mi.wID        = idCmdFirst + cmd;
         mi.dwTypeData = (LPWSTR)text;
@@ -465,6 +479,14 @@ STDMETHODIMP CContextMenu::GetCommandString(
     if (idCmd >= CMD_COUNT) return E_INVALIDARG;
     const VerbDef& v = kVerbs[idCmd];
 
+    // GCS_VALIDATE passes no buffer at all — it is a question, not a
+    // request for a string — and nothing stops a caller passing a null
+    // one with any of the others. Answer the question before touching
+    // anything, so a validate does not walk into a wcsncpy_s on null.
+    if (uType == GCS_VALIDATEA || uType == GCS_VALIDATEW)
+        return S_OK;                     // idCmd is in range: it is valid
+    if (!pszName || cchMax == 0) return E_INVALIDARG;
+
     switch (uType)
     {
     case GCS_HELPTEXTW:
@@ -487,10 +509,6 @@ STDMETHODIMP CContextMenu::GetCommandString(
     case GCS_VERBW:
         wcsncpy_s(reinterpret_cast<wchar_t*>(pszName), cchMax, v.verbW, _TRUNCATE);
         return S_OK;
-
-    case GCS_VALIDATEA:
-    case GCS_VALIDATEW:
-        return S_OK;      // idCmd is valid
 
     default:
         return E_INVALIDARG;

@@ -30,15 +30,18 @@ static const Format kFormats[] =
     { L".apk",   L"Android pack",  L"ArchiveFldr.ApkFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".cb7",  L"Comic archive", L"ArchiveFldr.Cb7File",  EK::SevenZip, L"7z",    nullptr,  nullptr },
     { L".cbz",   L"Comic archive", L"ArchiveFldr.CbzFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
-    // The rest of the zip family. A progId would offer to take the file
-    // type in Settings > Default apps, which is right for an archive and
-    // wrong for somebody else's document: .epub belongs to a reader and
-    // .xpi to Firefox the way .docx belongs to Word. They are still read,
-    // browsed and written as the zips they are.
+    // The rest of the zip family that is still, to a user, an archive.
+    // A progId is what puts the type in "Open with" and in Settings >
+    // Default apps; whether it ends up associated is then the user's
+    // call, and the Associations page can switch any of them off.
     { L".smzip", L"SciTE package", L"ArchiveFldr.SmzipFile",               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".xpi",   L"Firefox add-on",L"ArchiveFldr.XpiFile",               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".zab",   L"ZAB archive",   L"ArchiveFldr.ZabFile",               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".epub",  L"EPUB book",     L"ArchiveFldr.EpubFile",               EK::SevenZip, L"7z",     nullptr,  nullptr },
+    // Zip containers that are somebody else's document. No progId, so
+    // nothing here offers to take the type: .docx belongs to Word and
+    // .ipa to nothing the user ever opens. They are still read and
+    // browsed as the zips they are — only the association is withheld.
     { L".ipa",   L"iOS app",       nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".docx",  L"Word document", nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".xlsx",  L"Excel workbook",nullptr,               EK::SevenZip, L"7z",     nullptr,  nullptr },

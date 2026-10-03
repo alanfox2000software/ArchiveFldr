@@ -8,37 +8,45 @@ public:
     static HRESULT RegisterAll  (const wchar_t* dllPath);
     static HRESULT UnregisterAll();
 
+    // Windows "Default apps" integration. Publishing a Capabilities key
+    // under HKLM\SOFTWARE\RegisteredApplications is what puts ArchiveFldr
+    // in the Default apps list, so the user can hand it a file type that
+    // Windows' own archive handler currently owns.
+    //
     // Driven by the "list in Default apps" checkbox in the settings
     // program, which applies it immediately rather than waiting for
     // the next registration.
     static HRESULT RegisterCapabilities  (const wchar_t* dllPath);
     static HRESULT UnregisterCapabilities();
 
+    // Re-offer (or stop offering) each format's ProgID in its
+    // extension's "Open with" list, following the ticks on the System
+    // page. Independent of the Default apps registration above, so the
+    // settings program can apply an association change on its own.
+    static void    RefreshOpenWithProgids();
+
 private:
     static HRESULT RegisterCOMServer   (const CLSID&, const wchar_t* name,
                                         const wchar_t* dllPath,
                                         const wchar_t* threadModel = L"Apartment");
     static HRESULT UnregisterCOMServer (const CLSID&);
-    // Identity for the open helper (legacy; removed from build). Was named by every
-    // open verb. Private: still cleans up Applications key on uninstall. Not a
-    // thing callers arrange for themselves.
-    static HRESULT RegisterOpenHelper  (const wchar_t* dllPath);
 
     static HRESULT RegisterExtension   (const wchar_t* ext, const wchar_t* progId,
                                         const wchar_t* dllPath);
     static HRESULT UnregisterExtension (const wchar_t* ext, const wchar_t* progId);
 
-    // Removes HKCR\Applications\<settings exe>, which older builds wrote
-    // when the open verb went through that program instead of Explorer.
+    // Removes HKCR\Applications\<settings exe> and
+    // HKCR\Applications\ArchiveFldrOpen.exe, which older builds wrote
+    // when the open verb went through a program of ours instead of
+    // Explorer plus the folder-open delegate.
     static void    UnregisterOpenWithApp();
-    // Windows "Default apps" integration. Publishing a Capabilities key
-    // under HKLM\SOFTWARE\RegisteredApplications is what puts ArchiveFldr
-    // in the Default apps list, so the user can hand it a file type that
-    // Windows' own archive handler currently owns.
 
     static HRESULT RegisterApproved    (const CLSID&, const wchar_t* name);
     static HRESULT UnregisterApproved  (const CLSID&);
     static HRESULT UnregisterOverlay   (const CLSID&, const wchar_t* name);
+
+    // Drops our entry from the shell's global PreviewHandlers list.
+    static void    UnregisterPreviewHandlerEntry();
 
     // NEW
     static HRESULT RegisterShellExOnBase  (const std::wstring& base);

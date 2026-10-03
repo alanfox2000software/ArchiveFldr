@@ -155,8 +155,8 @@ std::vector<std::wstring> ProbePaths(const Component& c)
         L"\\",
     };
 
-    // Each platform now builds into its own folder (bin\<Config>\x64,
-    // bin\<Config>\win32), so a single shared thirdparty\ tree sits one
+    // Each platform now builds into its own folder (<Config>\x64,
+    // <Config>\x32), so a single shared thirdparty\ tree sits one
     // level up rather than beside the module. Look in both: beside
     // first, because a deployed install keeps everything together.
     std::wstring parent = dir;
@@ -196,8 +196,8 @@ static std::wstring TryRegistryHint(const Component& c)
         if (RegOpenKeyExW(h.root, c.regKey, 0, KEY_READ | h.view, &hKey) != ERROR_SUCCESS)
             continue;
 
-        wchar_t val[MAX_PATH] = {};
-        DWORD cb = sizeof(val), type = 0;
+        wchar_t val[MAX_PATH + 1] = {};   // slack element, never written
+        DWORD cb = sizeof(val) - sizeof(wchar_t), type = 0;
         LSTATUS st = RegQueryValueExW(hKey, c.regValue, nullptr, &type,
                                       reinterpret_cast<LPBYTE>(val), &cb);
         RegCloseKey(hKey);

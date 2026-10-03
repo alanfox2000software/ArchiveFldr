@@ -25,6 +25,26 @@ static constexpr wchar_t kCatidBrowsableShellExt[] =
 static constexpr wchar_t kRegKeyPreviewHandlers[] =
     L"Software\\Microsoft\\Windows\\CurrentVersion\\PreviewHandlers";
 
+// Does this build contain the Vista-era handlers at all?
+//
+// The XP build compiles neither CThumbnailProvider nor CPreviewHandler,
+// and its DllGetClassObject does not answer for their CLSIDs — see the
+// ARCHIVEFLDR_NO_VISTA_HANDLERS guards in ClassFactory.cpp and
+// dllmain.cpp. Registering them anyway publishes two classes that
+// cannot be created, which is not merely untidy: an XP-toolset DLL
+// registered on Windows 7 or later would have the shell read those keys
+// and get CLASS_E_CLASSNOTAVAILABLE for every thumbnail and every
+// preview. A runtime "is this Vista?" test does not catch that case,
+// because the machine is Vista+ and the binary still is not.
+//
+// Unregistration stays unconditional: leftovers from a build that did
+// have them must go either way.
+#ifdef ARCHIVEFLDR_NO_VISTA_HANDLERS
+static constexpr bool kHasVistaHandlers = false;
+#else
+static constexpr bool kHasVistaHandlers = true;
+#endif
+
 // Private value used to remember whoever owned a file-as-folder junction
 // before we took it over (e.g. Windows 11's built-in ArchiveFolder), so that
 // DllUnregisterServer can hand it back instead of leaving the type broken.
@@ -87,8 +107,13 @@ static std::wstring ReadRegStr(HKEY root, const wchar_t* path,
     HKEY hk = nullptr;
     if (RegOpenKeyExW(root, path, 0, KEY_QUERY_VALUE, &hk) != ERROR_SUCCESS)
         return L"";
-    wchar_t buf[512] = {};
-    DWORD cb = sizeof(buf), type = 0;
+    // One element of slack, never written to: RegQueryValueEx hands back
+    // a REG_SZ exactly as it was stored, and nothing obliges whoever
+    // wrote it to have counted a terminator. Capping the read one
+    // element short of a zeroed buffer means the result is always a
+    // string, whatever is in the registry.
+    wchar_t buf[512 + 1] = {};
+    DWORD cb = sizeof(buf) - sizeof(wchar_t), type = 0;
     LONG rc = RegQueryValueExW(hk, name, nullptr, &type,
                                reinterpret_cast<BYTE*>(buf), &cb);
     RegCloseKey(hk);
@@ -133,23 +158,6 @@ HRESULT CRegistry::SetRegDword(HKEY root, const wchar_t* path,
     return HRESULT_FROM_WIN32(rc);
 }
 
-// Remove one value, leaving the key and its siblings alone. Used where
-// a value written by an earlier version has to go away without taking
-// the key it lives on with it.
-static HRESULT DelRegValue(HKEY root, const wchar_t* path,
-                           const wchar_t* name)
-{
-    HKEY hk = nullptr;
-    LONG rc = RegOpenKeyExW(root, path, 0, KEY_SET_VALUE, &hk);
-    if (rc == ERROR_FILE_NOT_FOUND || rc == ERROR_PATH_NOT_FOUND) return S_OK;
-    if (rc != ERROR_SUCCESS) return HRESULT_FROM_WIN32(rc);
-
-    rc = RegDeleteValueW(hk, name);
-    RegCloseKey(hk);
-    if (rc == ERROR_FILE_NOT_FOUND) return S_OK;
-    return HRESULT_FROM_WIN32(rc);
-}
-
 HRESULT CRegistry::DelRegKey(HKEY root, const wchar_t* path)
 {
     // Late bound: RegDeleteTreeW is Vista+, and a static import of it
@@ -172,8 +180,8 @@ HRESULT CRegistry::TakeOverJunction(const std::wstring& keyPath,
     if (rc != ERROR_SUCCESS)
         return HRESULT_FROM_WIN32(rc);
 
-    wchar_t cur[64] = {};
-    DWORD cb = sizeof(cur), type = 0;
+    wchar_t cur[64 + 1] = {};        // slack element: see ReadRegStr
+    DWORD cb = sizeof(cur) - sizeof(wchar_t), type = 0;
     if (RegQueryValueExW(hk, nullptr, nullptr, &type,
                          reinterpret_cast<LPBYTE>(cur), &cb) == ERROR_SUCCESS &&
         type == REG_SZ && cur[0] && _wcsicmp(cur, ourClsid.c_str()) != 0)
@@ -204,14 +212,14 @@ void CRegistry::ReleaseJunction(const std::wstring& keyPath,
                       KEY_READ | KEY_WRITE, &hk) != ERROR_SUCCESS)
         return;
 
-    wchar_t cur[64] = {};
-    DWORD cb = sizeof(cur), type = 0;
+    wchar_t cur[64 + 1] = {};        // slack element: see ReadRegStr
+    DWORD cb = sizeof(cur) - sizeof(wchar_t), type = 0;
     bool ours = RegQueryValueExW(hk, nullptr, nullptr, &type,
                                  reinterpret_cast<LPBYTE>(cur), &cb) == ERROR_SUCCESS &&
                 type == REG_SZ && _wcsicmp(cur, ourClsid.c_str()) == 0;
 
-    wchar_t prev[64] = {};
-    DWORD pcb = sizeof(prev), ptype = 0;
+    wchar_t prev[64 + 1] = {};
+    DWORD pcb = sizeof(prev) - sizeof(wchar_t), ptype = 0;
     bool hadPrev = RegQueryValueExW(hk, kBackupValueName, nullptr, &ptype,
                                     reinterpret_cast<LPBYTE>(prev), &pcb) == ERROR_SUCCESS &&
                    ptype == REG_SZ && prev[0];
@@ -334,9 +342,10 @@ HRESULT CRegistry::RegisterShellExOnBase(const std::wstring& base)
         nullptr, drop.c_str()));
 
     // Thumbnail providers and preview handlers are Vista-era shell
-    // features. On XP nothing reads these keys and the DLL does not even
-    // build the handlers, so leave the registry clean instead.
-    if (SysInfo::IsVistaOrLater())
+    // features. On XP nothing reads these keys, and a build without the
+    // handlers has nothing to put behind them, so leave the registry
+    // clean instead. See kHasVistaHandlers.
+    if (kHasVistaHandlers && SysInfo::IsVistaOrLater())
     {
         RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
             (base + L"\\shellex\\" + kIThumbnailProvider).c_str(),
@@ -464,62 +473,25 @@ static std::wstring ExplorerOpenCommand()
     return std::wstring(win) + L"\\Explorer.exe /idlist,%I,%L";
 }
 
-// ArchiveFldrOpen.exe, which ships beside the DLL.
+// There is no longer an open helper executable.
 //
-// Windows identifies a candidate in "Open with" and "pick a default
-// app" by the base name of the executable in its open command, and
-// merges handlers that resolve to the same one. Pointing at Explorer
-// gave us the same name as the built-in CompressedFolder handler, so
-// every ArchiveFldr type was folded into the single "File Explorer"
-// row and the application never appeared in the picker under its own
-// name — the reason the entry was missing and the icon was Explorer's.
+// ArchiveFldrOpen.exe used to sit in the open command so that the app
+// picker had an executable of ours to name. It also meant the archive
+// was opened by a second process instead of by the namespace extension
+// in the window the user was already looking at, and — worse — a build
+// that shipped only the DLL fell back to a different registration, so
+// the same file type behaved differently on two machines.
 //
-// The helper opens nothing; it hands the pidl back to the Folder class
-// and lets the namespace extension do the work. See src/OpenMain.cpp.
-static constexpr wchar_t kOpenHelperExe[] = L"ArchiveFldrOpen.exe";
-
-// Which copy of it to name, now that each platform builds into its own
-// folder (<Config>\x64 and <Config>\x32).
+// The verb is Explorer's again, with the folder-open delegate above, so
+// every registered extension is opened by this DLL. The picker gets its
+// name, publisher and icon from the ProgID's Application subkey and from
+// FriendlyAppName / Icon on the verb, which is what RegisterExtension
+// writes — no executable of ours needs to exist for that.
 //
-// There is only one place to record the answer — the open command lives
-// under HKLM\Software\Classes, which is shared between the two registry
-// views — but Install registers both DLLs in turn, and if each simply
-// named the helper beside itself then the surviving value would be
-// whichever pass happened to run last.
-//
-// So on 64-bit Windows the x64 build is preferred outright: both passes
-// then agree, and opening an archive does not start a WOW64 process.
-// Beside the DLL comes next, which is what a single-folder deployment
-// and a 32-bit-only machine both want.
-static std::wstring OpenHelperPath(const wchar_t* dllPath)
-{
-    if (!dllPath || !*dllPath) return L"";
-
-    std::wstring dir = dllPath;
-    size_t slash = dir.find_last_of(L"\\/");
-    if (slash == std::wstring::npos) return L"";
-    dir.erase(slash + 1);                       // ...\bin\Release\x64\
-
-    std::wstring parent = dir;                  // ...\bin\Release\
-    parent.pop_back();
-    slash = parent.find_last_of(L"\\/");
-    parent = (slash == std::wstring::npos) ? std::wstring()
-                                           : parent.substr(0, slash + 1);
-
-    std::vector<std::wstring> tries;
-    if (!parent.empty() && SysInfo::Is64BitWindows())
-        tries.push_back(parent + L"x64\\" + kOpenHelperExe);
-    tries.push_back(dir + kOpenHelperExe);
-    if (!parent.empty())
-        tries.push_back(parent + L"x32\\" + kOpenHelperExe);
-
-    // Only claim one that is really there. A command pointing at a
-    // program that was never built would break opening altogether,
-    // which is far worse than being missing from a list.
-    for (const auto& t : tries)
-        if (PathFileExistsW(t.c_str())) return t;
-    return L"";
-}
+// kLegacyOpenHelperExe is kept for one reason: an install upgraded from
+// a build that had the helper still has its Applications key, and that
+// key would keep advertising a program that is no longer there.
+static constexpr wchar_t kLegacyOpenHelperExe[] = L"ArchiveFldrOpen.exe";
 
 // The type description Explorer shows in its Type column and Settings
 // shows next to the extension. Every ProgID used to say "Archive File",
@@ -550,7 +522,8 @@ void CRegistry::UnregisterOpenWithApp()
 {
     const wchar_t* names[] = { L"ArchiveFldrSetting.64.exe",
                                L"ArchiveFldrSetting.32.exe",
-                               L"ArchiveFldrSetting.exe" };
+                               L"ArchiveFldrSetting.exe",
+                               kLegacyOpenHelperExe };
     for (const wchar_t* n : names)
         DelRegKey(HKEY_LOCAL_MACHINE,
                   (std::wstring(L"Software\\Classes\\Applications\\") + n).c_str());
@@ -728,31 +701,19 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
             keep(SetRegStr(HKEY_LOCAL_MACHINE, openKey.c_str(),
                 L"Icon", ownIcon.c_str()));
 
+        // One command for every registered extension, on every machine:
+        // the shell's own folder-open delegate, with Explorer's command
+        // line as the fallback for callers that cannot use a delegate.
+        //
+        // Both of them resolve the file through the ProgID\CLSID
+        // junction written just above, so opening a type associated with
+        // ArchiveFldr is handled by this DLL — the namespace extension —
+        // and not by any separate program.
         const std::wstring cmdKey = openKey + L"\\command";
-        const std::wstring helper = OpenHelperPath(dllPath);
-        if (!helper.empty())
-        {
-            keep(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(), nullptr,
-                (L"\"" + helper + L"\" \"%1\"").c_str()));
-
-            // No DelegateExecute alongside it. The delegate IS the
-            // folder-open handler, and it wins over the command line
-            // wherever it is understood — which would put us straight
-            // back to being Explorer.
-            DelRegValue(HKEY_LOCAL_MACHINE, cmdKey.c_str(),
-                L"DelegateExecute");
-        }
-        else
-        {
-            // No helper on disk — an older layout, or a build where only
-            // the DLL was produced. Fall back to driving Explorer
-            // directly: indistinguishable from CompressedFolder in the
-            // picker, but archives still open, which matters more.
-            keep(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(),
-                nullptr, ExplorerOpenCommand().c_str()));
-            keep(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(),
-                L"DelegateExecute", kFolderOpenDelegate));
-        }
+        keep(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(),
+            nullptr, ExplorerOpenCommand().c_str()));
+        keep(SetRegStr(HKEY_LOCAL_MACHINE, cmdKey.c_str(),
+            L"DelegateExecute", kFolderOpenDelegate));
     }
 
     // (No extra "open with ArchiveFldr" static verb here on purpose: the
@@ -868,6 +829,21 @@ HRESULT CRegistry::UnregisterApproved(const CLSID& clsid)
     return S_OK;
 }
 
+// Take our preview handler out of the shell's global list. Called both
+// on unregistration and by a build that has no preview handler, so an
+// upgrade from one that did cannot leave the entry pointing at a class
+// this DLL will refuse to create.
+void CRegistry::UnregisterPreviewHandlerEntry()
+{
+    HKEY hk = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, kRegKeyPreviewHandlers,
+            0, KEY_SET_VALUE, &hk) == ERROR_SUCCESS)
+    {
+        RegDeleteValueW(hk, ClsidToStr(CLSID_ArchiveFldrPreview).c_str());
+        RegCloseKey(hk);
+    }
+}
+
 // ── Icon Overlay ──────────────────────────────────────────
 HRESULT CRegistry::UnregisterOverlay(const CLSID& /*clsid*/, const wchar_t* name)
 {
@@ -941,46 +917,22 @@ static HRESULT DelCapKey(const wchar_t* parent, const wchar_t* child)
     return HRESULT_FROM_WIN32(rc);
 }
 
-// HKCR\Applications\ArchiveFldrOpen.exe — what the shell reads to find
-// out who an executable belongs to.
+// Keep the picker list in step with the Formats page without touching
+// anything else.
 //
-// This is the key the Open With UI consults once it has resolved a
-// handler down to a program. It is also, verbatim, why ArchiveFldr used
-// to show up as File Explorer with File Explorer's icon: the open
-// command named Explorer.exe, so the shell read
-// HKCR\Applications\Explorer.exe and faithfully reported what it found
-// there. Now that the command names a program of ours, this is where
-// the right answer goes.
-HRESULT CRegistry::RegisterOpenHelper(const wchar_t* dllPath)
+// Software\Classes\<ext>\OpenWithProgids is what the "choose an app"
+// list is built from, and it is the half of the association story that
+// has nothing to do with Default apps: a user who never opted into
+// being listed in Settings > Default apps still expects a type they
+// ticked to be offered when they ask for "Open with".
+//
+// RegisterCapabilities does this too, for the types it publishes, but
+// it only runs when the Default apps registration is wanted. This is
+// the part that always runs.
+void CRegistry::RefreshOpenWithProgids()
 {
-    const std::wstring helper = OpenHelperPath(dllPath);
-    if (helper.empty()) return S_OK;   // nothing built, nothing to say
-
-    const std::wstring base =
-        std::wstring(L"Software\\Classes\\Applications\\") + kOpenHelperExe;
-
-    FirstFailure keep;
-    keep(SetRegStr(HKEY_LOCAL_MACHINE, base.c_str(),
-        L"FriendlyAppName", kFriendlyAppName));
-
-    const std::wstring icon = OwnIcon(dllPath ? dllPath : L"");
-    if (!icon.empty())
-        keep(SetRegStr(HKEY_LOCAL_MACHINE, (base + L"\\DefaultIcon").c_str(),
-            nullptr, icon.c_str()));
-
-    keep(SetRegStr(HKEY_LOCAL_MACHINE,
-        (base + L"\\shell\\open\\command").c_str(), nullptr,
-        (L"\"" + helper + L"\" \"%1\"").c_str()));
-
-    // What it will admit to handling. Windows uses this to decide
-    // whether to suggest the program for a type it has not been asked
-    // about yet; without it we are offered for everything, which is
-    // how an archive tool ends up suggested for .jpg.
-    const std::wstring types = base + L"\\SupportedTypes";
     for (const auto* f : Formats::Registrable())
-        keep(SetRegStr(HKEY_LOCAL_MACHINE, types.c_str(), f->ext, L""));
-
-    return keep.hr;
+        OfferProgIdFor(f->ext, f->progId, ExtensionIsWanted(f->ext));
 }
 
 HRESULT CRegistry::RegisterCapabilities(const wchar_t* dllPath)
@@ -1066,10 +1018,20 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
         L"ArchiveFldr Context Menu Handler", dllPath));
     RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrDropTarget,
         L"ArchiveFldr Drop Target Handler", dllPath));
-    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrThumbnail,
-        L"ArchiveFldr Thumbnail Provider", dllPath));
-    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrPreview,
-        L"ArchiveFldr Preview Handler", dllPath));
+    if constexpr (kHasVistaHandlers)
+    {
+        RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrThumbnail,
+            L"ArchiveFldr Thumbnail Provider", dllPath));
+        RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrPreview,
+            L"ArchiveFldr Preview Handler", dllPath));
+    }
+    else
+    {
+        // A build that cannot create them must not leave a previous
+        // build's registration standing either.
+        UnregisterCOMServer(CLSID_ArchiveFldrThumbnail);
+        UnregisterCOMServer(CLSID_ArchiveFldrPreview);
+    }
 
     // 1b. Namespace-extension specifics for the folder object
     //     (ShellFolder\Attributes, CATID_BrowsableShellExt, icon).
@@ -1083,15 +1045,25 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
         L"ArchiveFldr Context Menu Handler"));
     RETURN_IF_FAILED(RegisterApproved(CLSID_ArchiveFldrDropTarget,
         L"ArchiveFldr Drop Target Handler"));
-    RETURN_IF_FAILED(RegisterApproved(CLSID_ArchiveFldrThumbnail,
-        L"ArchiveFldr Thumbnail Provider"));
-    RETURN_IF_FAILED(RegisterApproved(CLSID_ArchiveFldrPreview,
-        L"ArchiveFldr Preview Handler"));
 
-    // 3. PreviewHandlers global list (needed for preview pane)
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, kRegKeyPreviewHandlers,
-        ClsidToStr(CLSID_ArchiveFldrPreview).c_str(),
-        L"ArchiveFldr Archive Preview Handler"));
+    // 3. The Vista-era handlers, and the global PreviewHandlers list
+    //    that the preview pane is driven from.
+    if constexpr (kHasVistaHandlers)
+    {
+        RETURN_IF_FAILED(RegisterApproved(CLSID_ArchiveFldrThumbnail,
+            L"ArchiveFldr Thumbnail Provider"));
+        RETURN_IF_FAILED(RegisterApproved(CLSID_ArchiveFldrPreview,
+            L"ArchiveFldr Preview Handler"));
+        RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE, kRegKeyPreviewHandlers,
+            ClsidToStr(CLSID_ArchiveFldrPreview).c_str(),
+            L"ArchiveFldr Archive Preview Handler"));
+    }
+    else
+    {
+        UnregisterApproved(CLSID_ArchiveFldrThumbnail);
+        UnregisterApproved(CLSID_ArchiveFldrPreview);
+        UnregisterPreviewHandlerEntry();
+    }
 
     // 4. Icon overlay — removed.
     //
@@ -1114,8 +1086,11 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
     UnregisterApproved(CLSID_ArchiveFldrPropSheet);
     UnregisterCOMServer(CLSID_ArchiveFldrPropSheet);
 
-    // 4c. Drop the application registration older builds wrote for the
-    //     settings program, which is no longer part of opening anything.
+    // 4c. Drop the application registrations older builds wrote for the
+    //     settings program and for ArchiveFldrOpen.exe. Neither is part
+    //     of opening anything now — every registered type is opened by
+    //     this DLL — and an upgraded install that kept them would go on
+    //     advertising programs that are not there.
     UnregisterOpenWithApp();
 
     // 5. Extensions — every row in the Formats table that carries a
@@ -1137,9 +1112,6 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
     //    The user controls this from the settings program; registration
     //    only honours the stored answer. Withdrawing is explicit, so a
     //    re-register after unticking really does remove the entry.
-    // Give the open helper an identity before anything points at it.
-    RETURN_IF_FAILED(RegisterOpenHelper(dllPath));
-
     if (Settings::Get().registerAsDefaultApp)
         RETURN_IF_FAILED(RegisterCapabilities(dllPath));
     else
@@ -1171,8 +1143,8 @@ HRESULT CRegistry::UnregisterAll()
     for (const wchar_t* base : kAllFilesBases)
         UnregisterContextMenuOnBase(std::wstring(L"Software\\Classes\\") + base);
 
-    // The application registration older builds wrote for the settings
-    // program.
+    // The application registrations older builds wrote for the settings
+    // program and for the open helper.
     UnregisterOpenWithApp();
 
     // Everything we ever registered, plus a few progIds from older builds
@@ -1190,13 +1162,6 @@ HRESULT CRegistry::UnregisterAll()
     };
     for (const auto& e : legacy) exts.push_back(e);
 
-    // The open helper's identity key. Nothing else refers to it once
-    // the ProgID trees below are gone, and leaving it behind would keep
-    // ArchiveFldr in the Open With list with no way to act on it.
-    DelRegKey(HKEY_LOCAL_MACHINE,
-        (std::wstring(L"Software\\Classes\\Applications\\")
-            + kOpenHelperExe).c_str());
-
     for (const auto& e : exts)
     {
         UnregisterExtension(e.ext, e.progId);
@@ -1212,8 +1177,8 @@ HRESULT CRegistry::UnregisterAll()
                 (std::wstring(L"Software\\Classes\\") + e.ext).c_str(),
                 0, KEY_READ | KEY_WRITE, &hk) == ERROR_SUCCESS)
         {
-            wchar_t cur[256] = {};
-            DWORD cb = sizeof(cur);
+            wchar_t cur[256 + 1] = {};   // slack element: see ReadRegStr
+            DWORD cb = sizeof(cur) - sizeof(wchar_t);
             DWORD type = 0;
             if (RegQueryValueExW(hk, nullptr, nullptr, &type,
                     reinterpret_cast<LPBYTE>(cur), &cb) == ERROR_SUCCESS &&
@@ -1229,15 +1194,7 @@ HRESULT CRegistry::UnregisterAll()
     }
 
     // PreviewHandlers list
-    {
-        HKEY hk = nullptr;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, kRegKeyPreviewHandlers,
-                0, KEY_WRITE, &hk) == ERROR_SUCCESS)
-        {
-            RegDeleteValueW(hk, ClsidToStr(CLSID_ArchiveFldrPreview).c_str());
-            RegCloseKey(hk);
-        }
-    }
+    UnregisterPreviewHandlerEntry();
 
     UnregisterOverlay(CLSID_ArchiveFldrIconOverlay, L" ArchiveFldr_Archive");
     UnregisterOverlay(CLSID_ArchiveFldrIconOverlay, L"ArchiveFldr_Archive");

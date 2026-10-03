@@ -191,7 +191,12 @@ UnrarLib& Lib()
         g_lib.error = L"That unrar.dll does not export the Unicode entry "
                       L"points (RAROpenArchiveEx / RARProcessFileW). It is "
                       L"too old — version 4 or newer is needed.";
+        // Drop the reference as well as the handle. Nulling the field
+        // alone left the rejected DLL mapped into Explorer for the life
+        // of the process, with nothing holding a handle to unload it.
+        FreeLibrary(g_lib.module);
         g_lib.module = nullptr;
+        g_lib.api    = UnrarApi{};
         return g_lib;
     }
 
@@ -466,6 +471,18 @@ std::vector<ArchiveEntry> CUnrarEngine::List(const std::wstring& dirPath)
 
         result.push_back(e);
     }
+
+    // Folders first, then by name, case-insensitively — the same order
+    // the 7-Zip engine returns and the one the view shows before the
+    // user clicks a column header. Without it this engine handed back
+    // raw archive order, so the same folder looked sorted or unsorted
+    // depending only on which engine opened it.
+    std::sort(result.begin(), result.end(),
+              [](const ArchiveEntry& a, const ArchiveEntry& b) {
+                  if (a.isDirectory != b.isDirectory)
+                      return a.isDirectory > b.isDirectory;
+                  return _wcsicmp(a.name.c_str(), b.name.c_str()) < 0;
+              });
     return result;
 }
 

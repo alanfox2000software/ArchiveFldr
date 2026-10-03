@@ -119,7 +119,6 @@ static_assert(offsetof(wimlib_dir_entry, streams) ==
 
 // ── Flags and constants ─────────────────────────────────────────────────
 constexpr int kIterateRecursive          = 0x00000001;
-constexpr int kExtractNoPreserveDirStruct = 0x00200000;
 constexpr int kAllImages                 = -1;
 
 constexpr uint32_t kAttrDirectory    = 0x00000010;
@@ -576,6 +575,18 @@ std::vector<ArchiveEntry> CWimEngine::List(const std::wstring& dirPath)
 
         result.push_back(e);
     }
+
+    // Folders first, then by name, case-insensitively — the same order
+    // the 7-Zip engine returns and the one the view shows before the
+    // user clicks a column header. Without it this engine handed back
+    // raw archive order, so the same folder looked sorted or unsorted
+    // depending only on which engine opened it.
+    std::sort(result.begin(), result.end(),
+              [](const ArchiveEntry& a, const ArchiveEntry& b) {
+                  if (a.isDirectory != b.isDirectory)
+                      return a.isDirectory > b.isDirectory;
+                  return _wcsicmp(a.name.c_str(), b.name.c_str()) < 0;
+              });
     return result;
 }
 
@@ -589,12 +600,41 @@ bool CWimEngine::ExtractFile(const ArchiveEntry& e,
     std::wstring wimPath;
     if (!SplitImagePath(e.fullPath, &image, &wimPath)) return false;
 
+    // Where the caller will look for the result.
+    //
+    // ArchiveOps::ExtractEntry — and everything built on it, from the
+    // context menu to double-clicking a file inside the archive —
+    // expects the engine to write <destDir>\<fullPath>. Two things used
+    // to break that promise here, and both reported "extraction failed"
+    // on files that had in fact been extracted somewhere else:
+    //
+    //   * kExtractNoPreserveDirStruct flattened "docs\readme.txt" to
+    //     "readme.txt", and
+    //   * on a multi-image WIM, fullPath starts with the image folder
+    //     this engine invents ("1 - Windows Setup/..."), which means
+    //     nothing to wimlib and so never appeared on disk.
+    //
+    // Keeping the directory structure and extracting into the image
+    // folder puts the file exactly where the caller goes to find it.
+    std::wstring outDir = destDir;
+    if (m_imageCount > 1)
+    {
+        const size_t slash = e.fullPath.find(L'/');
+        const std::wstring folder = (slash == std::wstring::npos)
+                                  ? e.fullPath : e.fullPath.substr(0, slash);
+        if (!folder.empty())
+        {
+            if (!outDir.empty() && outDir.back() != L'\\') outDir += L'\\';
+            outDir += folder;
+        }
+    }
+
     // An image folder itself has no WIM-side path; extract the whole image.
     if (wimPath == L"\\" && m_imageCount > 1)
     {
-        SHCreateDirectoryExW(nullptr, destDir.c_str(), nullptr);
+        SHCreateDirectoryExW(nullptr, outDir.c_str(), nullptr);
         const wchar_t* root = L"\\";
-        int rc = lib.api.extract_paths(m_wim, image, destDir.c_str(),
+        int rc = lib.api.extract_paths(m_wim, image, outDir.c_str(),
                                        &root, 1, 0);
         if (rc != 0)
         {
@@ -607,12 +647,11 @@ bool CWimEngine::ExtractFile(const ArchiveEntry& e,
         return true;
     }
 
-    SHCreateDirectoryExW(nullptr, destDir.c_str(), nullptr);
+    SHCreateDirectoryExW(nullptr, outDir.c_str(), nullptr);
     if (cb) cb(0, e.name);
 
     const wchar_t* p = wimPath.c_str();
-    int rc = lib.api.extract_paths(m_wim, image, destDir.c_str(), &p, 1,
-                                   kExtractNoPreserveDirStruct);
+    int rc = lib.api.extract_paths(m_wim, image, outDir.c_str(), &p, 1, 0);
     if (rc != 0)
     {
         MessageBoxW(nullptr,

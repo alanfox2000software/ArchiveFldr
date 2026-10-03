@@ -62,9 +62,13 @@ critical sections.
 out `CThumbnailProvider` and `CPreviewHandler`. `IThumbnailProvider` and
 `IPreviewHandler` are Vista-era interfaces; XP uses `IExtractImage` and
 has no preview pane, so on XP those two classes are dead weight that would
-not compile against the 7.1A SDK anyway. Registration skips their registry
-keys at runtime (`SysInfo::IsVistaOrLater()`), so even the modern binary
-leaves a clean registry if it is ever run somewhere old.
+not compile against the 7.1A SDK anyway. Registration follows the same
+switch: `kHasVistaHandlers` (`Registry.cpp`) is the compile-time inverse of
+`ARCHIVEFLDR_NO_VISTA_HANDLERS`, and an `if constexpr` on it decides whether
+`RegisterAll` writes the thumbnail and preview keys or removes any left
+behind by an earlier install. A build without the handlers can therefore
+never advertise them — the keys are not written and then skipped at run
+time, they are not written at all.
 
 Both link configurations stamp a subsystem floor of 5.01 (Win32) and 5.02
 (x64) through `MinimumRequiredVersion`. Without it the linker writes 6.00

@@ -105,11 +105,23 @@ using ComPtr = Microsoft::WRL::ComPtr<T>;
 // STEP 5 — Shell / COM headers
 // ═════════════════════════════════════════════════════════
 #include <shlobj.h>
-#include <shlobj_core.h>
 #include <shlwapi.h>
 #include <shellapi.h>
 #include <shobjidl.h>
-#include <shobjidl_core.h>
+// shlobj_core.h and shobjidl_core.h are Windows 8 SDK splits of the two
+// headers above. The 7.1A SDK that comes with the XP toolset has neither,
+// and shlobj.h / shobjidl.h are monolithic there, so asking for them
+// unconditionally broke the XP build at the first include. Where they do
+// exist the parent header has already pulled them in; including them
+// again is harmless and keeps the intent visible.
+#if defined(__has_include)
+#  if __has_include(<shlobj_core.h>)
+#    include <shlobj_core.h>
+#  endif
+#  if __has_include(<shobjidl_core.h>)
+#    include <shobjidl_core.h>
+#  endif
+#endif
 #include <oleauto.h>
 #include <propsys.h>
 #include <propkey.h>
@@ -136,8 +148,16 @@ using ComPtr = Microsoft::WRL::ComPtr<T>;
 #pragma comment(lib, "gdiplus.lib")
 
 // ═════════════════════════════════════════════════════════
-// STEP 7 — Standard C++20 Library
-// <expected> removed — it requires C++23, not C++20
+// STEP 7 — Standard library
+//
+// C++17 is the floor, because that is the newest dialect the XP
+// toolset (v141) understands — see ArchiveFldrLangStandard in the
+// project file. Nothing below is newer than that:
+//   <expected>  needs C++23
+//   <format>, <span>, <ranges>  need C++20 and do not exist at all in
+//               the v141 STL. They were included here and used by
+//               nothing, so the XP build failed in the precompiled
+//               header before it reached a line of our own code.
 // ═════════════════════════════════════════════════════════
 #include <string>
 #include <string_view>
@@ -156,19 +176,18 @@ using ComPtr = Microsoft::WRL::ComPtr<T>;
 #include <functional>
 #include <algorithm>
 #include <numeric>
-#include <ranges>
-#include <span>
 #include <optional>
 #include <variant>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
-#include <format>
 #include <chrono>
 #include <cassert>
 #include <cstdint>
+#include <cstdio>      // swprintf_s, used by LOG_IF_FAILED below
 #include <cstring>
 #include <cwchar>
+#include <cwctype>      // towlower / iswalpha, used all over the UI code
 
 // ═════════════════════════════════════════════════════════
 // STEP 8 — Pragma lib links
@@ -205,11 +224,14 @@ namespace chr = std::chrono;
 #define RETURN_IF_FAILED(hr)  \
     do { HRESULT _hr = (hr); if (FAILED(_hr)) return _hr; } while(0)
 
+// No std::format here: <format> is C++20, and this header has to compile
+// under the C++17 the XP toolset gives us.
 #define LOG_IF_FAILED(hr, msg)                                   \
-    do { HRESULT _hr = (hr); if (FAILED(_hr))                    \
-        OutputDebugStringW(                                       \
-            std::format(L"FAILED(0x{:08X}): {}\n",               \
-                (unsigned)_hr, msg).c_str()); } while(0)
+    do { HRESULT _hr = (hr); if (FAILED(_hr)) {                  \
+        wchar_t _buf[512];                                       \
+        swprintf_s(_buf, L"FAILED(0x%08X): %s\n",                \
+                   (unsigned)_hr, (const wchar_t*)(msg));        \
+        OutputDebugStringW(_buf); } } while(0)
 
 // ═════════════════════════════════════════════════════════
 // STEP 11 — Module state (defined in dllmain.cpp)

@@ -73,6 +73,10 @@ private:
     long m_cRef = 1;
 };
 
+// Flip to true in the same change that implements
+// CShellFolder::SetNameOf(); see the use in GetAttributesOf().
+constexpr bool kFolderCanRename = false;
+
 } // namespace
 
 // ── Column table ──────────────────────────────────────────
@@ -91,8 +95,15 @@ const CShellFolder::ColDef CShellFolder::s_cols[CShellFolder::kNumCols] = {
 // ─────────────────────────────────────────────────────────
 LPITEMIDLIST CPidlMgr::Create(const ArchiveEntry& e)
 {
-    UINT nameBytes = (UINT)((e.name.size()+1)*sizeof(WCHAR));
-    UINT total     = offsetof(NSE_ITEMID,name) + nameBytes + sizeof(USHORT);
+    // cb is the size of THIS item and nothing else. It used to include
+    // the two bytes of the list terminator as well, so every item
+    // claimed two bytes it did not own: self-consistent, because the
+    // same arithmetic allocated them, but it made the terminator part
+    // of the item and anything reading cb as "where the name ends" read
+    // two bytes of padding. ILNext / ILGetSize work off cb, so the
+    // layout is the contract.
+    const UINT nameBytes = (UINT)((e.name.size() + 1) * sizeof(WCHAR));
+    const UINT total     = (UINT)offsetof(NSE_ITEMID, name) + nameBytes;
     LPITEMIDLIST pidl = (LPITEMIDLIST)CoTaskMemAlloc(total + sizeof(USHORT));
     if (!pidl) return nullptr;
     ZeroMemory(pidl, total + sizeof(USHORT));
@@ -626,7 +637,12 @@ STDMETHODIMP CShellFolder::GetAttributesOf(
         SFGAOF a = SFGAO_HASPROPSHEET;
         if (caps.canExtract) a |= SFGAO_CANCOPY;   // copy == extract a copy
         if (caps.canDelete)  a |= SFGAO_CANDELETE | SFGAO_CANMOVE;
-        if (caps.canRename)  a |= SFGAO_CANRENAME;
+        // Only while SetNameOf() can actually carry it out. Advertising
+        // CANRENAME is what puts the view into an in-place edit on F2,
+        // and the edit ends in an E_NOTIMPL the user reads as the shell
+        // breaking. No engine reports canRename today; this keeps the
+        // two ends tied together for the one that eventually does.
+        if (caps.canRename && kFolderCanRename) a |= SFGAO_CANRENAME;
 
         if (isDir)
             a |= SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_BROWSABLE |
@@ -811,6 +827,13 @@ STDMETHODIMP CShellFolder::GetDetailsEx(
 
     case 2:                                   // Packed size
         if (isDir) return S_FALSE;
+        // Same rule as GetDetailsOf, which these two have to agree on:
+        // a format that never records a packed size (WIM, and every
+        // member of a solid block but the one carrying the figure)
+        // means "unknown", not "zero bytes". Handing Explorer a typed 0
+        // printed "0 bytes" in exactly the places the text column was
+        // careful to show an em dash.
+        if (item->packedSize == 0 && item->fileSize > 0) return S_FALSE;
         V_VT(pv)  = VT_UI8;
         V_UI8(pv) = item->packedSize;
         return S_OK;

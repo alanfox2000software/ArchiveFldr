@@ -16,18 +16,38 @@ Settings::Settings()
 
 // ── Registry helpers ──────────────────────────────────────
 DWORD Settings::ReadDword(HKEY hk, const wchar_t* n, DWORD def) {
-    DWORD v = def, sz = sizeof(v);
-    RegQueryValueExW(hk, n, nullptr, nullptr, (BYTE*)&v, &sz);
+    DWORD v = def, sz = sizeof(v), type = 0;
+    // Check the type as well as the result: a value of some other type
+    // copies its first four bytes into v and would be read as a number.
+    if (RegQueryValueExW(hk, n, nullptr, &type, (BYTE*)&v, &sz)
+            != ERROR_SUCCESS || type != REG_DWORD || sz != sizeof(v))
+        return def;
     return v;
 }
 bool Settings::ReadBool(HKEY hk, const wchar_t* n, bool def) {
     return ReadDword(hk, n, def ? 1 : 0) != 0;
 }
 std::wstring Settings::ReadStr(HKEY hk, const wchar_t* n, const wchar_t* def) {
-    wchar_t buf[MAX_PATH*2] = {};
-    DWORD sz = sizeof(buf);
-    if (RegQueryValueExW(hk, n, nullptr, nullptr, (BYTE*)buf, &sz) == ERROR_SUCCESS)
-        return buf;
+    // One byte of slack and an explicit length.
+    //
+    // RegQueryValueEx does not promise a terminator — a REG_SZ written
+    // by something that did not count one is handed back exactly as
+    // stored — so constructing a std::wstring from the buffer could run
+    // off the end of it. Build the string from the byte count instead,
+    // and keep a spare element so a value that fills the buffer still
+    // has somewhere to put the NUL.
+    wchar_t buf[MAX_PATH * 2 + 1] = {};
+    DWORD sz = sizeof(buf) - sizeof(wchar_t);
+    DWORD type = 0;
+    if (RegQueryValueExW(hk, n, nullptr, &type, (BYTE*)buf, &sz)
+            == ERROR_SUCCESS &&
+        (type == REG_SZ || type == REG_EXPAND_SZ))
+    {
+        size_t len = sz / sizeof(wchar_t);
+        buf[len] = L'\0';
+        while (len && buf[len - 1] == L'\0') --len;   // stored terminator
+        return std::wstring(buf, len);
+    }
     return def ? def : L"";
 }
 void Settings::WriteDword(HKEY hk, const wchar_t* n, DWORD v) {
@@ -54,14 +74,21 @@ void Settings::WriteStr(HKEY hk, const wchar_t* n, const std::wstring& v) {
 static bool ReadExtList(HKEY hk, const wchar_t* value,
                         std::set<std::wstring>& out)
 {
-    wchar_t buf[8192] = {};
-    DWORD sz = sizeof(buf);
+    wchar_t buf[8192 + 1] = {};
+    DWORD sz = sizeof(buf) - sizeof(wchar_t);
+    DWORD type = 0;
     out.clear();
-    if (RegQueryValueExW(hk, value, nullptr, nullptr, (BYTE*)buf, &sz)
-            != ERROR_SUCCESS)
+    if (RegQueryValueExW(hk, value, nullptr, &type, (BYTE*)buf, &sz)
+            != ERROR_SUCCESS ||
+        (type != REG_SZ && type != REG_EXPAND_SZ))
         return false;
 
-    const std::wstring packed = buf;
+    // Not necessarily NUL-terminated in the registry. See Settings::ReadStr.
+    size_t chars = sz / sizeof(wchar_t);
+    buf[chars] = L'\0';
+    while (chars && buf[chars - 1] == L'\0') --chars;
+
+    const std::wstring packed(buf, chars);
     size_t at = 0;
     while (at <= packed.size())
     {
@@ -83,9 +110,18 @@ static bool ReadExtList(HKEY hk, const wchar_t* value,
 static void LoadAssoc(HKEY hk, const wchar_t* offValue,
                       std::set<std::wstring>& out)
 {
-    // Start from everything this build can register...
+    // Start from everything this build can register, lower-cased.
+    // Everyone who looks a type up in these sets — ReadExtList above,
+    // PackAssocOff below, CRegistry::ExtensionIsWanted — lower-cases
+    // first, so storing an extension any other way would make it
+    // unfindable by all of them.
     out.clear();
-    for (const auto* f : Formats::Registrable()) out.insert(f->ext);
+    for (const auto* f : Formats::Registrable())
+    {
+        std::wstring e = f->ext;
+        for (auto& ch : e) ch = (wchar_t)towlower(ch);
+        out.insert(e);
+    }
 
     // ...and take away what the user turned off. Absent means nothing
     // was turned off, which is the same answer a fresh install gives.
@@ -110,17 +146,6 @@ static std::wstring PackAssocOff(const std::set<std::wstring>& ticked)
     return packed;
 }
 
-static std::wstring PackAssoc(const std::set<std::wstring>& in)
-{
-    std::wstring packed;
-    for (const auto& e : in)
-    {
-        if (!packed.empty()) packed += L';';
-        packed += e;
-    }
-    return packed;
-}
-
 // ── Load ──────────────────────────────────────────────────
 void Settings::Load()
 {
@@ -133,9 +158,15 @@ void Settings::Load()
     // 32-bit DLL would read defaults while the 64-bit settings program
     // wrote the real thing somewhere it could never look. On 32-bit
     // Windows the flag is ignored, which is exactly what we want.
-    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, kRegKeySettings,
-        0, nullptr, 0, KEY_READ | KEY_WOW64_64KEY,
-        nullptr, &hk, nullptr) != ERROR_SUCCESS)
+    //
+    // Opened, not created: this is the read path, and every caller of it
+    // is a shell extension running in somebody else's process. Creating
+    // an HKLM key needs rights that an ordinary Explorer does not have,
+    // so the create could only ever fail there — and where it did
+    // succeed (an elevated host) it left an empty key behind as a side
+    // effect of reading. A missing key simply means "defaults".
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, kRegKeySettings,
+        0, KEY_READ | KEY_WOW64_64KEY, &hk) != ERROR_SUCCESS)
         return;
 
     language            = ReadStr (hk, L"Language",        language.c_str());

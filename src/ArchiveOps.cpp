@@ -203,11 +203,17 @@ static bool PathsFromHDrop(IDataObject* pdo, std::vector<std::wstring>& paths)
         UINT count = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
         for (UINT i = 0; i < count; ++i)
         {
+            // DragQueryFile reports the length WITHOUT the terminator
+            // but writes one, so the buffer has to be a character
+            // longer than the answer. Sizing it to `need` and then
+            // promising `need + 1` was writing the NUL onto the one
+            // element of a std::wstring that is not ours to write.
             UINT need = DragQueryFileW(hDrop, i, nullptr, 0);
             if (!need) continue;
-            std::wstring p(need, L'\0');
+            std::wstring p(need + 1, L'\0');
             if (DragQueryFileW(hDrop, i, p.data(), need + 1))
             {
+                p.resize(wcslen(p.c_str()));
                 paths.push_back(p);
                 any = true;
             }

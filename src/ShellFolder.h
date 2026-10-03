@@ -46,7 +46,6 @@ public:
     static std::wstring  GetName(LPCITEMIDLIST pidl);
     static std::wstring  GetMethod(LPCITEMIDLIST pidl);
     static bool          IsDir (LPCITEMIDLIST pidl);
-    static UINT          GetSize(const ArchiveEntry& e);
     // Walk to last item in a multi-level PIDL
     static LPCITEMIDLIST  GetLast(LPCITEMIDLIST pidl);
     // Copy just the FIRST item of a multi-level PIDL.

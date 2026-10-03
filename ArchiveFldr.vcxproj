@@ -28,9 +28,6 @@
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
     <RootNamespace>ArchiveFldr</RootNamespace>
     <Keyword>Win32Proj</Keyword>
-    <!-- The XP toolset brings its own (Windows 7.1A) SDK, so only pin the
-         modern SDK version when we are not building for XP. -->
-    <WindowsTargetPlatformVersion Condition="!$(ArchiveFldrToolset.EndsWith('_xp'))">10.0.28000.0</WindowsTargetPlatformVersion>
     <!-- Toolset override. Defaults to v145 (VS2026) for a normal build:
            msbuild ArchiveFldr.sln /p:Configuration=Release /p:Platform=x64
          To produce a binary whose CRT actually runs on Windows XP, build
@@ -39,6 +36,19 @@
            msbuild ArchiveFldr.sln /p:ArchiveFldrToolset=v141_xp
          See BUILD-XP.md. -->
     <ArchiveFldrToolset Condition="'$(ArchiveFldrToolset)'==''">v145</ArchiveFldrToolset>
+    <!-- The XP toolset brings its own (Windows 7.1A) SDK, so only pin the
+         modern SDK version when we are not building for XP. The default
+         above has to come first: this test used to read the property
+         before it had a value, and only worked because an unset property
+         compares equal to the empty string. -->
+    <WindowsTargetPlatformVersion Condition="!$(ArchiveFldrToolset.EndsWith('_xp'))">10.0.28000.0</WindowsTargetPlatformVersion>
+    <!-- The language standard follows the toolset as well. v141 predates
+         /std:c++20 — it would warn D9002, ignore the switch and fall back
+         to C++14, which is not a dialect this code compiles in. C++17 is
+         the newest the XP toolset understands, and nothing here needs
+         more than that. -->
+    <ArchiveFldrLangStandard Condition="'$(ArchiveFldrLangStandard)'=='' And $(ArchiveFldrToolset.EndsWith('_xp'))">stdcpp17</ArchiveFldrLangStandard>
+    <ArchiveFldrLangStandard Condition="'$(ArchiveFldrLangStandard)'==''">stdcpp20</ArchiveFldrLangStandard>
     <!-- Targeting macros follow the toolset. They have to: with
          _WIN32_WINNT at 0x0A00 the STL compiles std::mutex down to SRW
          locks, which XP's kernel32 does not export, and the extension
@@ -98,8 +108,10 @@
        ArchiveFldr.32.dll and ArchiveFldr.64.dll landed side by side.
        That had one real virtue — the settings program could find its
        opposite-bitness DLL by looking next to itself — and one real
-       vice: ArchiveFldrOpen.exe carries the same name in both
-       platforms, so whichever built last silently overwrote the
+       vice: everything that is not name-decorated by bitness (the
+       .pdb and .res of a given project, and anything else a future
+       platform-neutral output might add) carries the same name in
+       both platforms, so whichever built last silently overwrote the
        other. Separate folders end the overwrite, and CPageInstall
        learned to look in the sibling folder to keep the virtue.
 
@@ -198,7 +210,7 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <!-- C++20 — do NOT use stdcpp23, it pulls <expected> & WinRT -->
-      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard>$(ArchiveFldrLangStandard)</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>
         src;res;%(AdditionalIncludeDirectories)
@@ -273,7 +285,7 @@ exit /b 0</Command>
       <SDLCheck>true</SDLCheck>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <WholeProgramOptimization>true</WholeProgramOptimization>
-      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard>$(ArchiveFldrLangStandard)</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>
         src;res;%(AdditionalIncludeDirectories)
@@ -346,7 +358,7 @@ exit /b 0</Command>
       <SDLCheck>true</SDLCheck>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard>$(ArchiveFldrLangStandard)</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>
         src;res;%(AdditionalIncludeDirectories)
@@ -419,7 +431,7 @@ exit /b 0</Command>
       <SDLCheck>true</SDLCheck>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <WholeProgramOptimization>true</WholeProgramOptimization>
-      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard>$(ArchiveFldrLangStandard)</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>
         src;res;%(AdditionalIncludeDirectories)
@@ -547,6 +559,7 @@ exit /b 0</Command>
     <ClInclude Include="src\Lang.h" />
     <ClInclude Include="src\Settings.h" />
     <ClInclude Include="src\BrowseTo.h" />
+    <ClInclude Include="src\ArchiveWriter.h" />
     <ClInclude Include="res\resource.h" />
   </ItemGroup>
   <!-- ═══════════════════════════════════════════════════
@@ -594,8 +607,12 @@ exit /b 0</Command>
        the 32-bit DLL and rebuild if you ever need to force it back.
 
        Recursion stops by construction — the nested build has
-       Platform=Win32, and these targets only run for x64. Set
-       ArchiveFldrBuildWin32Companion=false to turn it off.
+       Platform=Win32, and these targets only run for x64.
+
+       Off by default, because a build should produce what it was
+       asked for and nothing else — BUILD-XP.md documents building
+       each platform separately. Turn it on for a one-command build
+       of both:  msbuild ... /p:ArchiveFldrBuildWin32Companion=true
   ═══════════════════════════════════════════════════ -->
   <PropertyGroup>
     <ArchiveFldrBuildWin32Companion Condition="'$(ArchiveFldrBuildWin32Companion)' == ''">false</ArchiveFldrBuildWin32Companion>
@@ -613,7 +630,7 @@ exit /b 0</Command>
   </Target>
 
   <!-- Clean x64 without this leaves a stale ArchiveFldr.32.dll in
-       bin\$(Configuration)\, which the settings program would happily
+       $(Configuration)\x32\, which the settings program would happily
        register. Rebuild is Clean then Build, so it needs no hook of its
        own; adding one would build the companion twice. -->
   <Target Name="ArchiveFldrCleanWin32"

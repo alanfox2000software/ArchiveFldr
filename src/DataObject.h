@@ -4,7 +4,7 @@
 //
 // Formats served:
 //   CFSTR_FILEDESCRIPTORW  flattened list of the selection (folders expand)
-//   CFSTR_FILECONTENTS     one IStream per descriptor, extracted on demand
+//   CFSTR_FILECONTENTS     one IStream per descriptor, backed by staged files
 //   CF_HDROP               same selection staged in a temp folder
 //   CFSTR_SHELLIDLIST      the shell's own identity format (CIDA)
 //   CFSTR_PREFERREDDROPEFFECT = DROPEFFECT_COPY (an archive item is never

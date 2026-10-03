@@ -181,12 +181,15 @@ HRESULT CArchiveDataObject::Create(CShellFolder* folder, HWND owner, UINT cidl,
     // calls GetData in the middle of an OLE transfer; a modal prompt there
     // can make the destination abandon the request and report the opaque
     // "Error Copying File or Folder: Unspecified error" even after a valid
-    // password was entered. Stage encrypted selections now, while
+    // password was entered. Stage the whole selection now, while
     // GetUIObjectOf still gives us the source window and before OLE starts
-    // asking for FILECONTENTS / CF_HDROP.
+    // asking for FILECONTENTS / CF_HDROP.  This deliberately does not trust
+    // ArchiveEntry::isEncrypted: some handler versions omit kpidEncrypted,
+    // and the extraction callback itself is the final authority on whether
+    // a password is required.
     for (auto& item : p->m_items)
     {
-        if (item.entry.isEncrypted && !p->EnsureStaged(item, owner))
+        if (!p->EnsureStaged(item, owner))
         {
             p->Release();
             return HRESULT_FROM_WIN32(ERROR_CANCELLED);
@@ -232,10 +235,9 @@ bool CArchiveDataObject::EnsureStaged(Item& it, HWND promptOwner)
     if (!EnsureTempRoot()) return false;
 
     std::wstring produced;
-    // Encrypted selections are staged before OLE starts (see Create).
-    // This fallback remains for an entry whose format did not advertise
-    // encryption correctly; use the active window only when the caller
-    // could not provide the archive view that owns the operation.
+    // Selections are normally staged before OLE starts (see Create).
+    // Keep this path usable for defensive late calls too; use the active
+    // window only when the caller could not provide the source archive view.
     if (!promptOwner) promptOwner = GetActiveWindow();
     if (!ArchiveOps::ExtractEntryPrompting(promptOwner, m_engine,
                                            it.entry, m_tempRoot, &produced))

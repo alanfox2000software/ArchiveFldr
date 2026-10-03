@@ -508,6 +508,20 @@ static bool LooksLikeMethodId(const std::wstring& tok)
     return true;
 }
 
+static bool MethodUsesEncryption(const std::wstring& method)
+{
+    // kpidEncrypted is the authoritative answer, but not every handler /
+    // 7z.dll version publishes it consistently.  The coder chain is a
+    // second, independent signal: encrypted 7z and zip members contain an
+    // AES or ZipCrypto coder even when kpidEncrypted arrived as VT_EMPTY.
+    std::wstring upper = method;
+    for (auto& ch : upper) ch = (wchar_t)towupper(ch);
+    return upper.find(L"AES")       != std::wstring::npos ||
+           upper.find(L"ZIPCRYPTO") != std::wstring::npos ||
+           upper.find(L"06F10101")  != std::wstring::npos ||
+           upper.find(L"06F10701")  != std::wstring::npos;
+}
+
 // Rewrite the hex members of a coder chain, leaving everything else —
 // names, ":24" dictionary suffixes, separators — exactly as reported.
 static std::wstring PrettifyMethod(const std::wstring& raw)
@@ -559,9 +573,10 @@ public:
           m_password(std::move(password)) {}
 
     bool HadError() const { return m_hadError; }
+    bool PasswordWasRequested() const { return m_passwordRequested; }
     // The failure pattern that means "wrong or missing password" rather
-    // than corruption: the handler said so outright, or an item flagged
-    // encrypted failed while unencrypted ones went through.
+    // than corruption: the handler said so outright, or a password-backed
+    // item failed with the data/CRC result older handlers use for this case.
     bool WrongPassword() const { return m_wrongPassword; }
 
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override
@@ -593,8 +608,9 @@ public:
     {
         if (outStream) *outStream = nullptr;
         m_curOut.Reset();
-        m_curOutSpec  = nullptr;
-        m_curIsDir    = false;
+        m_curOutSpec            = nullptr;
+        m_curIsDir              = false;
+        m_curPasswordRequested  = false;
         m_curDiskPath.clear();
 
         std::wstring path = PropGetString(m_archive, index, k7zPidPath);
@@ -605,7 +621,11 @@ public:
         // dragging the file out of the folder died as E_FAIL —
         // "Error Copying File or Folder: Unspecified error".
         if (path.empty()) path = m_fallbackName;
-        m_curEncrypted = PropGetBool(m_archive, index, k7zPidEncrypted, false);
+        const std::wstring method =
+            PropGetString(m_archive, index, k7zPidMethod);
+        m_curEncrypted =
+            PropGetBool(m_archive, index, k7zPidEncrypted, false) ||
+            MethodUsesEncryption(method);
         for (auto& ch : path) if (ch == L'\\') ch = L'/';
         bool isDir = PropGetBool(m_archive, index, k7zPidIsDir, false);
         m_curMTime  = PropGetFileTime(m_archive, index, k7zPidMTime);
@@ -686,12 +706,15 @@ public:
         else
         {
             m_hadError = true;
-            // kWrongPassword is explicit; a data/CRC error on an item the
-            // archive flags encrypted is the same thing said less clearly
-            // (zip's ZipCrypto cannot tell the two apart).
+            // kWrongPassword is explicit; a data/CRC error on an item that
+            // either advertises encryption OR actually asked this callback
+            // for a password is the same thing said less clearly.  The
+            // latter is essential for handlers that return VT_EMPTY for
+            // kpidEncrypted (and for older ZipCrypto handlers).
             if (opRes == N7zExtract::kWrongPassword ||
-                (m_curEncrypted && (opRes == N7zExtract::kDataError ||
-                                    opRes == N7zExtract::kCRCError)))
+                ((m_curEncrypted || m_curPasswordRequested) &&
+                 (opRes == N7zExtract::kDataError ||
+                  opRes == N7zExtract::kCRCError)))
                 m_wrongPassword = true;
         }
 
@@ -711,10 +734,17 @@ public:
     STDMETHODIMP CryptoGetTextPassword(BSTR* password) override
     {
         if (!password) return E_POINTER;
-        // An empty password still gets handed over (as an empty string):
-        // the item then fails with a data/wrong-password result, which is
-        // reported per item instead of aborting the whole run — the
-        // unencrypted half of a mixed archive still extracts.
+        m_passwordRequested    = true;
+        m_curPasswordRequested = true;
+
+        // Do not silently try an empty BSTR when the UI has never supplied
+        // a password.  Aborting lets the engine classify this as "password
+        // required" and retry after the shared password prompt.
+        if (m_password.empty())
+        {
+            *password = nullptr;
+            return E_ABORT;
+        }
         *password = SysAllocString(m_password.c_str());
         return *password ? S_OK : E_OUTOFMEMORY;
     }
@@ -728,7 +758,9 @@ private:
     ProgressFn     m_cb;
     bool           m_hadError = false;
     bool           m_wrongPassword = false;
-    bool           m_curEncrypted  = false;
+    bool           m_passwordRequested    = false;
+    bool           m_curPasswordRequested = false;
+    bool           m_curEncrypted         = false;
     std::wstring   m_password;
     // What to call the payload of a single-stream container, which
     // reports no path of its own. Empty for every other archive.
@@ -784,6 +816,7 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
     m_lastError.clear();
     m_needPasswordToOpen = false;
     m_wrongPassword      = false;
+    m_passwordMissing    = false;
     m_filePath = path;
     m_readOnly = true;
 
@@ -830,16 +863,27 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
         ComPtr<IInArchive7z> candidate;
         candidate.Attach(static_cast<IInArchive7z*>(rawArchive));
 
-        // Asked-for-password is remembered across attempts: the handler
-        // that recognised the format but could not decrypt the headers is
-        // the signal, even if later fallback handlers also fail.
+        // Keep the signal local to this handler.  A password request means
+        // that it recognised encrypted headers; no unrelated fallback
+        // handler may subsequently claim the same bytes as an empty archive.
+        bool askedThisHandler = false;
         ComPtr<IArchiveOpenCallback7z> openCb;
-        openCb.Attach(new CArchiveOpenCallback(m_password, &passwordAsked));
+        openCb.Attach(new CArchiveOpenCallback(m_password, &askedThisHandler));
 
         UINT64 maxCheckStartPosition = 1 << 20;   // tolerate SFX stubs etc.
-        if (FAILED(candidate->Open(inStream.Get(), &maxCheckStartPosition,
-                                   openCb.Get())))
+        const HRESULT openHr = candidate->Open(
+            inStream.Get(), &maxCheckStartPosition, openCb.Get());
+
+        // IInArchive::Open uses S_FALSE for "not my format".  SUCCEEDED()
+        // is therefore wrong here: accepting S_FALSE was the direct cause
+        // of encrypted-header .7z files opening through a fallback handler
+        // as an apparently valid archive containing zero items.
+        if (openHr != S_OK)
+        {
+            if (askedThisHandler) passwordAsked = true;
+            candidate->Close();
             return false;
+        }
 
         archive    = candidate;
         chosenName = name;
@@ -855,7 +899,13 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
     else
     {
         for (const Handler7z* h : candidates)
+        {
             if (tryHandler(h->clsid, h->name)) break;
+            // A handler only asks for a header password after recognising
+            // its archive.  Stop now; trying permissive fallbacks can only
+            // hide the password request or misidentify the encrypted bytes.
+            if (passwordAsked) break;
+        }
     }
 
     if (!archive)
@@ -1044,12 +1094,15 @@ void C7zArchiveEngine::BuildEntryList()
             e.hasCrc             = PropGetUInt32If(m_archive.Get(), i,
                                                    k7zPidCRC, &e.crc32);
             e.modifiedTime       = PropGetFileTime(m_archive.Get(), i, k7zPidMTime);
-            e.isEncrypted        = PropGetBool(m_archive.Get(), i, k7zPidEncrypted, false);
+            const std::wstring rawMethod =
+                PropGetString(m_archive.Get(), i, k7zPidMethod);
+            e.isEncrypted =
+                PropGetBool(m_archive.Get(), i, k7zPidEncrypted, false) ||
+                MethodUsesEncryption(rawMethod);
             // kpidMethod is the per-item coder chain ("LZMA2:24", "Copy", …),
             // except for codecs the loaded 7z.dll has no name for, which
             // arrive as a bare hex method ID — hence the lookup.
-            e.compressionMethod  = PrettifyMethod(
-                PropGetString(m_archive.Get(), i, k7zPidMethod));
+            e.compressionMethod  = PrettifyMethod(rawMethod);
             // Only .7z used to reach this engine, so an unreported method
             // was labelled "7z". Now that tar, zip, iso and the rest come
             // through here that would be a plain lie — a tar member is
@@ -1219,6 +1272,8 @@ std::vector<ArchiveEntry> C7zArchiveEngine::List(const std::wstring& dirPath)
 bool C7zArchiveEngine::ExtractIndices(const std::vector<UINT32>& indices,
                                        const std::wstring& destDir, ProgressFn cb)
 {
+    m_wrongPassword   = false;
+    m_passwordMissing = false;
     if (!m_open || !m_archive || indices.empty()) return false;
     SHCreateDirectoryExW(nullptr, destDir.c_str(), nullptr);
 
@@ -1228,16 +1283,26 @@ bool C7zArchiveEngine::ExtractIndices(const std::vector<UINT32>& indices,
     ComPtr<IArchiveExtractCallback7z> extractCb;
     extractCb.Attach(cbRaw);
 
-    m_wrongPassword = false;
-    HRESULT hr = m_archive->Extract(indices.data(), (UINT32)indices.size(), 0, extractCb.Get());
-    bool ok = SUCCEEDED(hr) && !cbRaw->HadError();
+    const HRESULT hr = m_archive->Extract(
+        indices.data(), (UINT32)indices.size(), 0, extractCb.Get());
+    const bool ok = (hr == S_OK) && !cbRaw->HadError();
     if (!ok)
     {
-        m_wrongPassword = cbRaw->WrongPassword();
+        // Returning E_ABORT before any SetOperationResult is normal when an
+        // encrypted item asks for a password we do not have yet.  Once a
+        // password exists, the callback's per-item result distinguishes a
+        // wrong password from unrelated corruption.
+        m_passwordMissing =
+            cbRaw->PasswordWasRequested() && m_password.empty();
+        m_wrongPassword = cbRaw->WrongPassword() || m_passwordMissing;
         m_lastError = m_wrongPassword
             ? L"One or more items are encrypted and the password is "
               L"missing or wrong."
             : L"Extraction failed for one or more files (corrupt data).";
+    }
+    else
+    {
+        m_lastError.clear();
     }
     return ok;
 }
@@ -1305,6 +1370,8 @@ EngineCaps C7zArchiveEngine::GetCaps() const
 
 bool C7zArchiveEngine::Test(ProgressFn cb)
 {
+    m_wrongPassword   = false;
+    m_passwordMissing = false;
     if (!m_open || !m_archive) return false;
     UINT32 numItems = 0;
     m_archive->GetNumberOfItems(&numItems);
@@ -1314,16 +1381,22 @@ bool C7zArchiveEngine::Test(ProgressFn cb)
     ComPtr<IArchiveExtractCallback7z> extractCb;
     extractCb.Attach(cbRaw);
 
-    m_wrongPassword = false;
-    HRESULT hr = m_archive->Extract(nullptr, (UINT32)-1, 1 /*testMode*/, extractCb.Get());
-    bool ok = SUCCEEDED(hr) && !cbRaw->HadError();
+    const HRESULT hr = m_archive->Extract(
+        nullptr, (UINT32)-1, 1 /*testMode*/, extractCb.Get());
+    const bool ok = (hr == S_OK) && !cbRaw->HadError();
     if (!ok)
     {
-        m_wrongPassword = cbRaw->WrongPassword();
+        m_passwordMissing =
+            cbRaw->PasswordWasRequested() && m_password.empty();
+        m_wrongPassword = cbRaw->WrongPassword() || m_passwordMissing;
         m_lastError = m_wrongPassword
             ? L"Encrypted items could not be verified: the password is "
               L"missing or wrong."
             : L"Archive integrity test reported errors.";
+    }
+    else
+    {
+        m_lastError.clear();
     }
     return ok;
 }

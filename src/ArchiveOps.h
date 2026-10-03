@@ -45,8 +45,9 @@ bool EnsureCanAdd (HWND hwnd, const EnginePtr& eng);
 bool EnsureOpenPassword(HWND hwnd, const EnginePtr& eng);
 
 // Make sure the engine holds a password before encrypted items are read:
-// when the archive has encrypted entries and no password yet, prompt and
-// store the answer. False only when the user cancels the prompt.
+// prompt when entries advertise encryption, or after the decoder itself
+// requested a password that property metadata missed. False only when the
+// user cancels the prompt.
 bool EnsureReadPassword(HWND hwnd, const EnginePtr& eng);
 
 // After an extract/test failed because the password is missing or wrong

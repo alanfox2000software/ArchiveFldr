@@ -65,6 +65,7 @@ public:
     std::wstring GetPassword() const override { return m_password; }
     bool PasswordNeededToOpen() const override { return m_needPasswordToOpen; }
     bool LastErrorWasWrongPassword() const override { return m_wrongPassword; }
+    bool LastErrorNeedsPassword() const override { return m_passwordMissing; }
     bool HasEncryptedItems() const override
     {
         for (const auto& e : m_allEntries) if (e.isEncrypted) return true;
@@ -104,6 +105,7 @@ private:
     std::wstring              m_handlerName;        // "zip", "7z", ... (handler id)
     bool                      m_needPasswordToOpen = false;
     bool                      m_wrongPassword      = false;
+    bool                      m_passwordMissing    = false;
     // Name to give the payload of a single-stream container (.bz2, .gz,
     // .xz), which carries no name of its own. Empty for every other
     // archive. Both the listing and the extract callback read this, so

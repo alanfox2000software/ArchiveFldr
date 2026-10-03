@@ -845,6 +845,9 @@ void CContextMenu::DoOpenItem()
 void CContextMenu::DoExtract(bool here)
 {
     auto eng = AcquireEngine();
+    // Header-encrypted archives are not open yet: they must be reopened
+    // with a password before capability checks, selection lookup or extract.
+    if (!ArchiveOps::EnsureOpenPassword(m_hwnd, eng)) return;
     if (!ArchiveOps::EnsureCanRead(m_hwnd, eng)) return;
 
     std::wstring dest;
@@ -874,21 +877,37 @@ void CContextMenu::DoExtract(bool here)
     const bool itemMode = (m_mode == ModeItem && SelectedEntries(eng, sel));
 
     bool ok = true;
-    for (int attempt = 0; attempt < 3; ++attempt)
+    int passwordAttempts = 0;
+    for (;;)
     {
+        const bool hadPassword = !eng->GetPassword().empty();
+        if (hadPassword) ++passwordAttempts;
+
         WaitCursor wait;
         ok = true;
         if (itemMode)
         {
             for (const auto& e : sel)
-                ok = eng->ExtractFile(e, dest, nullptr) && ok;
+            {
+                if (!eng->ExtractFile(e, dest, nullptr))
+                {
+                    ok = false;
+                    // Do not let a later successful unencrypted item clear
+                    // the password classification from this failed one.
+                    if (eng->LastErrorWasWrongPassword()) break;
+                }
+            }
         }
         else
         {
             ok = eng->ExtractAll(dest, nullptr);
         }
         if (ok || !eng->LastErrorWasWrongPassword()) break;
-        if (!ArchiveOps::AskPasswordAgain(m_hwnd, eng)) break;
+        if (hadPassword && passwordAttempts >= 3) break;
+        const bool supplied = eng->LastErrorNeedsPassword()
+            ? ArchiveOps::EnsureReadPassword(m_hwnd, eng)
+            : ArchiveOps::AskPasswordAgain(m_hwnd, eng);
+        if (!supplied) break;
     }
 
     SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATH, dest.c_str(), nullptr);
@@ -1225,16 +1244,25 @@ void CContextMenu::DoOpenShell()
 void CContextMenu::DoTest()
 {
     auto engine = AcquireEngine();
+    if (!ArchiveOps::EnsureOpenPassword(m_hwnd, engine)) return;
     if (!ArchiveOps::EnsureCanRead(m_hwnd, engine)) return;
     if (!ArchiveOps::EnsureReadPassword(m_hwnd, engine)) return;
 
     bool ok = false;
-    for (int attempt = 0; attempt < 3; ++attempt)
+    int passwordAttempts = 0;
+    for (;;)
     {
+        const bool hadPassword = !engine->GetPassword().empty();
+        if (hadPassword) ++passwordAttempts;
+
         WaitCursor wait;
         ok = engine->Test(nullptr);
         if (ok || !engine->LastErrorWasWrongPassword()) break;
-        if (!ArchiveOps::AskPasswordAgain(m_hwnd, engine)) break;
+        if (hadPassword && passwordAttempts >= 3) break;
+        const bool supplied = engine->LastErrorNeedsPassword()
+            ? ArchiveOps::EnsureReadPassword(m_hwnd, engine)
+            : ArchiveOps::AskPasswordAgain(m_hwnd, engine);
+        if (!supplied) break;
     }
 
     MessageBoxW(m_hwnd,
@@ -1289,8 +1317,8 @@ void CContextMenu::DoInfo()
     MessageBoxW(m_hwnd, msg.c_str(), L"Archive Info", MB_ICONINFORMATION | MB_OK);
 }
 
-// Copy selected entries to the clipboard. The data object extracts lazily,
-// so pasting into Explorer produces the real files.
+// Copy selected entries to the clipboard. The data object stages the bytes
+// before OLE starts, so password UI never appears inside GetData().
 void CContextMenu::DoCopy()
 {
     auto eng = AcquireEngine();

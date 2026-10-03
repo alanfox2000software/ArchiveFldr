@@ -530,6 +530,8 @@ exit /b 0</Command>
     <ClCompile Include="src\Lang.cpp" />
     <ClCompile Include="src\Settings.cpp" />
     <ClCompile Include="src\BrowseTo.cpp" />
+    <ClCompile Include="src\PasswordDialog.cpp" />
+    <ClCompile Include="src\AddToArchiveDialog.cpp" />
   </ItemGroup>
   <!-- ═══════════════════════════════════════════════════
        Header Files
@@ -560,6 +562,8 @@ exit /b 0</Command>
     <ClInclude Include="src\Settings.h" />
     <ClInclude Include="src\BrowseTo.h" />
     <ClInclude Include="src\ArchiveWriter.h" />
+    <ClInclude Include="src\PasswordDialog.h" />
+    <ClInclude Include="src\AddToArchiveDialog.h" />
     <ClInclude Include="res\resource.h" />
   </ItemGroup>
   <!-- ═══════════════════════════════════════════════════

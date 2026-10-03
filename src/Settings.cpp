@@ -174,7 +174,6 @@ void Settings::Load()
     // General
     showPreviewPane     = ReadBool(hk, L"ShowPreview",      showPreviewPane);
     showThumbnails      = ReadBool(hk, L"ShowThumbnails",   showThumbnails);
-    showContextMenu     = ReadBool(hk, L"ShowContextMenu",  showContextMenu);
     openArchiveOnDblClk = ReadBool(hk, L"OpenOnDblClk",    openArchiveOnDblClk);
     promptForPath       = ReadBool(hk, L"PromptPath",       promptForPath);
     rememberLastPath    = ReadBool(hk, L"RememberPath",     rememberLastPath);
@@ -192,26 +191,9 @@ void Settings::Load()
     LoadAssoc(hk, L"Associations64Off", assoc64);
     registerAsDefaultApp = ReadBool(hk, L"RegisterAsDefaultApp", registerAsDefaultApp);
 
-    // Context menu
-    ctxExtract       = ReadBool(hk, L"CtxExtract",      ctxExtract);
-    ctxExtractHere   = ReadBool(hk, L"CtxExtractHere",  ctxExtractHere);
-    ctxAddToArchive  = ReadBool(hk, L"CtxAdd",          ctxAddToArchive);
-    ctxCompressHere  = ReadBool(hk, L"CtxCompressHere",  ctxCompressHere);
-    ctxCompressEmail = ReadBool(hk, L"CtxEmail",        ctxCompressEmail);
-    ctxOpenInShell   = ReadBool(hk, L"CtxOpen",         ctxOpenInShell);
-    ctxTestArchive   = ReadBool(hk, L"CtxTest",         ctxTestArchive);
-    ctxArchiveInfo   = ReadBool(hk, L"CtxInfo",         ctxArchiveInfo);
-    ctxSettings      = ReadBool(hk, L"CtxSettings",     ctxSettings);
-    ctxUseSubMenu    = ReadBool(hk, L"CtxSubmenu",      ctxUseSubMenu);
-    ctxMenuIcons     = ReadBool(hk, L"CtxMenuIcons",    ctxMenuIcons);
-    ctxSubMenuTitle  = ReadStr (hk, L"CtxSubmenuTitle", ctxSubMenuTitle.c_str());
-
-    // One per bitness, both defaulting to true: absent means "nobody has
-    // said otherwise", which has to keep meaning "register the context
-    // menu" or an upgrade would silently take the right-click menu away
-    // from every existing install. See Settings.h.
-    ctxMenu32        = ReadBool(hk, L"ContextMenu32",   ctxMenu32);
-    ctxMenu64        = ReadBool(hk, L"ContextMenu64",   ctxMenu64);
+    // The Explorer context menu values older builds stored here
+    // (ShowContextMenu, Ctx*, ContextMenu32/64) are not read any more:
+    // the feature is gone. Save() deletes them.
 
     // Appearance
     showSizeColumn    = ReadBool (hk, L"ColSize",         showSizeColumn);
@@ -248,7 +230,6 @@ void Settings::Save() const
     // General
     WriteBool (hk, L"ShowPreview",     showPreviewPane);
     WriteBool (hk, L"ShowThumbnails",  showThumbnails);
-    WriteBool (hk, L"ShowContextMenu", showContextMenu);
     WriteBool (hk, L"OpenOnDblClk",   openArchiveOnDblClk);
     WriteBool (hk, L"PromptPath",      promptForPath);
     WriteBool (hk, L"RememberPath",    rememberLastPath);
@@ -270,22 +251,26 @@ void Settings::Save() const
     RegDeleteValueW(hk, L"Associations64");
     WriteBool(hk, L"RegisterAsDefaultApp", registerAsDefaultApp);
 
-    // Context menu
     WriteStr (hk, L"Language",        language);
-    WriteBool(hk, L"CtxExtract",      ctxExtract);
-    WriteBool(hk, L"CtxExtractHere",  ctxExtractHere);
-    WriteBool(hk, L"CtxAdd",          ctxAddToArchive);
-    WriteBool(hk, L"CtxCompressHere", ctxCompressHere);
-    WriteBool(hk, L"CtxEmail",        ctxCompressEmail);
-    WriteBool(hk, L"CtxOpen",         ctxOpenInShell);
-    WriteBool(hk, L"CtxTest",         ctxTestArchive);
-    WriteBool(hk, L"CtxInfo",         ctxArchiveInfo);
-    WriteBool(hk, L"CtxSettings",     ctxSettings);
-    WriteBool(hk, L"CtxSubmenu",      ctxUseSubMenu);
-    WriteBool(hk, L"CtxMenuIcons",    ctxMenuIcons);
-    WriteStr (hk, L"CtxSubmenuTitle", ctxSubMenuTitle);
-    WriteBool(hk, L"ContextMenu32",   ctxMenu32);
-    WriteBool(hk, L"ContextMenu64",   ctxMenu64);
+
+    // The Explorer context menu feature is gone, so its values are
+    // deleted the same way the old Associations lists are above:
+    // removed rather than left behind to be misread by something later.
+    RegDeleteValueW(hk, L"ShowContextMenu");
+    RegDeleteValueW(hk, L"CtxExtract");
+    RegDeleteValueW(hk, L"CtxExtractHere");
+    RegDeleteValueW(hk, L"CtxAdd");
+    RegDeleteValueW(hk, L"CtxCompressHere");
+    RegDeleteValueW(hk, L"CtxEmail");
+    RegDeleteValueW(hk, L"CtxOpen");
+    RegDeleteValueW(hk, L"CtxTest");
+    RegDeleteValueW(hk, L"CtxInfo");
+    RegDeleteValueW(hk, L"CtxSettings");
+    RegDeleteValueW(hk, L"CtxSubmenu");
+    RegDeleteValueW(hk, L"CtxMenuIcons");
+    RegDeleteValueW(hk, L"CtxSubmenuTitle");
+    RegDeleteValueW(hk, L"ContextMenu32");
+    RegDeleteValueW(hk, L"ContextMenu64");
 
     // Appearance
     WriteBool (hk, L"ColSize",     showSizeColumn);
@@ -314,7 +299,6 @@ void Settings::Reset()
     // ── General ──────────────────────────────────────────
     showPreviewPane      = true;
     showThumbnails       = true;
-    showContextMenu      = true;
     openArchiveOnDblClk  = true;
     promptForPath        = true;
     rememberLastPath     = true;
@@ -334,22 +318,8 @@ void Settings::Reset()
     }
     registerAsDefaultApp = false;
 
-    // ── Context menu ──────────────────────────────────────
-    ctxExtract       = true;
-    ctxExtractHere   = true;
-    ctxCompressHere  = true;
-    ctxMenuIcons     = true;
+    // ── Language ──────────────────────────────────────────
     language         = L"en";
-    ctxAddToArchive  = true;
-    ctxCompressEmail = true;
-    ctxOpenInShell   = true;
-    ctxTestArchive   = true;
-    ctxArchiveInfo   = true;
-    ctxSettings      = true;
-    ctxUseSubMenu    = true;
-    ctxSubMenuTitle  = L"ArchiveFldr";
-    ctxMenu32        = true;
-    ctxMenu64        = true;
 
     // ── Appearance ────────────────────────────────────────
     showSizeColumn    = true;

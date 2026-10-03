@@ -1,8 +1,8 @@
 // SettingsDialog.h
 // ─────────────────────────────────────────────────────────────────────────
 // The Options window, laid out after 7-Zip's File Manager > Tools >
-// Options: a tab strip with System, ArchiveFldr, Folders, Settings and
-// Language, and OK / Cancel / Apply along the bottom.
+// Options: a tab strip with Folders, Settings and Language,
+// and OK / Cancel / Apply along the bottom.
 //
 // Every page is a child dialog created from a template in resource.rc and
 // parked inside the tab control's display rectangle. Captions come from
@@ -34,80 +34,10 @@ public:
     virtual void  Retranslate()         = 0;
 };
 
-// ── System: file type associations, one tick column per bitness ──
-class CPageSystem : public ISettingsPage
-{
-public:
-    ~CPageSystem() override;
-    HWND Create(HWND) override;  void Show(bool) override;
-    void Load() override;        void Save() override;
-    void Place(const RECT&) override;
-    bool Dirty() const override { return m_dirty; }
-    void ClearDirty() override  { m_dirty = false; }
-    UINT DialogId() const override { return IDD_PAGE_SYSTEM; }
-    const wchar_t* Title() const override { return L"System"; }
-    HWND GetHwnd() const override { return m_hwnd; }
-    void Retranslate() override;
-
-private:
-    static INT_PTR CALLBACK DlgProc(HWND, UINT, WPARAM, LPARAM);
-    void BuildList();
-    void SetAll(int col, bool on);
-    void Toggle(int row, int col);
-    bool Ticked(int row, int col) const;
-    void SetTick(int row, int col, bool on);
-
-    HWND       m_hwnd = nullptr;
-    HWND       m_list = nullptr;
-    HIMAGELIST m_imgs = nullptr;
-    bool       m_dirty = false;
-    // Column index of the 32-bit and 64-bit ticks, or -1 when this build
-    // does not offer that one. A 32-bit settings program runs on a 32-bit
-    // Windows, where a 64-bit DLL could not be loaded by anything.
-    int        m_col32 = -1;
-    int        m_col64 = -1;
-    std::vector<const wchar_t*> m_exts;   // row -> extension
-};
-
-// ── ArchiveFldr: the shell context menu ──────────────────
-class CPageArchiveFldr : public ISettingsPage
-{
-public:
-    HWND Create(HWND) override;  void Show(bool) override;
-    void Load() override;        void Save() override;
-    void Place(const RECT&) override;
-    bool Dirty() const override { return m_dirty; }
-    void ClearDirty() override  { m_dirty = false; }
-    UINT DialogId() const override { return IDD_PAGE_ARCHIVEFLDR; }
-    const wchar_t* Title() const override { return L"ArchiveFldr"; }
-    HWND GetHwnd() const override { return m_hwnd; }
-    void Retranslate() override;
-
-    // Register (or deregister) the context menu handler wherever one of
-    // the two per-bitness ticks has moved. Called from OnApply once the
-    // ticks are saved, and not before: registration reads them back out
-    // of the registry, so the order is the whole trick.
-    void ApplyIntegration();
-
-    // Re-read those two ticks and the install state behind them. The
-    // Settings page calls this after an install or uninstall, which
-    // changes both.
-    void ReloadIntegration();
-
-private:
-    static INT_PTR CALLBACK DlgProc(HWND, UINT, WPARAM, LPARAM);
-    void SyncEnabled();
-    void FillItems();
-
-    HWND m_hwnd = nullptr;
-    HWND m_list = nullptr;
-    bool m_dirty = false;
-    // What the per-bitness ticks said when they were last loaded or
-    // applied. Apply compares against these so it only shells out to
-    // regsvr32 for a bitness the user actually changed.
-    bool m_was32 = false;
-    bool m_was64 = false;
-};
+// The "System" page (file type associations) and the "ArchiveFldr" page
+// (Explorer context menu integration) are gone: both features were
+// removed. The context menu on items inside an opened archive is part
+// of the namespace extension and needs no page.
 
 // ── Folders: working folder ──────────────────────────────
 class CPageFolders : public ISettingsPage
@@ -134,10 +64,11 @@ private:
 
 // ── Settings: install / uninstall the shell extension ────
 //
-// Four buttons: install and uninstall, once per bitness. All four act
-// on the base extension only -- browsing archives as folders,
-// thumbnails, preview, Default apps -- because the right-click menu
-// is switched on and off by the two ticks on the ArchiveFldr page.
+// Four buttons: install and uninstall, once per bitness. Each acts on
+// the whole extension — browsing archives as folders, the context
+// menu inside an opened archive, thumbnails, preview, Default apps.
+// The Explorer right-click menu on archive files is gone; nothing
+// here installs or uninstalls one.
 class CPageInstall : public ISettingsPage
 {
 public:
@@ -153,10 +84,8 @@ public:
 
 private:
     static INT_PTR CALLBACK DlgProc(HWND, UINT, WPARAM, LPARAM);
-    // One bitness, the one x64 names, and only the base extension:
-    // the context menu is the ArchiveFldr page's business in both
-    // directions. install == false removes that same half and leaves
-    // an integrated menu standing.
+    // One bitness, the one x64 names, and the whole extension both
+    // ways: install registers everything, uninstall removes it all.
     void Run(bool install, bool x64);
     void RefreshState();
 
@@ -219,20 +148,13 @@ private:
 public:
     void EnableApply(bool en);
 
-    // The Settings page has installed or removed something. The
-    // ArchiveFldr page shows part of that same state -- which bitness
-    // is integrated into the shell menu -- so it has to follow.
-    void OnInstallChanged();
-
 private:
     HWND m_hDlg   = nullptr;
     HWND m_hTab   = nullptr;
     int  m_cur    = 0;
 
     std::vector<std::unique_ptr<ISettingsPage>> m_pages;
-    // All owned by m_pages; kept by hand for the pages that have to
-    // talk to each other.
+    // Owned by m_pages; kept by hand because Retranslate asks it which
+    // language the user has highlighted.
     CPageLanguage*    m_langPage    = nullptr;
-    CPageArchiveFldr* m_ctxPage     = nullptr;
-    CPageInstall*     m_installPage = nullptr;
 };

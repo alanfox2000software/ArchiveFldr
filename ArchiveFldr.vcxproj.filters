@@ -79,6 +79,8 @@
     <ClCompile Include="src\UnrarEngine.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\SysInfo.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\BrowseTo.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\PasswordDialog.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\AddToArchiveDialog.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\Formats.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\Lang.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\Settings.cpp">
@@ -112,6 +114,8 @@
     <ClInclude Include="src\Settings.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\BrowseTo.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\ArchiveWriter.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\PasswordDialog.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\AddToArchiveDialog.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="res\resource.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
 

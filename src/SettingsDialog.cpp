@@ -16,19 +16,10 @@
 // looked up by hand. Keep these in step with Lang\en.txt.
 // ─────────────────────────────────────────────────────────
 enum : UINT {
-    LNG_CTX_OPEN      = 2000,
-    LNG_CTX_EXTRACT   = 2001,
-    LNG_CTX_EXTHERE   = 2002,
-    LNG_CTX_TEST      = 2003,
-    LNG_CTX_ADD       = 2004,
-    LNG_CTX_ADDHERE   = 2005,
-    LNG_CTX_EMAIL     = 2006,
-    LNG_CTX_INFO      = 2007,
-    LNG_CTX_SETTINGS  = 2008,
+    // 2000–2008 were the Explorer context menu item rows, and
+    // 2020–2022 the System page's file-association columns. Retired
+    // with their features; never reuse the ids.
 
-    LNG_COL_TYPE      = 2020,
-    LNG_COL_32        = 2021,
-    LNG_COL_64        = 2022,
     LNG_COL_LANGUAGE  = 2023,
     LNG_COL_LANG_EN   = 2024,
 
@@ -41,10 +32,9 @@ enum : UINT {
     LNG_UNINSTALL_OK  = 2046,
     LNG_BROWSE_WORK   = 2047,
     LNG_RESTART_SHELL = 2048,
-    // The other two answers a bitness line can give, now that the
-    // browsing half and the right-click menu are installed separately.
-    LNG_STATE_CTXMENU = 2049,
-    LNG_STATE_CTXONLY = 2050,
+    // 2049/2050 were the "with context menu" / "context menu only"
+    // install states. Retired with the Explorer context menu; never
+    // reuse the ids.
 };
 
 namespace {
@@ -74,7 +64,7 @@ HINSTANCE SelfInstance()
 // control simply painted its empty body straight over the top of them,
 // which looks exactly like a page that was never created at all.
 //
-// Everything below is shared by all five pages rather than copied into
+// Everything below is shared by all four pages rather than copied into
 // each, so a fix cannot land in four of them and miss the fifth.
 
 HWND CreatePage(UINT dlgId, HWND parent, DLGPROC proc, void* self)
@@ -138,47 +128,6 @@ void MarkDirty(HWND page)
     if (!owner) return;
     auto* dlg = (CSettingsDialog*)GetWindowLongPtrW(owner, DWLP_USER);
     if (dlg) dlg->EnableApply(true);
-}
-
-// Two 16x16 images, an empty check box and a ticked one, drawn by the
-// theme so they match every other check box on the dialog. Used for the
-// per-bitness columns on the System page, where LVS_EX_CHECKBOXES cannot
-// help: that style only ever draws in column zero.
-HIMAGELIST MakeCheckImages()
-{
-    const int cx = GetSystemMetrics(SM_CXMENUCHECK);
-    const int cy = GetSystemMetrics(SM_CYMENUCHECK);
-    const int w  = (cx > 0 ? cx : 13) + 2;
-    const int h  = (cy > 0 ? cy : 13) + 2;
-
-    HIMAGELIST il = ImageList_Create(w, h, ILC_COLOR32 | ILC_MASK, 2, 0);
-    if (!il) return nullptr;
-
-    HDC screen = GetDC(nullptr);
-    for (int checked = 0; checked < 2; ++checked)
-    {
-        HDC     dc  = CreateCompatibleDC(screen);
-        HBITMAP bmp = CreateCompatibleBitmap(screen, w, h);
-        HGDIOBJ old = SelectObject(dc, bmp);
-
-        RECT rc{ 0, 0, w, h };
-        // Magenta is the transparency key; nothing in a check box uses it.
-        HBRUSH key = CreateSolidBrush(RGB(255, 0, 255));
-        FillRect(dc, &rc, key);
-        DeleteObject(key);
-
-        RECT box{ 1, 1, w - 1, h - 1 };
-        DrawFrameControl(dc, &box, DFC_BUTTON,
-                         DFCS_BUTTONCHECK | DFCS_FLAT |
-                         (checked ? DFCS_CHECKED : 0));
-
-        SelectObject(dc, old);
-        DeleteDC(dc);
-        ImageList_AddMasked(il, bmp, RGB(255, 0, 255));
-        DeleteObject(bmp);
-    }
-    ReleaseDC(nullptr, screen);
-    return il;
 }
 
 void AddColumn(HWND list, int index, const wchar_t* text, int width, int fmt = LVCFMT_LEFT)
@@ -276,14 +225,7 @@ bool DllRegistered(bool x64)
 // 32-bit Windows there is only System32. Either way this picks a
 // regsvr32 whose bitness matches the DLL, which is the whole point —
 // the wrong one fails with "the module is not compatible".
-//
-// `part` names one half of the registration, and goes through as
-// /n /i:<part> — DllInstall and nothing else. /n is what keeps
-// regsvr32 from calling DllRegisterServer or DllUnregisterServer
-// either side of it, which would do the whole job and undo the point
-// of asking for half. nullptr means the whole thing, as before.
-bool RunRegsvr32(bool x64, bool unregister, DWORD* exitCode,
-                 const wchar_t* part = nullptr)
+bool RunRegsvr32(bool x64, bool unregister, DWORD* exitCode)
 {
     wchar_t win[MAX_PATH] = {};
     if (!GetWindowsDirectoryW(win, ARRAYSIZE(win))) return false;
@@ -300,7 +242,6 @@ bool RunRegsvr32(bool x64, bool unregister, DWORD* exitCode,
 
     std::wstring args = L"\"" + tool + L"\" /s ";
     if (unregister) args += L"/u ";
-    if (part && *part) args += std::wstring(L"/n /i:") + part + L" ";
     args += L"\"" + DllPath(x64) + L"\"";
 
     STARTUPINFOW si{ sizeof(si) };
@@ -330,514 +271,6 @@ std::wstring L(UINT id, const wchar_t* fallback)
 }
 
 } // namespace
-
-// ═════════════════════════════════════════════════════════
-// CPageSystem
-// ═════════════════════════════════════════════════════════
-CPageSystem::~CPageSystem()
-{
-    if (m_imgs) ImageList_Destroy(m_imgs);
-}
-
-HWND CPageSystem::Create(HWND parent)
-{
-    m_hwnd = CreatePage(IDD_PAGE_SYSTEM, parent, DlgProc, this);
-    return m_hwnd;
-}
-
-void CPageSystem::Show(bool show)
-{
-    ShowPageWindow(m_hwnd, show);
-}
-
-void CPageSystem::Place(const RECT& rc)
-{
-    PlacePage(m_hwnd, rc);
-}
-
-void CPageSystem::BuildList()
-{
-    m_list = GetDlgItem(m_hwnd, IDC_LIST_ASSOC);
-    if (!m_list) return;
-
-    ListView_SetExtendedListViewStyle(m_list,
-        LVS_EX_FULLROWSELECT | LVS_EX_SUBITEMIMAGES | LVS_EX_GRIDLINES);
-
-    m_imgs = MakeCheckImages();
-    if (m_imgs) ListView_SetImageList(m_list, m_imgs, LVSIL_SMALL);
-
-    int col = 0;
-    AddColumn(m_list, col++, L(LNG_COL_TYPE, L"File type").c_str(), 180);
-
-#ifdef _WIN64
-    // A 64-bit settings program manages both DLLs; a 32-bit one runs on a
-    // 32-bit Windows, where there is no 64-bit shell to register into.
-    m_col32 = col; AddColumn(m_list, col++, L(LNG_COL_32, L"32-bit").c_str(), 60, LVCFMT_LEFT);
-    m_col64 = col; AddColumn(m_list, col++, L(LNG_COL_64, L"64-bit").c_str(), 60, LVCFMT_LEFT);
-#else
-    m_col32 = col; AddColumn(m_list, col++, L(LNG_COL_32, L"32-bit").c_str(), 60, LVCFMT_LEFT);
-#endif
-
-    m_exts.clear();
-    int row = 0;
-    for (const auto* f : Formats::Registrable())
-    {
-        std::wstring label = std::wstring(f->ext + 1);   // drop the dot
-        for (auto& ch : label) ch = (wchar_t)towupper(ch);
-        label += L"   (" + std::wstring(f->name) + L")";
-
-        AddRow(m_list, row, label.c_str());
-        m_exts.push_back(f->ext);
-        ++row;
-    }
-}
-
-bool CPageSystem::Ticked(int row, int col) const
-{
-    if (col < 0) return false;
-    LVITEMW it{};
-    it.mask     = LVIF_IMAGE;
-    it.iItem    = row;
-    it.iSubItem = col;
-    if (!ListView_GetItem(m_list, &it)) return false;
-    return it.iImage == 1;
-}
-
-void CPageSystem::SetTick(int row, int col, bool on)
-{
-    if (col < 0) return;
-    LVITEMW it{};
-    it.mask     = LVIF_IMAGE;
-    it.iItem    = row;
-    it.iSubItem = col;
-    it.iImage   = on ? 1 : 0;
-    ListView_SetItem(m_list, &it);
-}
-
-void CPageSystem::Toggle(int row, int col)
-{
-    if (col < 0 || row < 0) return;
-    SetTick(row, col, !Ticked(row, col));
-    m_dirty = true;
-    MarkDirty(m_hwnd);
-}
-
-void CPageSystem::SetAll(int col, bool on)
-{
-    if (col < 0) return;
-    for (size_t i = 0; i < m_exts.size(); ++i) SetTick((int)i, col, on);
-    m_dirty = true;
-    MarkDirty(m_hwnd);
-}
-
-void CPageSystem::Load()
-{
-    if (!m_list) return;
-    const Settings& s = Settings::Get();
-    for (size_t i = 0; i < m_exts.size(); ++i)
-    {
-        SetTick((int)i, m_col32, s.assoc32.count(m_exts[i]) != 0);
-        SetTick((int)i, m_col64, s.assoc64.count(m_exts[i]) != 0);
-    }
-    m_dirty = false;
-}
-
-void CPageSystem::Save()
-{
-    if (!m_list) return;
-    Settings& s = Settings::Get();
-    if (m_col32 >= 0) s.assoc32.clear();
-    if (m_col64 >= 0) s.assoc64.clear();
-
-    for (size_t i = 0; i < m_exts.size(); ++i)
-    {
-        if (m_col32 >= 0 && Ticked((int)i, m_col32)) s.assoc32.insert(m_exts[i]);
-        if (m_col64 >= 0 && Ticked((int)i, m_col64)) s.assoc64.insert(m_exts[i]);
-    }
-    m_dirty = false;
-}
-
-void CPageSystem::Retranslate()
-{
-    if (!m_hwnd) return;
-    Lang::Apply(m_hwnd, IDD_PAGE_SYSTEM);
-    if (!m_list) return;
-
-    LVCOLUMNW c{};
-    c.mask = LVCF_TEXT;
-    std::wstring t = L(LNG_COL_TYPE, L"File type");
-    c.pszText = (LPWSTR)t.c_str();
-    ListView_SetColumn(m_list, 0, &c);
-    if (m_col32 >= 0) {
-        std::wstring a = L(LNG_COL_32, L"32-bit");
-        c.pszText = (LPWSTR)a.c_str();
-        ListView_SetColumn(m_list, m_col32, &c);
-    }
-    if (m_col64 >= 0) {
-        std::wstring b = L(LNG_COL_64, L"64-bit");
-        c.pszText = (LPWSTR)b.c_str();
-        ListView_SetColumn(m_list, m_col64, &c);
-    }
-}
-
-INT_PTR CALLBACK CPageSystem::DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
-{
-    CPageSystem* p = nullptr;
-    if (msg == WM_INITDIALOG)
-    {
-        p = (CPageSystem*)lp;
-        SetWindowLongPtrW(hDlg, DWLP_USER, (LONG_PTR)p);
-        p->m_hwnd = hDlg;
-        p->BuildList();
-        Lang::Apply(hDlg, IDD_PAGE_SYSTEM);
-        p->Load();
-#ifndef _WIN64
-        // Nothing 64-bit to manage on a 32-bit Windows.
-        ShowWindow(GetDlgItem(hDlg, IDC_LBL_BITS64),        SW_HIDE);
-        ShowWindow(GetDlgItem(hDlg, IDC_BTN_ASSOC_ALL_64),  SW_HIDE);
-        ShowWindow(GetDlgItem(hDlg, IDC_BTN_ASSOC_NONE_64), SW_HIDE);
-#endif
-        return TRUE;
-    }
-
-    p = (CPageSystem*)GetWindowLongPtrW(hDlg, DWLP_USER);
-    if (!p) return FALSE;
-
-    switch (msg)
-    {
-    case WM_COMMAND:
-        switch (LOWORD(wp))
-        {
-        case IDC_BTN_ASSOC_ALL_32:  p->SetAll(p->m_col32, true);  return TRUE;
-        case IDC_BTN_ASSOC_NONE_32: p->SetAll(p->m_col32, false); return TRUE;
-        case IDC_BTN_ASSOC_ALL_64:  p->SetAll(p->m_col64, true);  return TRUE;
-        case IDC_BTN_ASSOC_NONE_64: p->SetAll(p->m_col64, false); return TRUE;
-        }
-        break;
-
-    case WM_NOTIFY:
-    {
-        auto* nm = (LPNMHDR)lp;
-        if (nm->idFrom != IDC_LIST_ASSOC) break;
-
-        // A click anywhere in a tick column toggles that cell. Clicking
-        // the name column selects the row and changes nothing, which is
-        // what the equivalent list in 7-Zip does.
-        if (nm->code == NM_CLICK)
-        {
-            auto* ia = (LPNMITEMACTIVATE)lp;
-            LVHITTESTINFO ht{};
-            ht.pt = ia->ptAction;
-            ListView_SubItemHitTest(p->m_list, &ht);
-            if (ht.iItem >= 0 && ht.iSubItem > 0)
-                p->Toggle(ht.iItem, ht.iSubItem);
-            return TRUE;
-        }
-        // Space toggles the first tick column of the focused row, so the
-        // page is usable without a mouse.
-        if (nm->code == LVN_KEYDOWN)
-        {
-            auto* kd = (LPNMLVKEYDOWN)lp;
-            if (kd->wVKey == VK_SPACE)
-            {
-                const int row = ListView_GetNextItem(p->m_list, -1, LVNI_FOCUSED);
-                if (row >= 0) p->Toggle(row, p->m_col32);
-                return TRUE;
-            }
-        }
-        break;
-    }
-    }
-    return FALSE;
-}
-
-// ═════════════════════════════════════════════════════════
-// CPageArchiveFldr
-// ═════════════════════════════════════════════════════════
-namespace {
-
-struct CtxRow
-{
-    UINT          lang;
-    const wchar_t* fallback;
-    bool Settings::* field;
-};
-
-// Exactly the entries CContextMenu::QueryContextMenu can add, in the
-// order it adds them, labelled with the same language ids — so a row
-// here reads exactly as the menu entry it governs. A tick removes a
-// real menu item, which is the only honest way to present this list.
-const CtxRow kCtxRows[] = {
-    { LNG_CTX_OPEN,     L"Open archive",            &Settings::ctxOpenInShell   },
-    { LNG_CTX_EXTRACT,  L"Extract files...",        &Settings::ctxExtract       },
-    { LNG_CTX_EXTHERE,  L"Extract Here",            &Settings::ctxExtractHere   },
-    { LNG_CTX_TEST,     L"Test archive",            &Settings::ctxTestArchive   },
-    { LNG_CTX_ADD,      L"Add to archive...",       &Settings::ctxAddToArchive  },
-    { LNG_CTX_ADDHERE,  L"Add to \"%s\"",           &Settings::ctxCompressHere  },
-    { LNG_CTX_EMAIL,    L"Compress and email...",   &Settings::ctxCompressEmail },
-    { LNG_CTX_INFO,     L"Archive information",     &Settings::ctxArchiveInfo   },
-    { LNG_CTX_SETTINGS, L"ArchiveFldr settings...", &Settings::ctxSettings      },
-};
-
-// Row text. "Add to ..." names the archive the menu would really
-// create, using the default format from the General settings, so the
-// row is a preview rather than a description of one.
-std::wstring CtxRowText(int i)
-{
-    const CtxRow& r = kCtxRows[i];
-    if (r.lang != LNG_CTX_ADDHERE)
-        return L(r.lang, r.fallback);
-    return Lang::Format1(r.lang, r.fallback,
-                         L"archive." + Settings::Get().defaultFormat);
-}
-
-} // namespace
-
-HWND CPageArchiveFldr::Create(HWND parent)
-{
-    m_hwnd = CreatePage(IDD_PAGE_ARCHIVEFLDR, parent, DlgProc, this);
-    return m_hwnd;
-}
-
-void CPageArchiveFldr::Show(bool show)
-{
-    ShowPageWindow(m_hwnd, show);
-}
-
-void CPageArchiveFldr::Place(const RECT& rc)
-{
-    PlacePage(m_hwnd, rc);
-}
-
-void CPageArchiveFldr::FillItems()
-{
-    m_list = GetDlgItem(m_hwnd, IDC_LIST_CTXITEMS);
-    if (!m_list) return;
-
-    ListView_SetExtendedListViewStyle(m_list,
-        LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
-
-    RECT rc{};
-    GetClientRect(m_list, &rc);
-    AddColumn(m_list, 0, L"", rc.right - rc.left - GetSystemMetrics(SM_CXVSCROLL));
-
-    for (int i = 0; i < (int)ARRAYSIZE(kCtxRows); ++i)
-        AddRow(m_list, i, CtxRowText(i).c_str());
-}
-
-void CPageArchiveFldr::SyncEnabled()
-{
-    const bool on = IsDlgButtonChecked(m_hwnd, IDC_CHK_INTEGRATE) == BST_CHECKED;
-
-    // The two per-bitness ticks are the registration itself -- applied
-    // by registering that DLL's context menu handler and nothing else
-    // -- so all they need is the DLL to be there. Deliberately not
-    // "and the base install too": the menu stands on its own, which is
-    // what lets "Uninstall 64-bit" take the browsing half away without
-    // stranding a menu nobody can then untick.
-#ifdef _WIN64
-    const bool can64 = DllPresent(true);
-#else
-    const bool can64 = false;   // 32-bit build: no 64-bit shell to integrate with
-#endif
-    const bool can32 = DllPresent(false);
-
-    EnableWindow(GetDlgItem(m_hwnd, IDC_CHK_INTEGRATE_64), on && can64);
-    EnableWindow(GetDlgItem(m_hwnd, IDC_CHK_INTEGRATE_32), on && can32);
-    EnableWindow(GetDlgItem(m_hwnd, IDC_CHK_CASCADED),  on);
-    EnableWindow(GetDlgItem(m_hwnd, IDC_CHK_MENUICONS), on);
-    EnableWindow(GetDlgItem(m_hwnd, IDC_LBL_CTXITEMS),  on);
-    EnableWindow(GetDlgItem(m_hwnd, IDC_LIST_CTXITEMS), on);
-}
-
-void CPageArchiveFldr::Load()
-{
-    const Settings& s = Settings::Get();
-    CheckDlgButton(m_hwnd, IDC_CHK_INTEGRATE, s.showContextMenu ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(m_hwnd, IDC_CHK_CASCADED,  s.ctxUseSubMenu   ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(m_hwnd, IDC_CHK_MENUICONS, s.ctxMenuIcons    ? BST_CHECKED : BST_UNCHECKED);
-
-    CheckDlgButton(m_hwnd, IDC_CHK_INTEGRATE_64, s.ctxMenu64 ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(m_hwnd, IDC_CHK_INTEGRATE_32, s.ctxMenu32 ? BST_CHECKED : BST_UNCHECKED);
-    m_was64 = s.ctxMenu64;
-    m_was32 = s.ctxMenu32;
-
-    if (m_list)
-        for (int i = 0; i < (int)ARRAYSIZE(kCtxRows); ++i)
-            ListView_SetCheckState(m_list, i, s.*(kCtxRows[i].field));
-
-    SyncEnabled();
-    m_dirty = false;
-}
-
-// Just the two integration ticks, re-read from settings that something
-// else changed -- an install or an uninstall on the Settings page. The
-// rest of the page is left alone on purpose: edits the user has made
-// but not applied yet are still theirs.
-void CPageArchiveFldr::ReloadIntegration()
-{
-    if (!m_hwnd) return;
-    const Settings& s = Settings::Get();
-
-    CheckDlgButton(m_hwnd, IDC_CHK_INTEGRATE_64, s.ctxMenu64 ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(m_hwnd, IDC_CHK_INTEGRATE_32, s.ctxMenu32 ? BST_CHECKED : BST_UNCHECKED);
-    m_was64 = s.ctxMenu64;
-    m_was32 = s.ctxMenu32;
-
-    SyncEnabled();
-}
-
-void CPageArchiveFldr::Save()
-{
-    // No page, no answers. Reading a check box out of a window that was
-    // never created returns "unticked", and these ticks now decide
-    // whether the context menu stays registered -- a page that failed
-    // to create must not be read as the user clearing them.
-    if (!m_hwnd) return;
-
-    Settings& s = Settings::Get();
-    s.showContextMenu = IsDlgButtonChecked(m_hwnd, IDC_CHK_INTEGRATE) == BST_CHECKED;
-    s.ctxUseSubMenu   = IsDlgButtonChecked(m_hwnd, IDC_CHK_CASCADED)  == BST_CHECKED;
-    s.ctxMenuIcons    = IsDlgButtonChecked(m_hwnd, IDC_CHK_MENUICONS) == BST_CHECKED;
-
-    s.ctxMenu32 = IsDlgButtonChecked(m_hwnd, IDC_CHK_INTEGRATE_32) == BST_CHECKED;
-#ifdef _WIN64
-    s.ctxMenu64 = IsDlgButtonChecked(m_hwnd, IDC_CHK_INTEGRATE_64) == BST_CHECKED;
-#else
-    // A 32-bit settings program leaves the 64-bit flag exactly as it
-    // found it: it cannot register that DLL, so it has no business
-    // speaking for it. The System page skips its 64-bit column for the
-    // same reason.
-#endif
-
-    if (m_list)
-        for (int i = 0; i < (int)ARRAYSIZE(kCtxRows); ++i)
-            s.*(kCtxRows[i].field) = ListView_GetCheckState(m_list, i) != FALSE;
-
-    m_dirty = false;
-}
-
-// ── ApplyIntegration ─────────────────────────────────────
-//
-// The two per-bitness ticks are not a preference the DLL reads and
-// acts on later: they decide whether the context menu handler is
-// registered at all, so applying one means going to the registry.
-//
-// Only the menu, though -- regsvr32 /n /i:contextmenu, which reaches
-// DllInstall and nothing else. A full re-registration would quietly
-// reinstall a base extension the user had just uninstalled, and a full
-// /u would take one away that they had not.
-//
-// regsvr32 rather than calling CRegistry here: the CLSID half of the
-// registration lives in the 32- or 64-bit view of the registry, and the
-// only reliable way into the other view is a process of that bitness.
-// It is the same tool the Install buttons use.
-// ─────────────────────────────────────────────────────────
-void CPageArchiveFldr::ApplyIntegration()
-{
-    if (!m_hwnd) return;
-
-    const Settings& s = Settings::Get();
-    std::wstring report;
-    bool allOk = true;
-    bool ran   = false;
-
-    auto one = [&](bool x64, bool want, bool was) {
-        if (want == was)      return;   // this bitness did not move
-        if (!DllPresent(x64)) return;   // and there is nothing to register
-        ran = true;
-        DWORD code = 0;
-        const bool ok = RunRegsvr32(x64, !want, &code, L"contextmenu");
-        allOk = allOk && ok;
-        if (!ok)
-            report += std::wstring(x64 ? L"64-bit" : L"32-bit") +
-                      L": failed (regsvr32 exit code " +
-                      std::to_wstring((int)code) + L")\r\n";
-    };
-
-    HCURSOR prev = SetCursor(LoadCursorW(nullptr, IDC_WAIT));
-#ifdef _WIN64
-    one(true, s.ctxMenu64, m_was64);
-#endif
-    one(false, s.ctxMenu32, m_was32);
-    SetCursor(prev);
-
-    // Quiet when it worked -- this runs under Apply, which is not the
-    // place for a dialog saying nothing happened -- and loud when it
-    // did not, because the tick would otherwise claim something that
-    // is not true.
-    if (ran && !allOk)
-        MessageBoxW(m_hwnd,
-            (L(LNG_INSTALL_FAIL, L"Some parts could not be changed.") +
-             L"\r\n\r\n" + report).c_str(),
-            L"ArchiveFldr", MB_OK | MB_ICONWARNING);
-
-    if (ran)
-        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
-
-    m_was64 = s.ctxMenu64;
-    m_was32 = s.ctxMenu32;
-    SyncEnabled();
-}
-
-void CPageArchiveFldr::Retranslate()
-{
-    if (!m_hwnd) return;
-    Lang::Apply(m_hwnd, IDD_PAGE_ARCHIVEFLDR);
-    if (!m_list) return;
-    for (int i = 0; i < (int)ARRAYSIZE(kCtxRows); ++i)
-        SetSub(m_list, i, 0, CtxRowText(i).c_str());
-}
-
-INT_PTR CALLBACK CPageArchiveFldr::DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
-{
-    CPageArchiveFldr* p = nullptr;
-    if (msg == WM_INITDIALOG)
-    {
-        p = (CPageArchiveFldr*)lp;
-        SetWindowLongPtrW(hDlg, DWLP_USER, (LONG_PTR)p);
-        p->m_hwnd = hDlg;
-        p->FillItems();
-        p->Retranslate();     // Lang::Apply plus the list row captions
-        p->Load();
-        return TRUE;
-    }
-
-    p = (CPageArchiveFldr*)GetWindowLongPtrW(hDlg, DWLP_USER);
-    if (!p) return FALSE;
-
-    switch (msg)
-    {
-    case WM_COMMAND:
-        if (HIWORD(wp) == BN_CLICKED)
-        {
-            if (LOWORD(wp) == IDC_CHK_INTEGRATE) p->SyncEnabled();
-            p->m_dirty = true;
-            MarkDirty(hDlg);
-            return TRUE;
-        }
-        break;
-
-    case WM_NOTIFY:
-    {
-        auto* nm = (LPNMHDR)lp;
-        if (nm->idFrom == IDC_LIST_CTXITEMS && nm->code == LVN_ITEMCHANGED)
-        {
-            auto* lv = (LPNMLISTVIEW)lp;
-            // Only a state change that moves the check box counts; the
-            // selection moving around is not an edit.
-            if ((lv->uChanged & LVIF_STATE) &&
-                ((lv->uOldState ^ lv->uNewState) & LVIS_STATEIMAGEMASK))
-            {
-                p->m_dirty = true;
-                MarkDirty(hDlg);
-            }
-        }
-        break;
-    }
-    }
-    return FALSE;
-}
 
 // ═════════════════════════════════════════════════════════
 // CPageFolders
@@ -987,8 +420,6 @@ void CPageInstall::RefreshState()
 {
     if (!m_hwnd) return;
 
-    const Settings& s = Settings::Get();
-
     std::wstring text;
     auto line = [&](bool x64) {
         const wchar_t* which = x64 ? L"64-bit" : L"32-bit";
@@ -999,20 +430,11 @@ void CPageInstall::RefreshState()
                     L" not found next to this program\r\n";
             return;
         }
-        // Four answers, because the two halves are installed
-        // separately: the browsing extension, the right-click menu,
-        // both, or neither.
-        const bool reg = DllRegistered(x64);
-        const bool ctx = x64 ? s.ctxMenu64 : s.ctxMenu32;
-        std::wstring state;
-        if (reg && ctx)
-            state = L(LNG_STATE_CTXMENU, L"registered, with context menu");
-        else if (reg)
-            state = L(LNG_STATE_YES, L"registered");
-        else if (ctx)
-            state = L(LNG_STATE_CTXONLY, L"context menu only");
-        else
-            state = L(LNG_STATE_NO, L"not registered");
+        // Two answers: the extension is one piece now, so a build is
+        // either registered or it is not.
+        const std::wstring state = DllRegistered(x64)
+            ? L(LNG_STATE_YES, L"registered")
+            : L(LNG_STATE_NO,  L"not registered");
         text += std::wstring(which) + L": " + state + L"\r\n";
     };
 
@@ -1027,13 +449,14 @@ void CPageInstall::RefreshState()
 
     SetDlgItemTextW(m_hwnd, IDC_LBL_INSTALL_NOTE,
         L(LNG_INSTALL_NOTE,
-          L"Install registers one build of the shell extension so Explorer "
-          L"can browse archives as folders, and lists ArchiveFldr in "
-          L"Settings > Default apps for the file types ticked on the System "
-          L"page. Uninstall takes that same half back out, leaving the "
-          L"files on disk.\r\n\r\n"
-          L"Neither touches the right-click menu: that is switched on and "
-          L"off per bitness on the ArchiveFldr page.\r\n\r\n"
+          L"Install registers one build of the shell extension: Explorer "
+          L"can browse archives as folders, files inside an opened archive "
+          L"get their right-click menu, thumbnails and preview work, and "
+          L"ArchiveFldr is listed in Settings > Default apps for its "
+          L"archive file types. Uninstall takes all of that "
+          L"back out, leaving the files on disk.\r\n\r\n"
+          L"Neither adds or removes anything in Explorer's own right-click "
+          L"menu on archive files.\r\n\r\n"
           L"Explorer caches shell extensions, so sign out and back in — or "
           L"restart Explorer — for a change to take effect everywhere.")
         .c_str());
@@ -1059,12 +482,10 @@ void CPageInstall::RefreshState()
 
 void CPageInstall::Run(bool install, bool x64)
 {
-    // Both directions are per bitness and both are the base extension
-    // only: browsing archives as folders, thumbnails, preview, and the
-    // Default apps entry. The right-click menu is the ArchiveFldr
-    // page's business and neither button here disturbs it, so
-    // uninstalling the browsing half leaves an integrated menu
-    // standing until its tick is cleared.
+    // Both directions are per bitness and both are the whole
+    // extension: browsing archives as folders, the context menu on
+    // files inside an opened archive, thumbnails, preview, and the
+    // Default apps entry.
     Settings& s = Settings::Get();
 
     // Is the other build still registered? Everything shared -- the
@@ -1077,17 +498,10 @@ void CPageInstall::Run(bool install, bool x64)
 #endif
 
     // The settings have to be on disk before regsvr32 starts:
-    // registration reads the association ticks, and the context menu
-    // flags, straight out of HKLM.
+    // registration reads the association ticks straight out of HKLM.
     if (install)
     {
         s.registerAsDefaultApp = true;
-
-        // A base install is one without a menu. Saying so here is what
-        // keeps RegisterAll from adding one -- and what keeps the tick
-        // on the ArchiveFldr page honest about it.
-        bool& ctxFlag = x64 ? s.ctxMenu64 : s.ctxMenu32;
-        ctxFlag = false;
     }
     else if (!otherStillThere)
     {
@@ -1098,11 +512,10 @@ void CPageInstall::Run(bool install, bool x64)
 
     DWORD code = 0;
     HCURSOR prev = SetCursor(LoadCursorW(nullptr, IDC_WAIT));
-    // /n /i:base — the base half, through DllInstall. Not a plain
-    // register or /u, either of which would take the context menu with
-    // it.
+    // Plain regsvr32 [/u]: DllRegisterServer or DllUnregisterServer,
+    // the whole extension either way.
     const bool ok = DllPresent(x64) &&
-                    RunRegsvr32(x64, !install, &code, L"base");
+                    RunRegsvr32(x64, !install, &code);
     SetCursor(prev);
 
     const std::wstring report =
@@ -1127,12 +540,6 @@ void CPageInstall::Run(bool install, bool x64)
     // refresh without a sign-out where the shell is willing.
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
     RefreshState();
-
-    // What is installed has just changed, and the ArchiveFldr page's
-    // integration ticks are a view of that same state.
-    if (HWND owner = GetParent(m_hwnd))
-        if (auto* dlg = (CSettingsDialog*)GetWindowLongPtrW(owner, DWLP_USER))
-            dlg->OnInstallChanged();
 }
 
 void CPageInstall::Load() { RefreshState(); }
@@ -1352,20 +759,13 @@ void CSettingsDialog::OnInit(HWND hDlg)
 
     m_hTab = GetDlgItem(hDlg, IDC_TAB_PAGES);
 
-    // Three of the pages are reached by name later on, so keep a raw
-    // pointer to each before the vector takes ownership. Not "inst":
-    // that name is the module handle, a few lines up.
+    // The language page is reached by name later on, so keep a raw
+    // pointer to it before the vector takes ownership.
     auto lang = std::make_unique<CPageLanguage>();
     m_langPage = lang.get();
-    auto ctx  = std::make_unique<CPageArchiveFldr>();
-    m_ctxPage = ctx.get();
-    auto setup = std::make_unique<CPageInstall>();
-    m_installPage = setup.get();
 
-    m_pages.push_back(std::make_unique<CPageSystem>());
-    m_pages.push_back(std::move(ctx));
     m_pages.push_back(std::make_unique<CPageFolders>());
-    m_pages.push_back(std::move(setup));
+    m_pages.push_back(std::make_unique<CPageInstall>());
     m_pages.push_back(std::move(lang));
 
     for (int i = 0; i < (int)m_pages.size(); ++i)
@@ -1421,13 +821,6 @@ bool CSettingsDialog::OnApply()
         CRegistry::UnregisterCapabilities();
     }
 
-    // The two "Integrate to shell context menu" ticks are applied by
-    // registering the DLL they belong to, which has to come after the
-    // save above: that is where registration reads them from. The
-    // Settings page shows the same state, so it is refreshed after.
-    if (m_ctxPage)     m_ctxPage->ApplyIntegration();
-    if (m_installPage) m_installPage->Load();
-
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
 
     if (_wcsicmp(before.c_str(), Settings::Get().language.c_str()) != 0)
@@ -1439,15 +832,6 @@ bool CSettingsDialog::OnApply()
     for (auto& pg : m_pages) pg->ClearDirty();
     EnableApply(false);
     return true;
-}
-
-// An install or uninstall on the Settings page has moved what the
-// ArchiveFldr page's integration ticks describe. Only those ticks are
-// re-read: anything else the user has typed but not applied is still
-// theirs to apply or cancel.
-void CSettingsDialog::OnInstallChanged()
-{
-    if (m_ctxPage) m_ctxPage->ReloadIntegration();
 }
 
 void CSettingsDialog::OnOK()

@@ -2,7 +2,6 @@
 #include "stdafx.h"
 #include "ClassFactory.h"
 #include "ShellFolder.h"
-#include "ContextMenu.h"
 #include "DropTarget.h"
 #ifndef ARCHIVEFLDR_NO_VISTA_HANDLERS
 #include "ThumbnailProvider.h"
@@ -54,13 +53,9 @@ HRESULT CClassFactory::CreateShellFolder(REFIID riid, LPVOID* ppv)
     HRESULT hr = p->QueryInterface(riid, ppv);
     p->Release(); return hr;
 }
-HRESULT CClassFactory::CreateContextMenu(REFIID riid, LPVOID* ppv)
-{
-    auto* p = new(std::nothrow) CContextMenu();
-    if (!p) return E_OUTOFMEMORY;
-    HRESULT hr = p->QueryInterface(riid, ppv);
-    p->Release(); return hr;
-}
+// No CreateContextMenu: the context menu object is created directly by
+// CShellFolder / CShellView for items inside an opened archive, never
+// through COM. The Explorer-level context menu handler is gone.
 HRESULT CClassFactory::CreateDropTarget(REFIID riid, LPVOID* ppv)
 {
     auto* p = new(std::nothrow) CDropTarget();

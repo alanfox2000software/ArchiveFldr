@@ -4,6 +4,8 @@
 #include "ShellFolder.h"
 #include "ArchiveEngine.h"
 #include "ArchiveOps.h"
+#include "ArchiveWriter.h"
+#include "AddToArchiveDialog.h"
 #include "GUIDs.h"
 
 // ─────────────────────────────────────────────────────────
@@ -48,17 +50,28 @@ HRESULT Perform(HWND hwnd, CShellFolder* folder, IDataObject* pdo)
         roots.end());
     if (roots.empty()) return S_FALSE;
 
-    std::vector<ArchiveOps::AddItem> items;
-    ArchiveOps::ExpandForAdd(roots, items);
+    std::vector<ArchiveOps::AddItem> expanded;
+    ArchiveOps::ExpandForAdd(roots, expanded);
+    if (expanded.empty()) return S_FALSE;
+
+    std::vector<ArchiveWriter::Item> items;
+    ArchiveOps::BuildWriterItems(expanded, folder->GetInternalPath(), items);
     if (items.empty()) return S_FALSE;
 
+    // Same window as pasting: the user confirms (or adjusts) level,
+    // method and password before anything is written.
+    AddToArchiveDialog::Request rq;
+    rq.path       = self;
+    rq.format     = engine->GetHandlerName();
+    rq.lockFormat = true;
+    rq.fileCount  = items.size();
+
+    AddToArchiveDialog::Result res;
+    if (!AddToArchiveDialog::Show(hwnd, rq, res)) return S_FALSE;
+
     HCURSOR prev = SetCursor(LoadCursorW(nullptr, IDC_WAIT));
-    const std::wstring dir = folder->GetInternalPath();
-
-    bool ok = true;
-    for (const auto& it : items)
-        ok = engine->AddFile(it.src, ArchiveOps::TargetDirFor(dir, it), nullptr) && ok;
-
+    std::wstring err;
+    const bool ok = engine->AddItems(items, res.opt, res.path, nullptr, &err);
     SetCursor(prev);
 
     SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_IDLIST | SHCNF_FLUSH,
@@ -66,8 +79,10 @@ HRESULT Perform(HWND hwnd, CShellFolder* folder, IDataObject* pdo)
 
     if (!ok)
         MessageBoxW(hwnd,
-            L"Some files could not be added to the archive.",
+            (L"The files could not be added to the archive.\n\n" + err).c_str(),
             L"ArchiveFldr", MB_ICONWARNING | MB_OK);
+    else if (!err.empty())   // succeeded, but some sources were skipped
+        MessageBoxW(hwnd, err.c_str(), L"ArchiveFldr", MB_ICONWARNING | MB_OK);
 
     return ok ? S_OK : S_FALSE;
 }

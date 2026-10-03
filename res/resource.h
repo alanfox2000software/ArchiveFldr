@@ -14,19 +14,22 @@
 #define IDI_ARCHIVEFLDR             1
 
 // ── Dialogs ───────────────────────────────────────────────
-// The Options window and its five tabs, laid out after 7-Zip's File
+// The Options window and its four tabs, laid out after 7-Zip's File
 // Manager > Tools > Options. Every id below doubles as a language-file
 // key: Lang.cpp retitles a control by looking its id up in Lang\<x>.txt,
 // so these numbers are part of the file format and must not be
 // renumbered casually.
+//
+// 101 was IDD_PAGE_SYSTEM (file type associations) and 102 was
+// IDD_PAGE_ARCHIVEFLDR (Explorer context menu integration). Both
+// features were removed; the ids are retired, never reused.
 #define IDD_OPTIONS                 100
-#define IDD_PAGE_SYSTEM             101
-#define IDD_PAGE_ARCHIVEFLDR        102
 #define IDD_PAGE_FOLDERS            103
 #define IDD_PAGE_SETTINGS           104
 #define IDD_PAGE_LANGUAGE           105
 #define IDD_PROGRESS                107
 #define IDD_PASSWORD                108
+#define IDD_ADDTOARCHIVE            109
 
 // ── String Table ──────────────────────────────────────────
 #define IDS_APP_NAME                400
@@ -55,31 +58,20 @@
 #define IDC_BTN_CANCEL              1002
 #define IDC_BTN_APPLY               1003
 
-// ── System page ───────────────────────────────────────────
-#define IDC_LBL_ASSOCIATE           1010
-#define IDC_LIST_ASSOC              1011
-#define IDC_LBL_BITS32              1012
-#define IDC_BTN_ASSOC_ALL_32        1013
-#define IDC_BTN_ASSOC_NONE_32       1014
-#define IDC_LBL_BITS64              1015
-#define IDC_BTN_ASSOC_ALL_64        1016
-#define IDC_BTN_ASSOC_NONE_64       1017
+// ── System page (removed) ─────────────────────────────────
+// 1010–1017 were the controls of the file type association page
+// (IDC_LBL_ASSOCIATE, IDC_LIST_ASSOC, IDC_LBL_BITS32,
+// IDC_BTN_ASSOC_ALL_32, IDC_BTN_ASSOC_NONE_32, IDC_LBL_BITS64,
+// IDC_BTN_ASSOC_ALL_64, IDC_BTN_ASSOC_NONE_64). The page was removed;
+// the ids are retired, never reused — each is a key in every
+// Lang\<x>.txt on disk.
 
-// ── ArchiveFldr page ──────────────────────────────────────
-// IDC_CHK_INTEGRATE is the master switch: off means the handler is
-// still registered but contributes nothing to any menu. The two ticks
-// below it are the registration itself, one per build of the DLL — a
-// 64-bit Explorer can only load ArchiveFldr.64.dll and a 32-bit host
-// only ArchiveFldr.32.dll, so each has its own COM registration and a
-// single tick would be a lie on x64. Same reasoning as the two columns
-// on the System page.
-#define IDC_CHK_INTEGRATE           1020
-#define IDC_CHK_CASCADED            1021
-#define IDC_CHK_MENUICONS           1022
-#define IDC_LBL_CTXITEMS            1023
-#define IDC_LIST_CTXITEMS           1024
-#define IDC_CHK_INTEGRATE_64        1025
-#define IDC_CHK_INTEGRATE_32        1026
+// ── ArchiveFldr page (removed) ────────────────────────────
+// 1020–1026 were the controls of the Explorer context menu integration
+// page (IDC_CHK_INTEGRATE, IDC_CHK_CASCADED, IDC_CHK_MENUICONS,
+// IDC_LBL_CTXITEMS, IDC_LIST_CTXITEMS, IDC_CHK_INTEGRATE_64,
+// IDC_CHK_INTEGRATE_32). The feature was removed; the ids are retired,
+// never reused — each is a key in every Lang\<x>.txt on disk.
 
 // ── Folders page ──────────────────────────────────────────
 #define IDC_GRP_WORKFOLDER          1030
@@ -89,10 +81,9 @@
 #define IDC_BTN_WORKDIR             1034
 
 // ── Settings page ─────────────────────────────────────────
-// Install and Uninstall are both per bitness, and both act on the base
-// shell extension only: the right-click menu is registered separately
-// by the two ticks on the ArchiveFldr page, and neither button here
-// touches it.
+// Install and Uninstall are both per bitness, and each acts on the
+// whole shell extension: browsing archives as folders, the context
+// menu inside an opened archive, thumbnails, preview, Default apps.
 //
 // 1042 and 1043 were a single "Install" and a single "Uninstall"
 // button covering both bitnesses. They are retired rather than reused:
@@ -125,6 +116,32 @@
 #define IDC_CHK_ENCRYPT_HEADER      1803
 #define IDC_STATIC_STRENGTH         1804
 #define IDC_PROGRESS_STRENGTH       1805
+#define IDC_LBL_PW_REASON           1806
+#define IDC_LBL_CONFIRM_PW          1807
+#define IDC_LBL_STRENGTH            1808
+
+// ── Add to Archive Dialog ─────────────────────────────────
+#define IDC_LBL_ADD_DEST            1900
+#define IDC_EDIT_ADD_PATH           1901
+#define IDC_BTN_ADD_BROWSE          1902
+#define IDC_LBL_ADD_FORMAT          1903
+#define IDC_CMB_ADD_FORMAT          1904
+#define IDC_LBL_ADD_LEVEL           1905
+#define IDC_CMB_ADD_LEVEL           1906
+#define IDC_LBL_ADD_METHOD          1907
+#define IDC_CMB_ADD_METHOD          1908
+#define IDC_LBL_ADD_THREADS         1909
+#define IDC_CMB_ADD_THREADS         1910
+#define IDC_CHK_ADD_SOLID           1911
+#define IDC_GRP_ADD_ENC             1912
+#define IDC_LBL_ADD_PW              1913
+#define IDC_EDIT_ADD_PW             1914
+#define IDC_LBL_ADD_PW2             1915
+#define IDC_EDIT_ADD_PW2            1916
+#define IDC_CHK_ADD_SHOWPW          1917
+#define IDC_LBL_ADD_ENCMETHOD       1918
+#define IDC_CMB_ADD_ENCMETHOD       1919
+#define IDC_CHK_ADD_ENCNAMES        1920
 
 // Next default values for new objects
 //
@@ -132,7 +149,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        2000
 #define _APS_NEXT_COMMAND_VALUE         32771
-#define _APS_NEXT_CONTROL_VALUE         1900
+#define _APS_NEXT_CONTROL_VALUE         1921
 #define _APS_NEXT_SYMED_VALUE           110
 #endif
 #endif

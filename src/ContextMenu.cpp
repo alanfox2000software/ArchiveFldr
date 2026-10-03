@@ -343,7 +343,6 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
         SetMenuDefaultItem(hTarget, idCmdFirst + CMD_OPEN_ITEM, FALSE);
         addSep();
         addItem(CMD_EXTRACT,     L"E&xtract selected...");
-        addItem(CMD_EXTRACTHERE, L"Extract selected &here");
         addSep();
         addItem(CMD_COPY,        L"&Copy");
         addSep();

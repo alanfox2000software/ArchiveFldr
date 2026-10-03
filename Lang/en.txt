@@ -33,10 +33,10 @@
 
 ; The window caption, and the tab captions — a page's tab is keyed on
 ; the page's own dialog id.
-; 102 was the "ArchiveFldr" tab (Explorer context menu integration).
-; The page was removed with the feature; the id is retired, not reused.
+; 101 was the "System" tab (file type associations) and 102 the
+; "ArchiveFldr" tab (Explorer context menu integration). Both pages were
+; removed with their features; the ids are retired, not reused.
 100 = "Options"
-101 = "System"
 103 = "Folders"
 104 = "Settings"
 105 = "Language"
@@ -46,19 +46,10 @@
 1003 = "Apply"
 
 
-; ── System page ──────────────────────────────────────────
-1010 = "Associate ArchiveFldr with:"
-1012 = "32-bit:"
-1013 = "Select all"
-1014 = "Clear all"
-1015 = "64-bit:"
-1016 = "Select all"
-1017 = "Clear all"
-
-; Column headings of the file type list.
-2020 = "File type"
-2021 = "32-bit"
-2022 = "64-bit"
+; ── System page (removed) ────────────────────────────────
+; 1010-1017 were the controls of the file type association page, and
+; 2020-2022 the column headings of its list. The page was removed;
+; the ids are retired, never reused.
 
 
 ; ── ArchiveFldr page (removed) ───────────────────────────
@@ -95,7 +86,7 @@
 2040 = "registered"
 2041 = "not registered"
 
-2043 = "Install registers one build of the shell extension: Explorer can browse archives as folders, files inside an opened archive get their right-click menu, thumbnails and preview work, and ArchiveFldr is listed in Settings > Default apps for the file types ticked on the System page. Uninstall takes all of that back out, leaving the files on disk.\n\nNeither adds or removes anything in Explorer's own right-click menu on archive files.\n\nExplorer caches shell extensions, so sign out and back in — or restart Explorer — for a change to take effect everywhere."
+2043 = "Install registers one build of the shell extension: Explorer can browse archives as folders, files inside an opened archive get their right-click menu, thumbnails and preview work, and ArchiveFldr is listed in Settings > Default apps for its archive file types. Uninstall takes all of that back out, leaving the files on disk.\n\nNeither adds or removes anything in Explorer's own right-click menu on archive files.\n\nExplorer caches shell extensions, so sign out and back in — or restart Explorer — for a change to take effect everywhere."
 2044 = "ArchiveFldr was installed."
 2045 = "Some parts could not be changed."
 2046 = "ArchiveFldr was removed."
@@ -105,3 +96,52 @@
 1050 = "Language:"
 2023 = "Language"
 2024 = "English name"
+
+
+; ═════════════════════════════════════════════════════════
+; Password dialog
+; ═════════════════════════════════════════════════════════
+; 108 is the window caption; the archive's file name is appended to it.
+; 1806 is replaced at run time with the reason the password is needed,
+; so its text here is only the template default.
+108  = "Enter Password"
+1802 = "Show password"
+1803 = "Encrypt file names"
+1806 = "This archive is encrypted.\nPlease enter the password to continue."
+1807 = "Confirm:"
+1808 = "Strength:"
+
+
+; ═════════════════════════════════════════════════════════
+; Add to Archive dialog
+; ═════════════════════════════════════════════════════════
+109  = "Add to Archive"
+1900 = "Archive:"
+1902 = "..."
+1903 = "Format:"
+1905 = "Compression level:"
+1907 = "Compression method:"
+1909 = "Threads:"
+1911 = "Create solid archive (7z)"
+1912 = "Encryption"
+1913 = "Password:"
+1915 = "Confirm:"
+1917 = "Show password"
+1918 = "Encryption method:"
+1920 = "Encrypt file names (7z)"
+
+; Caption when the number of files is known; %s is the count.
+2060 = "Add to Archive — %s file(s)"
+
+; Messages shared by the password prompts.
+2061 = "The two passwords do not match."
+2062 = "Choose a password for the archive."
+2063 = "Choose where the archive should be written."
+
+; Compression level names, in the order the box lists them.
+2070 = "Store"
+2071 = "Fastest"
+2072 = "Fast"
+2073 = "Normal"
+2074 = "Maximum"
+2075 = "Ultra"

@@ -6,6 +6,8 @@
 #include "DataObject.h"
 #include "ArchiveEngine.h"
 #include "ArchiveOps.h"
+#include "ArchiveWriter.h"
+#include "AddToArchiveDialog.h"
 #include "ThirdParty.h"
 #include "Settings.h"
 
@@ -565,7 +567,7 @@ void CContextMenu::DoOpenItem()
         if (tempDir.empty()) return;
 
         std::wstring onDisk;
-        if (!ArchiveOps::ExtractEntry(eng, e, tempDir, &onDisk))
+        if (!ArchiveOps::ExtractEntryPrompting(m_hwnd, eng, e, tempDir, &onDisk))
         {
             MessageBoxW(m_hwnd,
                 (L"ArchiveFldr could not extract \"" + e.name +
@@ -621,27 +623,40 @@ void CContextMenu::DoExtract(bool here)
     }
     if (dest.empty()) return;
 
-    WaitCursor wait;
-    bool ok = true;
+    // Encrypted items want their password before the first attempt, and
+    // a wrong one gets asked again rather than reported as damage.
+    if (!ArchiveOps::EnsureReadPassword(m_hwnd, eng)) return;
 
     std::vector<ArchiveEntry> sel;
-    if (m_mode == ModeItem && SelectedEntries(eng, sel))
+    const bool itemMode = (m_mode == ModeItem && SelectedEntries(eng, sel));
+
+    bool ok = true;
+    for (int attempt = 0; attempt < 3; ++attempt)
     {
-        for (const auto& e : sel)
-            ok = eng->ExtractFile(e, dest, nullptr) && ok;
-    }
-    else
-    {
-        ok = eng->ExtractAll(dest, nullptr);
+        WaitCursor wait;
+        ok = true;
+        if (itemMode)
+        {
+            for (const auto& e : sel)
+                ok = eng->ExtractFile(e, dest, nullptr) && ok;
+        }
+        else
+        {
+            ok = eng->ExtractAll(dest, nullptr);
+        }
+        if (ok || !eng->LastErrorWasWrongPassword()) break;
+        if (!ArchiveOps::AskPasswordAgain(m_hwnd, eng)) break;
     }
 
     SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATH, dest.c_str(), nullptr);
 
     if (!ok)
         MessageBoxW(m_hwnd,
-            L"Some items could not be extracted.\n\n"
-            L"The archive may be damaged, or it may contain encrypted items "
-            L"(ArchiveFldr has no password prompt yet).",
+            eng->LastErrorWasWrongPassword()
+                ? L"Some items could not be extracted: they are encrypted, "
+                  L"and no correct password was given."
+                : L"Some items could not be extracted.\n\n"
+                  L"The archive may be damaged or incomplete.",
             L"ArchiveFldr", MB_ICONWARNING | MB_OK);
 }
 
@@ -649,12 +664,23 @@ void CContextMenu::DoTest()
 {
     auto engine = AcquireEngine();
     if (!ArchiveOps::EnsureCanRead(m_hwnd, engine)) return;
+    if (!ArchiveOps::EnsureReadPassword(m_hwnd, engine)) return;
 
-    WaitCursor wait;
-    bool ok = engine->Test(nullptr);
+    bool ok = false;
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        WaitCursor wait;
+        ok = engine->Test(nullptr);
+        if (ok || !engine->LastErrorWasWrongPassword()) break;
+        if (!ArchiveOps::AskPasswordAgain(m_hwnd, engine)) break;
+    }
+
     MessageBoxW(m_hwnd,
         ok ? L"Archive test: PASSED\nAll files are intact."
-           : L"Archive test: FAILED!\nCorruption detected.",
+           : engine->LastErrorWasWrongPassword()
+               ? L"Archive test: FAILED!\nEncrypted items could not be "
+                 L"verified without the correct password."
+               : L"Archive test: FAILED!\nCorruption detected.",
         L"Test Archive", ok ? MB_ICONINFORMATION : MB_ICONERROR);
 }
 
@@ -725,7 +751,9 @@ void CContextMenu::DoCopy()
     pdo->Release();
 }
 
-// Paste file-system files INTO the archive (needs a writing engine).
+// Paste file-system files INTO the archive: collect what the clipboard
+// holds, show the Add to Archive dialog, and let the engine update the
+// archive in place.
 void CContextMenu::DoPaste()
 {
     auto eng = AcquireEngine();
@@ -737,21 +765,42 @@ void CContextMenu::DoPaste()
     std::vector<std::wstring> roots;
     ArchiveOps::PathsFromDataObject(pdo, roots);
     pdo->Release();
+
+    // Never paste the archive into itself.
+    roots.erase(std::remove_if(roots.begin(), roots.end(),
+        [&](const std::wstring& p)
+        { return _wcsicmp(p.c_str(), m_archivePath.c_str()) == 0; }),
+        roots.end());
     if (roots.empty()) return;
 
-    std::vector<ArchiveOps::AddItem> items;
-    ArchiveOps::ExpandForAdd(roots, items);
+    std::vector<ArchiveOps::AddItem> expanded;
+    ArchiveOps::ExpandForAdd(roots, expanded);
+
+    const std::wstring dir = m_pFolder ? m_pFolder->GetInternalPath() : L"";
+    std::vector<ArchiveWriter::Item> items;
+    ArchiveOps::BuildWriterItems(expanded, dir, items);
+    if (items.empty()) return;
+
+    AddToArchiveDialog::Request rq;
+    rq.path       = m_archivePath;
+    rq.format     = eng->GetHandlerName();
+    rq.lockFormat = true;                 // updating what is already there
+    rq.fileCount  = items.size();
+
+    AddToArchiveDialog::Result res;
+    if (!AddToArchiveDialog::Show(m_hwnd, rq, res)) return;
 
     WaitCursor wait;
-    const std::wstring dir = m_pFolder ? m_pFolder->GetInternalPath() : L"";
-    bool ok = true;
-    for (const auto& it : items)
-        ok = eng->AddFile(it.src, ArchiveOps::TargetDirFor(dir, it), nullptr) && ok;
+    std::wstring err;
+    const bool ok = eng->AddItems(items, res.opt, res.path, nullptr, &err);
 
     NotifyRefresh();
     if (!ok)
-        MessageBoxW(m_hwnd, L"Some files could not be added to the archive.",
-                    L"ArchiveFldr", MB_ICONWARNING | MB_OK);
+        MessageBoxW(m_hwnd,
+            (L"The files could not be added to the archive.\n\n" + err).c_str(),
+            L"ArchiveFldr", MB_ICONWARNING | MB_OK);
+    else if (!err.empty())   // succeeded, but some sources were skipped
+        MessageBoxW(m_hwnd, err.c_str(), L"ArchiveFldr", MB_ICONWARNING | MB_OK);
 }
 
 void CContextMenu::DoRefresh()

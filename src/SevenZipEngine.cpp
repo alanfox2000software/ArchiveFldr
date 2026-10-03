@@ -8,10 +8,12 @@
 // contract 7-Zip's own CPP/7zip/UI/Client7z sample uses. See Sdk7z.h for
 // the interface/GUID declarations and provenance notes.
 //
-// KNOWN LIMITATION (v1): no password-prompt UI. CryptoGetTextPassword()
-// always reports "no password" — unencrypted archives are unaffected;
-// opening an archive with encrypted headers, or extracting encrypted
-// items, will fail (or fail per-item) until a password UI is wired in.
+// Passwords: the engine holds one (SetPassword) and hands it to 7z.dll
+// through ICryptoGetTextPassword whenever the handler asks — opening an
+// archive with encrypted headers, extracting or testing encrypted
+// items, and reading old items back during an update. The UI layers
+// (shell view, context menu, data object) detect PasswordNeededToOpen /
+// LastErrorWasWrongPassword and prompt, then retry.
 #include "stdafx.h"
 #include "SevenZipEngine.h"
 #include "Formats.h"
@@ -397,6 +399,13 @@ class CArchiveOpenCallback final : public IArchiveOpenCallback7z,
                                     public ICryptoGetTextPassword7z
 {
 public:
+    // `password` is handed over when the handler asks for one (encrypted
+    // headers). `askedFlag`, when given, is set the moment it asks — that
+    // is how the engine learns the open needed a password at all.
+    explicit CArchiveOpenCallback(std::wstring password = std::wstring(),
+                                  bool* askedFlag = nullptr)
+        : m_password(std::move(password)), m_asked(askedFlag) {}
+
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override
     {
         if (!ppv) return E_POINTER;
@@ -419,15 +428,22 @@ public:
     STDMETHODIMP SetTotal(const UINT64*, const UINT64*) override { return S_OK; }
     STDMETHODIMP SetCompleted(const UINT64*, const UINT64*) override { return S_OK; }
 
-    // v1 limitation: no password-prompt UI (see file header comment).
     STDMETHODIMP CryptoGetTextPassword(BSTR* password) override
     {
-        if (password) *password = nullptr;
-        return S_OK;
+        if (m_asked) *m_asked = true;
+        if (!password) return E_POINTER;
+        // No password to give: abort the open cleanly rather than let the
+        // handler chew on garbage. The engine turns this into
+        // PasswordNeededToOpen() and the UI prompts.
+        if (m_password.empty()) { *password = nullptr; return E_ABORT; }
+        *password = SysAllocString(m_password.c_str());
+        return *password ? S_OK : E_OUTOFMEMORY;
     }
 
 private:
-    LONG m_ref = 1;
+    LONG         m_ref = 1;
+    std::wstring m_password;
+    bool*        m_asked = nullptr;
 };
 
 // ═════════════════════════════════════════════════════════
@@ -535,12 +551,18 @@ class CArchiveExtractCallback final : public IArchiveExtractCallback7z,
 public:
     CArchiveExtractCallback(IInArchive7z* archive, std::wstring destDir,
                              UINT32 totalCount, ProgressFn cb,
-                             std::wstring fallbackName = std::wstring())
+                             std::wstring fallbackName = std::wstring(),
+                             std::wstring password = std::wstring())
         : m_archive(archive), m_destDir(std::move(destDir)),
           m_total(totalCount ? totalCount : 1), m_cb(std::move(cb)),
-          m_fallbackName(std::move(fallbackName)) {}
+          m_fallbackName(std::move(fallbackName)),
+          m_password(std::move(password)) {}
 
     bool HadError() const { return m_hadError; }
+    // The failure pattern that means "wrong or missing password" rather
+    // than corruption: the handler said so outright, or an item flagged
+    // encrypted failed while unencrypted ones went through.
+    bool WrongPassword() const { return m_wrongPassword; }
 
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override
     {
@@ -583,6 +605,7 @@ public:
         // dragging the file out of the folder died as E_FAIL —
         // "Error Copying File or Folder: Unspecified error".
         if (path.empty()) path = m_fallbackName;
+        m_curEncrypted = PropGetBool(m_archive, index, k7zPidEncrypted, false);
         for (auto& ch : path) if (ch == L'\\') ch = L'/';
         bool isDir = PropGetBool(m_archive, index, k7zPidIsDir, false);
         m_curMTime  = PropGetFileTime(m_archive, index, k7zPidMTime);
@@ -663,6 +686,13 @@ public:
         else
         {
             m_hadError = true;
+            // kWrongPassword is explicit; a data/CRC error on an item the
+            // archive flags encrypted is the same thing said less clearly
+            // (zip's ZipCrypto cannot tell the two apart).
+            if (opRes == N7zExtract::kWrongPassword ||
+                (m_curEncrypted && (opRes == N7zExtract::kDataError ||
+                                    opRes == N7zExtract::kCRCError)))
+                m_wrongPassword = true;
         }
 
         m_curOut.Reset();
@@ -678,11 +708,15 @@ public:
         return S_OK;
     }
 
-    // v1 limitation: no password-prompt UI (see file header comment).
     STDMETHODIMP CryptoGetTextPassword(BSTR* password) override
     {
-        if (password) *password = nullptr;
-        return S_OK;
+        if (!password) return E_POINTER;
+        // An empty password still gets handed over (as an empty string):
+        // the item then fails with a data/wrong-password result, which is
+        // reported per item instead of aborting the whole run — the
+        // unencrypted half of a mixed archive still extracts.
+        *password = SysAllocString(m_password.c_str());
+        return *password ? S_OK : E_OUTOFMEMORY;
     }
 
 private:
@@ -693,6 +727,9 @@ private:
     UINT32         m_done = 0;
     ProgressFn     m_cb;
     bool           m_hadError = false;
+    bool           m_wrongPassword = false;
+    bool           m_curEncrypted  = false;
+    std::wstring   m_password;
     // What to call the payload of a single-stream container, which
     // reports no path of its own. Empty for every other archive.
     std::wstring   m_fallbackName;
@@ -745,6 +782,8 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
 {
     Close();
     m_lastError.clear();
+    m_needPasswordToOpen = false;
+    m_wrongPassword      = false;
     m_filePath = path;
     m_readOnly = true;
 
@@ -774,6 +813,7 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
 
     ComPtr<IInArchive7z> archive;
     std::wstring         chosenName;
+    bool                 passwordAsked = false;
 
     auto tryHandler = [&](const GUID& clsid, const std::wstring& name) -> bool
     {
@@ -790,8 +830,11 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
         ComPtr<IInArchive7z> candidate;
         candidate.Attach(static_cast<IInArchive7z*>(rawArchive));
 
+        // Asked-for-password is remembered across attempts: the handler
+        // that recognised the format but could not decrypt the headers is
+        // the signal, even if later fallback handlers also fail.
         ComPtr<IArchiveOpenCallback7z> openCb;
-        openCb.Attach(new CArchiveOpenCallback());
+        openCb.Attach(new CArchiveOpenCallback(m_password, &passwordAsked));
 
         UINT64 maxCheckStartPosition = 1 << 20;   // tolerate SFX stubs etc.
         if (FAILED(candidate->Open(inStream.Get(), &maxCheckStartPosition,
@@ -817,6 +860,19 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
 
     if (!archive)
     {
+        if (passwordAsked)
+        {
+            // The handler recognised the format but could not read the
+            // headers with the password it was (or wasn't) given. This is
+            // the "ask the user and try again" case, not a diagnostic one.
+            m_needPasswordToOpen = true;
+            m_lastError = m_password.empty()
+                ? L"This archive's headers are encrypted: a password is "
+                  L"needed even to list the files inside."
+                : L"The password did not open this archive.";
+            return false;
+        }
+
         if (!PathFileExistsW(path.c_str()))
         {
             m_lastError = L"The archive file no longer exists.";
@@ -874,9 +930,7 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
             }
         }
 
-        m_lastError += L"\nThe file may be damaged or incomplete, or its "
-                       L"headers may be encrypted — password-protected "
-                       L"headers are not yet supported.";
+        m_lastError += L"\nThe file may be damaged or incomplete.";
         return false;
     }
 
@@ -886,6 +940,7 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
         std::wstring pretty = Formats::NameFor(ext);
         m_formatName = pretty.empty() ? chosenName : pretty;
     }
+    m_handlerName = chosenName;   // the handler id itself ("zip", "7z", ...)
 
     m_archive = archive;
     m_open    = true;
@@ -905,6 +960,7 @@ void C7zArchiveEngine::Close()
     if (m_archive) { m_archive->Close(); m_archive.Reset(); }
     m_allEntries.clear();
     m_innerName.clear();
+    m_handlerName.clear();
     m_open = false;
 }
 
@@ -1168,15 +1224,21 @@ bool C7zArchiveEngine::ExtractIndices(const std::vector<UINT32>& indices,
 
     auto* cbRaw = new CArchiveExtractCallback(m_archive.Get(), destDir,
                                                (UINT32)indices.size(), cb,
-                                               m_innerName);
+                                               m_innerName, m_password);
     ComPtr<IArchiveExtractCallback7z> extractCb;
     extractCb.Attach(cbRaw);
 
+    m_wrongPassword = false;
     HRESULT hr = m_archive->Extract(indices.data(), (UINT32)indices.size(), 0, extractCb.Get());
     bool ok = SUCCEEDED(hr) && !cbRaw->HadError();
     if (!ok)
-        m_lastError = L"Extraction failed for one or more files "
-                      L"(corrupt data, or an encrypted item with no supplied password).";
+    {
+        m_wrongPassword = cbRaw->WrongPassword();
+        m_lastError = m_wrongPassword
+            ? L"One or more items are encrypted and the password is "
+              L"missing or wrong."
+            : L"Extraction failed for one or more files (corrupt data).";
+    }
     return ok;
 }
 
@@ -1228,6 +1290,12 @@ EngineCaps C7zArchiveEngine::GetCaps() const
     c.canExtract  = Is7zEngineAvailable();
     c.canTest     = c.canExtract;
     c.isStub      = !c.canExtract;
+    // Adding means updating THIS archive with its own handler, so it
+    // takes an open archive whose handler both multi-file and writable
+    // in the user's copy of 7z.dll.
+    c.canAdd      = c.canExtract && m_open && !m_handlerName.empty() &&
+                    ArchiveWriter::CanAddToFormat(m_handlerName) &&
+                    ArchiveWriter::FormatIsWritable(m_handlerName);
     if (!c.canExtract)
         c.unavailableReason =
             L"No usable 7-Zip engine DLL was found, so .7z archives cannot "
@@ -1242,13 +1310,21 @@ bool C7zArchiveEngine::Test(ProgressFn cb)
     m_archive->GetNumberOfItems(&numItems);
 
     auto* cbRaw = new CArchiveExtractCallback(m_archive.Get(), L"", numItems, cb,
-                                               m_innerName);
+                                               m_innerName, m_password);
     ComPtr<IArchiveExtractCallback7z> extractCb;
     extractCb.Attach(cbRaw);
 
+    m_wrongPassword = false;
     HRESULT hr = m_archive->Extract(nullptr, (UINT32)-1, 1 /*testMode*/, extractCb.Get());
     bool ok = SUCCEEDED(hr) && !cbRaw->HadError();
-    if (!ok) m_lastError = L"Archive integrity test reported errors.";
+    if (!ok)
+    {
+        m_wrongPassword = cbRaw->WrongPassword();
+        m_lastError = m_wrongPassword
+            ? L"Encrypted items could not be verified: the password is "
+              L"missing or wrong."
+            : L"Archive integrity test reported errors.";
+    }
     return ok;
 }
 
@@ -1411,14 +1487,30 @@ private:
 };
 
 // ── The update callback ──────────────────────────────────
+// Serves two shapes of update with one index space:
+//
+//   creating:  every index is a new item from disk.
+//   updating:  indices 0..keepOld.size()-1 are items copied from the
+//              archive being updated (the handler reads them itself,
+//              through the still-open IInArchive); the rest are new.
+//
+// Both password interfaces are implemented: ICryptoGetTextPassword2 is
+// the write side (encrypt new items with opt.password), and
+// ICryptoGetTextPassword is the read side — the handler needs it when
+// re-coding old encrypted items, e.g. a solid 7z block.
 class CUpdateCallback final : public IArchiveUpdateCallback7z,
-                              public ICryptoGetTextPassword2_7z
+                              public ICryptoGetTextPassword2_7z,
+                              public ICryptoGetTextPassword7z
 {
 public:
     CUpdateCallback(const std::vector<ArchiveWriter::Item>& items,
-                    std::wstring password, ProgressFn progress)
+                    std::wstring password, ProgressFn progress,
+                    std::vector<UINT32> keepOld = {},
+                    std::wstring readPassword = std::wstring())
         : m_items(items), m_password(std::move(password)),
-          m_progress(std::move(progress)) {}
+          m_progress(std::move(progress)),
+          m_keepOld(std::move(keepOld)),
+          m_readPassword(std::move(readPassword)) {}
 
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override
     {
@@ -1428,6 +1520,8 @@ public:
             *ppv = static_cast<IArchiveUpdateCallback7z*>(this);
         else if (IsEqualIID(riid, IID_ICryptoGetTextPassword2_7z))
             *ppv = static_cast<ICryptoGetTextPassword2_7z*>(this);
+        else if (IsEqualIID(riid, IID_ICryptoGetTextPassword7z))
+            *ppv = static_cast<ICryptoGetTextPassword7z*>(this);
         else { *ppv = nullptr; return E_NOINTERFACE; }
         AddRef();
         return S_OK;
@@ -1457,11 +1551,19 @@ public:
     }
 
     // IArchiveUpdateCallback
-    STDMETHODIMP GetUpdateItemInfo(UINT32 /*index*/, INT32* newData,
+    STDMETHODIMP GetUpdateItemInfo(UINT32 index, INT32* newData,
                                    INT32* newProps, UINT32* indexInArchive) override
     {
-        // Creating from nothing: every item is new, and none of them
-        // corresponds to an entry in an existing archive.
+        if (index < m_keepOld.size())
+        {
+            // Copied from the open archive: the handler takes data and
+            // properties from the old item named here.
+            if (newData)        *newData  = 0;
+            if (newProps)       *newProps = 0;
+            if (indexInArchive) *indexInArchive = m_keepOld[index];
+            return S_OK;
+        }
+        // A new item from disk.
         if (newData)        *newData  = 1;
         if (newProps)       *newProps = 1;
         if (indexInArchive) *indexInArchive = (UINT32)(INT32)-1;
@@ -1472,6 +1574,10 @@ public:
     {
         if (!value) return E_POINTER;
         PropVariantInit(value);
+        // Copied items keep their old properties; the handler should not
+        // ask, but an empty answer is the safe one if it does.
+        if (index < m_keepOld.size()) return S_OK;
+        index -= (UINT32)m_keepOld.size();
         if (index >= m_items.size()) return E_INVALIDARG;
         const ArchiveWriter::Item& it = m_items[index];
 
@@ -1509,6 +1615,8 @@ public:
     {
         if (!inStream) return E_POINTER;
         *inStream = nullptr;
+        if (index < m_keepOld.size()) return S_OK;   // old data: handler copies it
+        index -= (UINT32)m_keepOld.size();
         if (index >= m_items.size()) return E_INVALIDARG;
         const ArchiveWriter::Item& it = m_items[index];
 
@@ -1534,7 +1642,7 @@ public:
     STDMETHODIMP SetOperationResult(INT32 /*operationResult*/) override
     { return S_OK; }
 
-    // ICryptoGetTextPassword2
+    // ICryptoGetTextPassword2 — encrypting what is being written.
     STDMETHODIMP CryptoGetTextPassword2(INT32* passwordIsDefined, BSTR* password) override
     {
         const bool have = !m_password.empty();
@@ -1545,6 +1653,18 @@ public:
             if (!*password) return E_OUTOFMEMORY;
         }
         return S_OK;
+    }
+
+    // ICryptoGetTextPassword — reading old encrypted items back during
+    // an update. Falls back to the write password: the common case is
+    // one password for the whole archive.
+    STDMETHODIMP CryptoGetTextPassword(BSTR* password) override
+    {
+        if (!password) return E_POINTER;
+        const std::wstring& pw = m_readPassword.empty() ? m_password
+                                                        : m_readPassword;
+        *password = SysAllocString(pw.c_str());
+        return *password ? S_OK : E_OUTOFMEMORY;
     }
 
     const std::vector<std::wstring>& Skipped() const { return m_skipped; }
@@ -1559,7 +1679,93 @@ private:
     UINT64       m_total = 0;
     bool         m_cancelled = false;
     std::vector<std::wstring> m_skipped;
+    std::vector<UINT32> m_keepOld;       // archive indices copied as-is
+    std::wstring m_readPassword;         // for decrypting those
 };
+
+// ── Apply Options to a writer ────────────────────────────
+// Shared by Compress (new archive) and C7zArchiveEngine::AddItems
+// (update): one place decides which property names each format gets,
+// because one unknown name fails the whole SetProperties call.
+void ApplyWriterProps(IOutArchive7z* outArc,
+                      const ArchiveWriter::Options& opt,
+                      const std::wstring& handlerName)
+{
+    std::vector<std::wstring> names;
+    std::vector<PROPVARIANT>  values;
+    auto addUInt = [&](const wchar_t* n, UINT32 v)
+    {
+        names.emplace_back(n);
+        PROPVARIANT pv; PropVariantInit(&pv);
+        pv.vt = VT_UI4; pv.ulVal = v;
+        values.push_back(pv);
+    };
+    auto addBool = [&](const wchar_t* n, bool v)
+    {
+        names.emplace_back(n);
+        PROPVARIANT pv; PropVariantInit(&pv);
+        pv.vt = VT_BOOL; pv.boolVal = v ? VARIANT_TRUE : VARIANT_FALSE;
+        values.push_back(pv);
+    };
+    auto addStr = [&](const wchar_t* n, const std::wstring& v)
+    {
+        BSTR b = SysAllocString(v.c_str());
+        if (!b) return;
+        names.emplace_back(n);
+        PROPVARIANT pv; PropVariantInit(&pv);
+        pv.vt = VT_BSTR; pv.bstrVal = b;
+        values.push_back(pv);
+    };
+
+    const bool is7z  = _wcsicmp(handlerName.c_str(), L"7z")  == 0;
+    const bool isZip = _wcsicmp(handlerName.c_str(), L"zip") == 0;
+
+    int level = opt.level;
+    if (level < 0) level = 0;
+    if (level > 9) level = 9;
+    addUInt(L"x", (UINT32)level);
+
+    // The compression method, under the name each format uses for it:
+    // -mm=Deflate for zip, -m0=LZMA2 for 7z.
+    if (!opt.method.empty())
+    {
+        if (isZip)      addStr(L"m", opt.method);
+        else if (is7z)  addStr(L"0", opt.method);
+    }
+
+    if (is7z)
+    {
+        addBool(L"s", opt.solid);
+        if (!opt.password.empty() && opt.encryptNames)
+            addBool(L"he", true);
+    }
+    if (isZip && !opt.password.empty() && !opt.encMethod.empty())
+    {
+        // ZipCrypto (every unzip ever, no real security) or AES-256
+        // (WinZip-style, needs a modern extractor).
+        addStr(L"em", opt.encMethod);
+    }
+    if (opt.threads > 0 && (is7z || isZip ||
+        _wcsicmp(handlerName.c_str(), L"xz") == 0 ||
+        _wcsicmp(handlerName.c_str(), L"bzip2") == 0))
+    {
+        addUInt(L"mt", (UINT32)opt.threads);
+    }
+
+    Microsoft::WRL::ComPtr<ISetProperties7z> setProps;
+    if (SUCCEEDED(outArc->QueryInterface(IID_ISetProperties7z,
+                                         (void**)setProps.GetAddressOf())) && setProps)
+    {
+        std::vector<const wchar_t*> namePtrs;
+        namePtrs.reserve(names.size());
+        for (const auto& n : names) namePtrs.push_back(n.c_str());
+        // A rejected setting is not worth failing the archive over:
+        // the default would still produce a valid file.
+        setProps->SetProperties(namePtrs.data(), values.data(),
+                                (UINT32)namePtrs.size());
+    }
+    for (auto& pv : values) PropVariantClear(&pv);
+}
 
 } // anonymous namespace
 
@@ -1582,6 +1788,42 @@ bool FormatIsWritable(const std::wstring& format)
 {
     for (const auto& h : WritableHandlers())
         if (_wcsicmp(h.name.c_str(), format.c_str()) == 0) return true;
+    return false;
+}
+
+// ── Choice lists for the Add to Archive dialog ───────────
+std::vector<std::wstring> MethodsFor(const std::wstring& format)
+{
+    // First entry is the format's own default. Only the coders every
+    // stock 7z.dll ships are offered; an exotic build may know more,
+    // but a rejected method name would fail quietly, so stay standard.
+    if (_wcsicmp(format.c_str(), L"7z") == 0)
+        return { L"LZMA2", L"LZMA", L"PPMd", L"BZip2", L"Copy" };
+    if (_wcsicmp(format.c_str(), L"zip") == 0)
+        return { L"Deflate", L"Deflate64", L"BZip2", L"LZMA", L"PPMd", L"Copy" };
+    // tar, wim and the single-stream formats have exactly one way to
+    // store data; nothing to choose.
+    return {};
+}
+
+std::vector<std::wstring> EncryptionMethodsFor(const std::wstring& format)
+{
+    // First entry is the default offered.
+    if (_wcsicmp(format.c_str(), L"zip") == 0)
+        return { L"AES256", L"ZipCrypto" };
+    if (_wcsicmp(format.c_str(), L"7z") == 0)
+        return { L"AES256" };               // 7z has no other cipher
+    return {};                               // format cannot encrypt
+}
+
+bool CanAddToFormat(const std::wstring& format)
+{
+    // Multi-file containers whose handlers implement update. gzip,
+    // bzip2 and xz hold exactly one stream — "add" has no meaning —
+    // and the read-only handlers (rar, iso, ...) never get here.
+    static const wchar_t* const kUpdatable[] = { L"zip", L"7z", L"tar", L"wim" };
+    for (const wchar_t* f : kUpdatable)
+        if (_wcsicmp(format.c_str(), f) == 0) return true;
     return false;
 }
 
@@ -1801,61 +2043,7 @@ bool Compress(const std::wstring& outPath,
     }
 
     // ── Compression settings ─────────────────────────────
-    // Only names the target format accepts: one unknown name fails the
-    // whole SetProperties call, and then nothing would be configurable.
-    {
-        std::vector<std::wstring> names;
-        std::vector<PROPVARIANT>  values;
-        auto addUInt = [&](const wchar_t* n, UINT32 v)
-        {
-            names.emplace_back(n);
-            PROPVARIANT pv; PropVariantInit(&pv);
-            pv.vt = VT_UI4; pv.ulVal = v;
-            values.push_back(pv);
-        };
-        auto addBool = [&](const wchar_t* n, bool v)
-        {
-            names.emplace_back(n);
-            PROPVARIANT pv; PropVariantInit(&pv);
-            pv.vt = VT_BOOL; pv.boolVal = v ? VARIANT_TRUE : VARIANT_FALSE;
-            values.push_back(pv);
-        };
-
-        const bool is7z = _wcsicmp(handler->name.c_str(), L"7z") == 0;
-        const bool isZip = _wcsicmp(handler->name.c_str(), L"zip") == 0;
-
-        int level = opt.level;
-        if (level < 0) level = 0;
-        if (level > 9) level = 9;
-        addUInt(L"x", (UINT32)level);
-
-        if (is7z)
-        {
-            addBool(L"s", opt.solid);
-            if (!opt.password.empty() && opt.encryptNames)
-                addBool(L"he", true);
-        }
-        if (opt.threads > 0 && (is7z || isZip ||
-            _wcsicmp(handler->name.c_str(), L"xz") == 0 ||
-            _wcsicmp(handler->name.c_str(), L"bzip2") == 0))
-        {
-            addUInt(L"mt", (UINT32)opt.threads);
-        }
-
-        Microsoft::WRL::ComPtr<ISetProperties7z> setProps;
-        if (SUCCEEDED(outArc->QueryInterface(IID_ISetProperties7z,
-                                             (void**)setProps.GetAddressOf())) && setProps)
-        {
-            std::vector<const wchar_t*> namePtrs;
-            namePtrs.reserve(names.size());
-            for (const auto& n : names) namePtrs.push_back(n.c_str());
-            // A rejected setting is not worth failing the archive over:
-            // the default would still produce a valid file.
-            setProps->SetProperties(namePtrs.data(), values.data(),
-                                    (UINT32)namePtrs.size());
-        }
-        for (auto& pv : values) PropVariantClear(&pv);
-    }
+    ApplyWriterProps(outArc.Get(), opt, handler->name);
 
     // ── Write to a temporary, then move into place ───────
     std::wstring tempPath = outPath + L".part";
@@ -1913,3 +2101,163 @@ bool Compress(const std::wstring& outPath,
 }
 
 } // namespace ArchiveWriter
+
+// ═════════════════════════════════════════════════════════
+// C7zArchiveEngine::AddItems — add files to THIS archive
+// ═════════════════════════════════════════════════════════
+// One IOutArchive update pass: the open handler copies the items it
+// already holds (newData = 0) and compresses the new ones from disk.
+// Defined down here because it uses the writer machinery above —
+// CUpdateCallback, COutSeekFileStream, ApplyWriterProps.
+bool C7zArchiveEngine::AddItems(const std::vector<ArchiveWriter::Item>& items,
+                                const ArchiveWriter::Options& opt,
+                                const std::wstring& destPath,
+                                ProgressFn cb,
+                                std::wstring* err)
+{
+    auto fail = [&](const std::wstring& msg)
+    { m_lastError = msg; if (err) *err = msg; return false; };
+
+    if (!m_open || !m_archive) return fail(L"The archive is not open.");
+    if (items.empty())         return fail(L"Nothing to add.");
+    if (!ArchiveWriter::CanAddToFormat(m_handlerName) ||
+        !ArchiveWriter::FormatIsWritable(m_handlerName))
+        return fail(L"Files cannot be added to a \"" + m_handlerName +
+                    L"\" archive.");
+
+    // The handler object behind m_archive is also the writer for its
+    // format — that is what lets it copy old items without recoding.
+    ComPtr<IOutArchive7z> outArc;
+    if (FAILED(m_archive->QueryInterface(IID_IOutArchive7z,
+                                         (void**)outArc.GetAddressOf())) || !outArc)
+        return fail(L"This copy of 7z.dll cannot update \"" + m_handlerName +
+                    L"\" archives.");
+
+    // ── Which old items survive ──────────────────────────
+    // Everything, except items a new file replaces (same stored path).
+    auto normKey = [](std::wstring s)
+    {
+        for (auto& ch : s)
+        {
+            if (ch == L'\\') ch = L'/';
+            ch = towlower(ch);
+        }
+        while (!s.empty() && s.back() == L'/') s.pop_back();
+        return s;
+    };
+
+    std::unordered_map<std::wstring, bool> newNames;   // normalized path -> present
+    for (const auto& it : items)
+        newNames[normKey(it.nameInArchive)] = true;
+
+    UINT32 numOld = 0;
+    m_archive->GetNumberOfItems(&numOld);
+    std::vector<UINT32> keepOld;
+    keepOld.reserve(numOld);
+    for (UINT32 i = 0; i < numOld; ++i)
+    {
+        std::wstring path = PropGetString(m_archive.Get(), i, k7zPidPath);
+        if (path.empty()) path = m_innerName;
+        if (newNames.count(normKey(path))) continue;   // replaced by a new file
+        keepOld.push_back(i);
+    }
+
+    // ── Where the result goes ────────────────────────────
+    const bool inPlace = destPath.empty() ||
+                         _wcsicmp(destPath.c_str(), m_filePath.c_str()) == 0;
+    const std::wstring finalPath = inPlace ? m_filePath : destPath;
+
+    std::wstring tempPath = finalPath + L".part";
+    for (int n = 2; PathFileExistsW(tempPath.c_str()) && n < 100; ++n)
+        tempPath = finalPath + L".part" + std::to_wstring(n);
+
+    auto* outStream = new (std::nothrow) COutSeekFileStream();
+    if (!outStream) return fail(L"Out of memory.");
+    if (!outStream->CreateOutputFile(tempPath))
+    {
+        const DWORD e = GetLastError();
+        outStream->Release();
+        return fail(L"Could not create \"" + tempPath + L"\" (error " +
+                    std::to_wstring(e) + L").");
+    }
+
+    ApplyWriterProps(outArc.Get(), opt, m_handlerName);
+
+    // opt.password encrypts the new items; m_password (the one the
+    // archive was opened with) decrypts old ones if recoding needs it.
+    auto* callback = new (std::nothrow)
+        CUpdateCallback(items, opt.password, cb, keepOld, m_password);
+    if (!callback) { outStream->Release(); return fail(L"Out of memory."); }
+
+    const UINT32 total = (UINT32)(keepOld.size() + items.size());
+    HRESULT hr = outArc->UpdateItems(
+        static_cast<ISequentialOutStream7z*>(outStream), total, callback);
+
+    const std::vector<std::wstring> skipped = callback->Skipped();
+    callback->Release();
+    outStream->CloseFile();
+    outStream->Release();
+    outArc.Reset();
+
+    if (FAILED(hr))
+    {
+        DeleteFileW(tempPath.c_str());
+        if (hr == E_ABORT) return fail(L"Cancelled.");
+        wchar_t buf[64]; swprintf_s(buf, L"0x%08X", (unsigned)hr);
+        return fail(L"Updating the archive failed (" + std::wstring(buf) +
+                    L").\n\nIf items in it are encrypted, the archive's "
+                    L"password may be needed to rewrite them.");
+    }
+
+    // ── Move the result into place ───────────────────────
+    bool ok = true;
+    if (inPlace)
+    {
+        // The engine's own read stream holds the file: close everything,
+        // swap, reopen. Open() rebuilds the entry list, which is also
+        // what makes the new files appear.
+        const std::wstring reopenPath = m_filePath;
+        const std::wstring password   = m_password;
+        Close();
+
+        if (!MoveFileExW(tempPath.c_str(), reopenPath.c_str(),
+                         MOVEFILE_REPLACE_EXISTING))
+        {
+            const DWORD e = GetLastError();
+            DeleteFileW(tempPath.c_str());
+            m_password = password;
+            Open(reopenPath);                       // put the original back up
+            return fail(L"The updated archive was built but could not "
+                        L"replace the original (error " +
+                        std::to_wstring(e) + L").");
+        }
+
+        m_password = password;
+        ok = Open(reopenPath);
+        if (!ok)
+            return fail(L"The archive was updated, but could not be "
+                        L"reopened: " + m_lastError);
+    }
+    else
+    {
+        DeleteFileW(finalPath.c_str());
+        if (!MoveFileW(tempPath.c_str(), finalPath.c_str()))
+        {
+            const DWORD e = GetLastError();
+            DeleteFileW(tempPath.c_str());
+            return fail(L"The updated archive was built but could not be "
+                        L"moved to \"" + finalPath + L"\" (error " +
+                        std::to_wstring(e) + L").");
+        }
+    }
+
+    if (!skipped.empty() && err)
+    {
+        *err = L"Finished, but " + std::to_wstring(skipped.size()) +
+               L" file(s) could not be read and were left out:\n\n";
+        for (size_t i = 0; i < skipped.size() && i < 10; ++i)
+            *err += L"  " + skipped[i] + L"\n";
+        if (skipped.size() > 10) *err += L"  ...\n";
+    }
+    return true;
+}

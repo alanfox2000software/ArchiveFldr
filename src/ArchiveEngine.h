@@ -41,6 +41,10 @@ struct ArchiveEntry {
 using ProgressFn = std::function<void(int /*pct*/,
                                       const std::wstring& /*currentFile*/)>;
 
+// Declared in ArchiveWriter.h; named here so the engine interface can
+// accept them without a circular include.
+namespace ArchiveWriter { struct Item; struct Options; }
+
 // ─────────────────────────────────────────────────────────
 // EngineCaps — what the backend behind this archive can really do.
 //
@@ -95,6 +99,48 @@ public:
                             ProgressFn cb) = 0;
     virtual bool DeleteFile(const ArchiveEntry& e) = 0;
     virtual bool Rename    (const ArchiveEntry& e, const std::wstring& newName) = 0;
+
+    // Add a batch of files/folders in one update pass, with compression
+    // settings. `destPath` empty (or equal to GetFilePath()) updates the
+    // archive in place; anything else writes the updated copy there and
+    // leaves the original untouched. Engines that cannot write keep the
+    // default.
+    virtual bool AddItems(const std::vector<ArchiveWriter::Item>& /*items*/,
+                          const ArchiveWriter::Options& /*opt*/,
+                          const std::wstring& /*destPath*/,
+                          ProgressFn /*cb*/,
+                          std::wstring* err)
+    {
+        if (err) *err = L"This archive format cannot be written.";
+        return false;
+    }
+
+    // ── Password ─────────────────────────────────────────
+    // The password used for reading: listing an archive with encrypted
+    // headers, extracting or testing encrypted items. Set before (or
+    // between) operations; an engine that does not support encryption
+    // ignores it.
+    virtual void SetPassword(const std::wstring&) {}
+    virtual std::wstring GetPassword() const { return L""; }
+
+    // True after Open() failed because the archive's headers are
+    // encrypted and the current password is missing or wrong. The UI
+    // asks for a password and calls Open() again.
+    virtual bool PasswordNeededToOpen() const { return false; }
+
+    // True when the last extract/test failed in a way that points at a
+    // missing or wrong password (encrypted items present). The UI asks
+    // again rather than reporting plain corruption.
+    virtual bool LastErrorWasWrongPassword() const { return false; }
+
+    // Any entry flagged encrypted? (Names may be readable while the
+    // data still needs a password — a plain encrypted zip.)
+    virtual bool HasEncryptedItems() const { return false; }
+
+    // Short handler id of the open archive ("zip", "7z", ...), empty when
+    // unknown. This is the format key ArchiveWriter's choice lists take,
+    // which is what the Add to Archive dialog shows in update mode.
+    virtual std::wstring GetHandlerName() const { return L""; }
 
     // ── Integrity ────────────────────────────────────────
     virtual bool Test(ProgressFn cb) = 0;

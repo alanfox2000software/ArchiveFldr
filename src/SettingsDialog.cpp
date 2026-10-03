@@ -16,12 +16,10 @@
 // looked up by hand. Keep these in step with Lang\en.txt.
 // ─────────────────────────────────────────────────────────
 enum : UINT {
-    // 2000–2008 were the Explorer context menu item rows. Retired with
-    // the feature; never reuse the ids.
+    // 2000–2008 were the Explorer context menu item rows, and
+    // 2020–2022 the System page's file-association columns. Retired
+    // with their features; never reuse the ids.
 
-    LNG_COL_TYPE      = 2020,
-    LNG_COL_32        = 2021,
-    LNG_COL_64        = 2022,
     LNG_COL_LANGUAGE  = 2023,
     LNG_COL_LANG_EN   = 2024,
 
@@ -130,47 +128,6 @@ void MarkDirty(HWND page)
     if (!owner) return;
     auto* dlg = (CSettingsDialog*)GetWindowLongPtrW(owner, DWLP_USER);
     if (dlg) dlg->EnableApply(true);
-}
-
-// Two 16x16 images, an empty check box and a ticked one, drawn by the
-// theme so they match every other check box on the dialog. Used for the
-// per-bitness columns on the System page, where LVS_EX_CHECKBOXES cannot
-// help: that style only ever draws in column zero.
-HIMAGELIST MakeCheckImages()
-{
-    const int cx = GetSystemMetrics(SM_CXMENUCHECK);
-    const int cy = GetSystemMetrics(SM_CYMENUCHECK);
-    const int w  = (cx > 0 ? cx : 13) + 2;
-    const int h  = (cy > 0 ? cy : 13) + 2;
-
-    HIMAGELIST il = ImageList_Create(w, h, ILC_COLOR32 | ILC_MASK, 2, 0);
-    if (!il) return nullptr;
-
-    HDC screen = GetDC(nullptr);
-    for (int checked = 0; checked < 2; ++checked)
-    {
-        HDC     dc  = CreateCompatibleDC(screen);
-        HBITMAP bmp = CreateCompatibleBitmap(screen, w, h);
-        HGDIOBJ old = SelectObject(dc, bmp);
-
-        RECT rc{ 0, 0, w, h };
-        // Magenta is the transparency key; nothing in a check box uses it.
-        HBRUSH key = CreateSolidBrush(RGB(255, 0, 255));
-        FillRect(dc, &rc, key);
-        DeleteObject(key);
-
-        RECT box{ 1, 1, w - 1, h - 1 };
-        DrawFrameControl(dc, &box, DFC_BUTTON,
-                         DFCS_BUTTONCHECK | DFCS_FLAT |
-                         (checked ? DFCS_CHECKED : 0));
-
-        SelectObject(dc, old);
-        DeleteDC(dc);
-        ImageList_AddMasked(il, bmp, RGB(255, 0, 255));
-        DeleteObject(bmp);
-    }
-    ReleaseDC(nullptr, screen);
-    return il;
 }
 
 void AddColumn(HWND list, int index, const wchar_t* text, int width, int fmt = LVCFMT_LEFT)
@@ -314,226 +271,6 @@ std::wstring L(UINT id, const wchar_t* fallback)
 }
 
 } // namespace
-
-// ═════════════════════════════════════════════════════════
-// CPageSystem
-// ═════════════════════════════════════════════════════════
-CPageSystem::~CPageSystem()
-{
-    if (m_imgs) ImageList_Destroy(m_imgs);
-}
-
-HWND CPageSystem::Create(HWND parent)
-{
-    m_hwnd = CreatePage(IDD_PAGE_SYSTEM, parent, DlgProc, this);
-    return m_hwnd;
-}
-
-void CPageSystem::Show(bool show)
-{
-    ShowPageWindow(m_hwnd, show);
-}
-
-void CPageSystem::Place(const RECT& rc)
-{
-    PlacePage(m_hwnd, rc);
-}
-
-void CPageSystem::BuildList()
-{
-    m_list = GetDlgItem(m_hwnd, IDC_LIST_ASSOC);
-    if (!m_list) return;
-
-    ListView_SetExtendedListViewStyle(m_list,
-        LVS_EX_FULLROWSELECT | LVS_EX_SUBITEMIMAGES | LVS_EX_GRIDLINES);
-
-    m_imgs = MakeCheckImages();
-    if (m_imgs) ListView_SetImageList(m_list, m_imgs, LVSIL_SMALL);
-
-    int col = 0;
-    AddColumn(m_list, col++, L(LNG_COL_TYPE, L"File type").c_str(), 180);
-
-#ifdef _WIN64
-    // A 64-bit settings program manages both DLLs; a 32-bit one runs on a
-    // 32-bit Windows, where there is no 64-bit shell to register into.
-    m_col32 = col; AddColumn(m_list, col++, L(LNG_COL_32, L"32-bit").c_str(), 60, LVCFMT_LEFT);
-    m_col64 = col; AddColumn(m_list, col++, L(LNG_COL_64, L"64-bit").c_str(), 60, LVCFMT_LEFT);
-#else
-    m_col32 = col; AddColumn(m_list, col++, L(LNG_COL_32, L"32-bit").c_str(), 60, LVCFMT_LEFT);
-#endif
-
-    m_exts.clear();
-    int row = 0;
-    for (const auto* f : Formats::Registrable())
-    {
-        std::wstring label = std::wstring(f->ext + 1);   // drop the dot
-        for (auto& ch : label) ch = (wchar_t)towupper(ch);
-        label += L"   (" + std::wstring(f->name) + L")";
-
-        AddRow(m_list, row, label.c_str());
-        m_exts.push_back(f->ext);
-        ++row;
-    }
-}
-
-bool CPageSystem::Ticked(int row, int col) const
-{
-    if (col < 0) return false;
-    LVITEMW it{};
-    it.mask     = LVIF_IMAGE;
-    it.iItem    = row;
-    it.iSubItem = col;
-    if (!ListView_GetItem(m_list, &it)) return false;
-    return it.iImage == 1;
-}
-
-void CPageSystem::SetTick(int row, int col, bool on)
-{
-    if (col < 0) return;
-    LVITEMW it{};
-    it.mask     = LVIF_IMAGE;
-    it.iItem    = row;
-    it.iSubItem = col;
-    it.iImage   = on ? 1 : 0;
-    ListView_SetItem(m_list, &it);
-}
-
-void CPageSystem::Toggle(int row, int col)
-{
-    if (col < 0 || row < 0) return;
-    SetTick(row, col, !Ticked(row, col));
-    m_dirty = true;
-    MarkDirty(m_hwnd);
-}
-
-void CPageSystem::SetAll(int col, bool on)
-{
-    if (col < 0) return;
-    for (size_t i = 0; i < m_exts.size(); ++i) SetTick((int)i, col, on);
-    m_dirty = true;
-    MarkDirty(m_hwnd);
-}
-
-void CPageSystem::Load()
-{
-    if (!m_list) return;
-    const Settings& s = Settings::Get();
-    for (size_t i = 0; i < m_exts.size(); ++i)
-    {
-        SetTick((int)i, m_col32, s.assoc32.count(m_exts[i]) != 0);
-        SetTick((int)i, m_col64, s.assoc64.count(m_exts[i]) != 0);
-    }
-    m_dirty = false;
-}
-
-void CPageSystem::Save()
-{
-    if (!m_list) return;
-    Settings& s = Settings::Get();
-    if (m_col32 >= 0) s.assoc32.clear();
-    if (m_col64 >= 0) s.assoc64.clear();
-
-    for (size_t i = 0; i < m_exts.size(); ++i)
-    {
-        if (m_col32 >= 0 && Ticked((int)i, m_col32)) s.assoc32.insert(m_exts[i]);
-        if (m_col64 >= 0 && Ticked((int)i, m_col64)) s.assoc64.insert(m_exts[i]);
-    }
-    m_dirty = false;
-}
-
-void CPageSystem::Retranslate()
-{
-    if (!m_hwnd) return;
-    Lang::Apply(m_hwnd, IDD_PAGE_SYSTEM);
-    if (!m_list) return;
-
-    LVCOLUMNW c{};
-    c.mask = LVCF_TEXT;
-    std::wstring t = L(LNG_COL_TYPE, L"File type");
-    c.pszText = (LPWSTR)t.c_str();
-    ListView_SetColumn(m_list, 0, &c);
-    if (m_col32 >= 0) {
-        std::wstring a = L(LNG_COL_32, L"32-bit");
-        c.pszText = (LPWSTR)a.c_str();
-        ListView_SetColumn(m_list, m_col32, &c);
-    }
-    if (m_col64 >= 0) {
-        std::wstring b = L(LNG_COL_64, L"64-bit");
-        c.pszText = (LPWSTR)b.c_str();
-        ListView_SetColumn(m_list, m_col64, &c);
-    }
-}
-
-INT_PTR CALLBACK CPageSystem::DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
-{
-    CPageSystem* p = nullptr;
-    if (msg == WM_INITDIALOG)
-    {
-        p = (CPageSystem*)lp;
-        SetWindowLongPtrW(hDlg, DWLP_USER, (LONG_PTR)p);
-        p->m_hwnd = hDlg;
-        p->BuildList();
-        Lang::Apply(hDlg, IDD_PAGE_SYSTEM);
-        p->Load();
-#ifndef _WIN64
-        // Nothing 64-bit to manage on a 32-bit Windows.
-        ShowWindow(GetDlgItem(hDlg, IDC_LBL_BITS64),        SW_HIDE);
-        ShowWindow(GetDlgItem(hDlg, IDC_BTN_ASSOC_ALL_64),  SW_HIDE);
-        ShowWindow(GetDlgItem(hDlg, IDC_BTN_ASSOC_NONE_64), SW_HIDE);
-#endif
-        return TRUE;
-    }
-
-    p = (CPageSystem*)GetWindowLongPtrW(hDlg, DWLP_USER);
-    if (!p) return FALSE;
-
-    switch (msg)
-    {
-    case WM_COMMAND:
-        switch (LOWORD(wp))
-        {
-        case IDC_BTN_ASSOC_ALL_32:  p->SetAll(p->m_col32, true);  return TRUE;
-        case IDC_BTN_ASSOC_NONE_32: p->SetAll(p->m_col32, false); return TRUE;
-        case IDC_BTN_ASSOC_ALL_64:  p->SetAll(p->m_col64, true);  return TRUE;
-        case IDC_BTN_ASSOC_NONE_64: p->SetAll(p->m_col64, false); return TRUE;
-        }
-        break;
-
-    case WM_NOTIFY:
-    {
-        auto* nm = (LPNMHDR)lp;
-        if (nm->idFrom != IDC_LIST_ASSOC) break;
-
-        // A click anywhere in a tick column toggles that cell. Clicking
-        // the name column selects the row and changes nothing, which is
-        // what the equivalent list in 7-Zip does.
-        if (nm->code == NM_CLICK)
-        {
-            auto* ia = (LPNMITEMACTIVATE)lp;
-            LVHITTESTINFO ht{};
-            ht.pt = ia->ptAction;
-            ListView_SubItemHitTest(p->m_list, &ht);
-            if (ht.iItem >= 0 && ht.iSubItem > 0)
-                p->Toggle(ht.iItem, ht.iSubItem);
-            return TRUE;
-        }
-        // Space toggles the first tick column of the focused row, so the
-        // page is usable without a mouse.
-        if (nm->code == LVN_KEYDOWN)
-        {
-            auto* kd = (LPNMLVKEYDOWN)lp;
-            if (kd->wVKey == VK_SPACE)
-            {
-                const int row = ListView_GetNextItem(p->m_list, -1, LVNI_FOCUSED);
-                if (row >= 0) p->Toggle(row, p->m_col32);
-                return TRUE;
-            }
-        }
-        break;
-    }
-    }
-    return FALSE;
-}
 
 // ═════════════════════════════════════════════════════════
 // CPageFolders
@@ -715,8 +452,8 @@ void CPageInstall::RefreshState()
           L"Install registers one build of the shell extension: Explorer "
           L"can browse archives as folders, files inside an opened archive "
           L"get their right-click menu, thumbnails and preview work, and "
-          L"ArchiveFldr is listed in Settings > Default apps for the file "
-          L"types ticked on the System page. Uninstall takes all of that "
+          L"ArchiveFldr is listed in Settings > Default apps for its "
+          L"archive file types. Uninstall takes all of that "
           L"back out, leaving the files on disk.\r\n\r\n"
           L"Neither adds or removes anything in Explorer's own right-click "
           L"menu on archive files.\r\n\r\n"
@@ -1027,7 +764,6 @@ void CSettingsDialog::OnInit(HWND hDlg)
     auto lang = std::make_unique<CPageLanguage>();
     m_langPage = lang.get();
 
-    m_pages.push_back(std::make_unique<CPageSystem>());
     m_pages.push_back(std::make_unique<CPageFolders>());
     m_pages.push_back(std::make_unique<CPageInstall>());
     m_pages.push_back(std::move(lang));

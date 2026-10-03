@@ -32,11 +32,26 @@ struct Options
 {
     std::wstring format       = L"zip";  // handler name: "zip", "7z", "tar", ...
     int          level        = 5;       // 0 = store, 9 = ultra
+    std::wstring method;                 // "LZMA2", "Deflate", ... empty = default
     bool         solid        = false;   // 7z only
     bool         encryptNames = false;   // 7z only, needs a password
     std::wstring password;               // empty = no encryption
+    std::wstring encMethod;              // zip only: "ZipCrypto", "AES256"
     int          threads      = 0;       // 0 = let 7-Zip decide
 };
+
+// ── Choice lists for the Add to Archive dialog ───────────
+// Compression methods a format accepts (first entry = its default), and
+// the encryption methods it can apply. Empty encryption list means the
+// format cannot encrypt at all.
+std::vector<std::wstring> MethodsFor(const std::wstring& format);
+std::vector<std::wstring> EncryptionMethodsFor(const std::wstring& format);
+
+// Can files be ADDED to an existing archive of this handler? True for
+// the multi-file containers 7z.dll can update (zip, 7z, tar, wim);
+// false for single-stream formats (gzip, bzip2, xz) where "add" has no
+// meaning.
+bool CanAddToFormat(const std::wstring& format);
 
 // ── Capability ───────────────────────────────────────────
 bool IsAvailable();

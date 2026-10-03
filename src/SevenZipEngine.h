@@ -39,16 +39,41 @@ public:
     bool ExtractFile(const ArchiveEntry& e,
                      const std::wstring& destDir, ProgressFn cb) override;
 
-    // Modification is not supported by the extraction-only engine.
+    // Per-item modification is not supported; adding goes through the
+    // batch update below.
     bool AddFile   (const std::wstring&, const std::wstring&, ProgressFn) override { return false; }
     bool DeleteFile(const ArchiveEntry&) override { return false; }
     bool Rename    (const ArchiveEntry&, const std::wstring&) override { return false; }
 
+    // Add files in one IOutArchive update pass: old items are copied by
+    // the handler, new ones are compressed with `opt`. In-place updates
+    // write a temp file, close, swap and reopen.
+    bool AddItems(const std::vector<ArchiveWriter::Item>& items,
+                  const ArchiveWriter::Options& opt,
+                  const std::wstring& destPath,
+                  ProgressFn cb,
+                  std::wstring* err) override;
+
     bool Test(ProgressFn cb) override;
 
-    // Real extraction + testing; no compressor is wired up, so adding,
-    // deleting and renaming stay off (the shell greys those commands out).
+    // Real extraction + testing; canAdd is true when this archive's own
+    // handler can update it (zip, 7z, tar, wim with a writable 7z.dll).
     EngineCaps GetCaps() const override;
+
+    // ── Password ─────────────────────────────────────────
+    void SetPassword(const std::wstring& pw) override { m_password = pw; }
+    std::wstring GetPassword() const override { return m_password; }
+    bool PasswordNeededToOpen() const override { return m_needPasswordToOpen; }
+    bool LastErrorWasWrongPassword() const override { return m_wrongPassword; }
+    bool HasEncryptedItems() const override
+    {
+        for (const auto& e : m_allEntries) if (e.isEncrypted) return true;
+        return false;
+    }
+
+    // Handler id that opened this archive ("zip", "7z", ...), as opposed
+    // to the pretty format name shown in the UI.
+    std::wstring GetHandlerName() const override { return m_handlerName; }
 
     std::wstring GetFormatName()  const override
     { return m_formatName.empty() ? std::wstring(L"7-Zip") : m_formatName; }
@@ -75,6 +100,10 @@ private:
     ComPtr<IInArchive7z>      m_archive;
     std::vector<ArchiveEntry> m_allEntries; // flat list, directories synthesized
     std::wstring              m_lastError;
+    std::wstring              m_password;           // for reading (see SetPassword)
+    std::wstring              m_handlerName;        // "zip", "7z", ... (handler id)
+    bool                      m_needPasswordToOpen = false;
+    bool                      m_wrongPassword      = false;
     // Name to give the payload of a single-stream container (.bz2, .gz,
     // .xz), which carries no name of its own. Empty for every other
     // archive. Both the listing and the extract callback read this, so

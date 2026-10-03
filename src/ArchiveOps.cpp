@@ -1,6 +1,8 @@
 // ArchiveOps.cpp — see ArchiveOps.h
 #include "stdafx.h"
 #include "ArchiveOps.h"
+#include "ArchiveWriter.h"
+#include "PasswordDialog.h"
 #include "Settings.h"
 
 namespace ArchiveOps {
@@ -370,6 +372,93 @@ std::wstring TargetDirFor(const std::wstring& baseDir, const AddItem& item)
         dir += sub;
     }
     return dir;
+}
+
+// ─────────────────────────────────────────────────────────
+// Passwords
+// ─────────────────────────────────────────────────────────
+static std::wstring ArchiveLeafName(const EnginePtr& eng)
+{
+    const std::wstring path = eng ? eng->GetFilePath() : L"";
+    const wchar_t* leaf = PathFindFileNameW(path.c_str());
+    return leaf ? leaf : L"";
+}
+
+bool EnsureReadPassword(HWND hwnd, const EnginePtr& eng)
+{
+    if (!eng) return false;
+    if (!eng->HasEncryptedItems() || !eng->GetPassword().empty())
+        return true;                        // nothing to ask about
+
+    std::wstring pw;
+    if (!PasswordDialog::Ask(hwnd, ArchiveLeafName(eng),
+            L"Items in this archive are encrypted.\n"
+            L"Enter the password to continue.", pw))
+        return false;
+    eng->SetPassword(pw);
+    return true;
+}
+
+bool AskPasswordAgain(HWND hwnd, const EnginePtr& eng)
+{
+    if (!eng) return false;
+    std::wstring pw;
+    if (!PasswordDialog::Ask(hwnd, ArchiveLeafName(eng),
+            L"That password is not correct.\n"
+            L"Enter the password to try again.", pw))
+        return false;
+    eng->SetPassword(pw);
+    return true;
+}
+
+bool ExtractEntryPrompting(HWND hwnd, const EnginePtr& eng,
+                           const ArchiveEntry& e,
+                           const std::wstring& destDir,
+                           std::wstring* produced)
+{
+    // Only encrypted entries are worth a prompt up front; everything
+    // else extracts or fails on its own merits.
+    if (e.isEncrypted && !EnsureReadPassword(hwnd, eng))
+        return false;
+
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        if (ExtractEntry(eng, e, destDir, produced)) return true;
+        if (!eng || !eng->LastErrorWasWrongPassword()) return false;
+        if (!AskPasswordAgain(hwnd, eng)) return false;
+    }
+    return false;
+}
+
+// ─────────────────────────────────────────────────────────
+// Writer items
+// ─────────────────────────────────────────────────────────
+void BuildWriterItems(const std::vector<AddItem>& in,
+                      const std::wstring& baseDir,
+                      std::vector<ArchiveWriter::Item>& out)
+{
+    for (const auto& ai : in)
+    {
+        WIN32_FILE_ATTRIBUTE_DATA fad{};
+        if (!GetFileAttributesExW(ai.src.c_str(), GetFileExInfoStandard, &fad))
+            continue;                       // vanished between expand and now
+
+        ArchiveWriter::Item it;
+        it.diskPath = ai.src;
+
+        // Stored name: the target directory inside the archive plus the
+        // file's own name, '/'-separated like every internal path here.
+        std::wstring name = TargetDirFor(baseDir, ai);
+        name += PathFindFileNameW(ai.src.c_str());
+        it.nameInArchive = name;
+
+        it.isDir  = (fad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+        it.attrib = fad.dwFileAttributes;
+        it.mtime  = fad.ftLastWriteTime;
+        it.size   = it.isDir ? 0
+                  : ((uint64_t)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
+        out.push_back(std::move(it));
+    }
 }
 
 bool ClipboardHasFiles()

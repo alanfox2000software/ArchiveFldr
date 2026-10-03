@@ -1,7 +1,7 @@
 // SettingsDialog.h
 // ─────────────────────────────────────────────────────────────────────────
 // The Options window, laid out after 7-Zip's File Manager > Tools >
-// Options: a tab strip with System, Folders, Settings and Language,
+// Options: a tab strip with Folders, Settings and Language,
 // and OK / Cancel / Apply along the bottom.
 //
 // Every page is a child dialog created from a template in resource.rc and
@@ -34,44 +34,10 @@ public:
     virtual void  Retranslate()         = 0;
 };
 
-// ── System: file type associations, one tick column per bitness ──
-class CPageSystem : public ISettingsPage
-{
-public:
-    ~CPageSystem() override;
-    HWND Create(HWND) override;  void Show(bool) override;
-    void Load() override;        void Save() override;
-    void Place(const RECT&) override;
-    bool Dirty() const override { return m_dirty; }
-    void ClearDirty() override  { m_dirty = false; }
-    UINT DialogId() const override { return IDD_PAGE_SYSTEM; }
-    const wchar_t* Title() const override { return L"System"; }
-    HWND GetHwnd() const override { return m_hwnd; }
-    void Retranslate() override;
-
-private:
-    static INT_PTR CALLBACK DlgProc(HWND, UINT, WPARAM, LPARAM);
-    void BuildList();
-    void SetAll(int col, bool on);
-    void Toggle(int row, int col);
-    bool Ticked(int row, int col) const;
-    void SetTick(int row, int col, bool on);
-
-    HWND       m_hwnd = nullptr;
-    HWND       m_list = nullptr;
-    HIMAGELIST m_imgs = nullptr;
-    bool       m_dirty = false;
-    // Column index of the 32-bit and 64-bit ticks, or -1 when this build
-    // does not offer that one. A 32-bit settings program runs on a 32-bit
-    // Windows, where a 64-bit DLL could not be loaded by anything.
-    int        m_col32 = -1;
-    int        m_col64 = -1;
-    std::vector<const wchar_t*> m_exts;   // row -> extension
-};
-
-// The "ArchiveFldr" page (Explorer context menu integration) is gone:
-// the feature was removed. The context menu on items inside an opened
-// archive is part of the namespace extension and needs no page.
+// The "System" page (file type associations) and the "ArchiveFldr" page
+// (Explorer context menu integration) are gone: both features were
+// removed. The context menu on items inside an opened archive is part
+// of the namespace extension and needs no page.
 
 // ── Folders: working folder ──────────────────────────────
 class CPageFolders : public ISettingsPage

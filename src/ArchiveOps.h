@@ -38,6 +38,23 @@ bool ExtractEntry(const EnginePtr& eng, const ArchiveEntry& e,
 bool EnsureCanRead(HWND hwnd, const EnginePtr& eng);
 bool EnsureCanAdd (HWND hwnd, const EnginePtr& eng);
 
+// ── Passwords ───────────────────────────────────────────────────────────
+// Make sure the engine holds a password before encrypted items are read:
+// when the archive has encrypted entries and no password yet, prompt and
+// store the answer. False only when the user cancels the prompt.
+bool EnsureReadPassword(HWND hwnd, const EnginePtr& eng);
+
+// After an extract/test failed because the password is missing or wrong
+// (eng->LastErrorWasWrongPassword()), ask again. False = user gave up.
+bool AskPasswordAgain(HWND hwnd, const EnginePtr& eng);
+
+// ExtractEntry plus the password conversation around it: prompt first if
+// encrypted items need one, re-prompt on a wrong password (3 tries).
+bool ExtractEntryPrompting(HWND hwnd, const EnginePtr& eng,
+                           const ArchiveEntry& e,
+                           const std::wstring& destDir,
+                           std::wstring* produced);
+
 // ── Data object → file system paths (CF_HDROP or a shell ID list) ───────
 bool PathsFromDataObject(IDataObject* pdo, std::vector<std::wstring>& paths);
 
@@ -46,6 +63,13 @@ bool PathsFromDataObject(IDataObject* pdo, std::vector<std::wstring>& paths);
 struct AddItem { std::wstring src; std::wstring rel; };
 void ExpandForAdd(const std::vector<std::wstring>& roots,
                   std::vector<AddItem>& out);
+
+// Turn expanded drop/paste items into the writer's shape: disk path plus
+// the name the file takes inside the archive (TargetDirFor(baseDir, it) +
+// file name), with size, attributes and timestamp read from disk.
+void BuildWriterItems(const std::vector<AddItem>& in,
+                      const std::wstring& baseDir,
+                      std::vector<ArchiveWriter::Item>& out);
 
 // Directory inside the archive that `item` belongs in, given the folder the
 // user dropped on. Keeps a dropped tree's shape: "docs\a\b.txt" dropped on

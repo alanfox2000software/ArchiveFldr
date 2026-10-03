@@ -216,7 +216,11 @@ bool CArchiveDataObject::EnsureStaged(Item& it)
     if (!EnsureTempRoot()) return false;
 
     std::wstring produced;
-    if (!ArchiveOps::ExtractEntry(m_engine, it.entry, m_tempRoot, &produced))
+    // Rendering happens inside a drag-drop or paste, where no window of
+    // ours exists — the prompt parents to whatever window is active so
+    // an encrypted entry can still ask for its password.
+    if (!ArchiveOps::ExtractEntryPrompting(GetActiveWindow(), m_engine,
+                                           it.entry, m_tempRoot, &produced))
         return false;
     it.staged = produced;
     return true;

@@ -20,7 +20,10 @@ struct NSE_ITEMID {
     FILETIME mtime;       // last modified
     // Compression method, carried in the ID itself so the details view can
     // fill the column without re-listing the archive for every row.
-    WCHAR   method[16];
+    // External/encrypted coder chains can be long (for example
+    // "ZSTD 7zAES:19 (...)"). Keep enough text to avoid the visibly
+    // unterminated method shown by the old 15-character payload.
+    WCHAR   method[96];
     WCHAR   name[1];      // null-terminated name (variable length)
 };
 #pragma pack(pop)

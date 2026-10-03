@@ -65,7 +65,9 @@ Only the matching process bitness is loaded. Dedicated `thirdparty\lz4` and
 shared fallback location. Lizard creation and extraction support all four
 families: fastLZ4 (levels 10–19), LIZv1 (20–29), fastLZ4 + Huffman (30–39),
 and LIZv1 + Huffman (40–49). The same choices are available for standalone
-`.liz` streams and Lizard-compressed 7z archives.
+`.liz` streams and Lizard-compressed 7z archives. Official liblizard builds
+that export only the raw block API are supported: ArchiveFldr supplies the
+standard Lizard frame reader/writer when `LizardF_…` exports are absent.
 
 ArchiveFldr additionally discovers genuine 7-Zip codec plug-ins from a
 `Codecs` folder beside the selected engine. This remains useful for other

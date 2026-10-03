@@ -143,9 +143,11 @@ fastLZ4 (10–19), LIZv1 (20–29), fastLZ4 + Huffman (30–39), and LIZv1 +
 Huffman (40–49). The Add to Archive Dictionary size selects a Lizard frame
 block from 128 KB through 256 MB.
 
-**LZ5 and Lizard** must export the *frame* API (`LZ5F_…` / `LizardF_…`).
-A build that exports only the raw block functions cannot read framed
-files, and ArchiveFldr says so rather than producing garbage.
+**LZ5** must export the `LZ5F_…` frame API. Lizard accepts either the
+`LizardF_…` frame API or the official raw exports from `liblizard.def`.
+When only `Lizard_compress` / `Lizard_decompress_safe…` are present,
+ArchiveFldr supplies the standard Lizard frame layer itself, including
+linked-block dictionaries and frame/header checksum validation.
 
 **UnRAR** needs version 4 or newer, for the Unicode entry points.
 `unrar.dll` decodes only — creating or modifying RAR archives requires a

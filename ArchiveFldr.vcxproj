@@ -520,6 +520,7 @@ exit /b 0</Command>
     <ClCompile Include="src\ArchiveOps.cpp" />
     <ClCompile Include="src\DataObject.cpp" />
     <ClCompile Include="src\ThirdParty.cpp" />
+    <ClCompile Include="src\LizardFrame.cpp" />
     <ClCompile Include="src\SevenZipEngine.cpp" />
     <!-- Settings & GUI -->
     <ClCompile Include="src\CodecEngine.cpp" />
@@ -550,6 +551,7 @@ exit /b 0</Command>
     <ClInclude Include="src\ArchiveOps.h" />
     <ClInclude Include="src\DataObject.h" />
     <ClInclude Include="src\ThirdParty.h" />
+    <ClInclude Include="src\LizardFrame.h" />
     <ClInclude Include="src\SevenZipEngine.h" />
     <ClInclude Include="src\Sdk7z.h" />
     <ClInclude Include="src\Registry.h" />

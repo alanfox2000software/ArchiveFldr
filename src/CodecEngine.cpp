@@ -3,6 +3,7 @@
 #include "CodecEngine.h"
 #include "Formats.h"
 #include "ThirdParty.h"
+#include "LizardFrame.h"
 
 #include <mutex>
 
@@ -99,7 +100,7 @@ struct Codec
     std::wstring path;
     std::wstring error;          // why it is unusable, for the UI
 
-    enum class Kind { None, Zstd, Lz4Family, Brotli } kind = Kind::None;
+    enum class Kind { None, Zstd, Lz4Family, LizardRawFrame, Brotli } kind = Kind::None;
     ZstdApi      zstd{};
     Lz4FamilyApi lz4{};
     BrotliApi    brotli{};
@@ -207,7 +208,18 @@ Codec& GetCodec(const std::wstring& id)
     if      (id == L"zstd")   BindZstd(c);
     else if (id == L"lz4")    BindLz4Family(c, { "LZ4F_" });
     else if (id == L"lz5")    BindLz4Family(c, { "LZ5F_", "LizardF_" });
-    else if (id == L"lizard") BindLz4Family(c, { "LizardF_", "LZ5F_" });
+    else if (id == L"lizard")
+    {
+        BindLz4Family(c, { "LizardF_", "LZ5F_" });
+        // Official liblizard.def exports only the raw block API. The local
+        // frame parser supplies the missing LizardF layer for those builds.
+        if (c.kind == Codec::Kind::None && LizardFrame::DecoderAvailable())
+        {
+            c.kind = Codec::Kind::LizardRawFrame;
+            c.error.clear();
+            c.path = LizardFrame::LibraryPath();
+        }
+    }
     else if (id == L"brotli") BindBrotli(c);
     else                      c.error = L"Unknown codec id.";
 
@@ -504,7 +516,7 @@ EngineCaps CCodecEngine::GetCaps() const
         caps.canExtract = true;
         caps.canTest    = true;
         // An opened stream cannot be modified in place. New Zstandard,
-        // Brotli, LZ4 and LZ5 streams are created by ArchiveWriter's dialog.
+        // Brotli, LZ4, LZ5 and Lizard streams are created by ArchiveWriter.
         caps.canAdd = caps.canDelete = caps.canRename = false;
         return caps;
     }
@@ -650,6 +662,31 @@ bool CCodecEngine::Decode(const std::wstring& destFile, ProgressFn cb,
             report();
         }
         c.lz4.freeDecompressionContext(ctx);
+    }
+    // ── Lizard raw-DLL frame fallback ───────────────────────────────────
+    else if (c.kind == Codec::Kind::LizardRawFrame)
+    {
+        const auto result = LizardFrame::Decode(
+            [&](void* buffer, size_t capacity, size_t* got) {
+                DWORD amount = 0;
+                if (capacity > std::numeric_limits<DWORD>::max()) return false;
+                if (!ReadFile(in, buffer, (DWORD)capacity, &amount, nullptr))
+                    return false;
+                *got = amount;
+                readSoFar += amount;
+                return true;
+            },
+            [&](const void* buffer, size_t size) {
+                return out.Write(buffer, size);
+            },
+            0,
+            [&](uint64_t, uint64_t) {
+                report();
+                return true;
+            });
+        ok = result == LizardFrame::Result::Ok;
+        finished = ok;
+        if (!ok) m_lastError = LizardFrame::ResultMessage(result);
     }
     // ── brotli ──────────────────────────────────────────────────────────
     else if (c.kind == Codec::Kind::Brotli)

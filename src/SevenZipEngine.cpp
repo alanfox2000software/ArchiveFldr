@@ -19,6 +19,7 @@
 #include "Formats.h"
 #include "Sdk7z.h"
 #include "ThirdParty.h"
+#include "LizardFrame.h"
 #include "ArchiveWriter.h"
 
 // ═════════════════════════════════════════════════════════
@@ -890,13 +891,108 @@ private:
         return (!inSize || totalIn == *inSize) ? S_OK : S_FALSE;
     }
 
+    static HRESULT LizardResultToHresult(LizardFrame::Result result)
+    {
+        switch (result)
+        {
+        case LizardFrame::Result::Ok:          return S_OK;
+        case LizardFrame::Result::Unavailable: return E_NOTIMPL;
+        case LizardFrame::Result::OutOfMemory: return E_OUTOFMEMORY;
+        case LizardFrame::Result::Cancelled:   return E_ABORT;
+        case LizardFrame::Result::InvalidData: return S_FALSE;
+        default:                               return E_FAIL;
+        }
+    }
+
+    HRESULT DecodeLizardRaw(ISequentialInStream7z* in,
+                             ISequentialOutStream7z* out,
+                             const UINT64* inSize, const UINT64* outSize,
+                             ICompressProgressInfo7z* progress)
+    {
+        UINT64 totalIn = 0, totalOut = 0;
+        HRESULT ioFailure = S_OK;
+        const LizardFrame::Result result = LizardFrame::Decode(
+            [&](void* buffer, size_t capacity, size_t* got) {
+                if (capacity > std::numeric_limits<UINT32>::max())
+                    return false;
+                UINT32 amount = 0;
+                const HRESULT hr = in->Read(buffer, (UINT32)capacity, &amount);
+                if (FAILED(hr)) { ioFailure = hr; return false; }
+                *got = amount;
+                totalIn += amount;
+                return true;
+            },
+            [&](const void* buffer, size_t size) {
+                const HRESULT hr = WriteAll(out,
+                    static_cast<const BYTE*>(buffer), size);
+                if (FAILED(hr)) { ioFailure = hr; return false; }
+                totalOut += size;
+                return true;
+            },
+            outSize ? *outSize : 0,
+            [&](uint64_t, uint64_t) {
+                if (!progress) return true;
+                const HRESULT hr = progress->SetRatioInfo(&totalIn, &totalOut);
+                if (FAILED(hr)) { ioFailure = hr; return false; }
+                return true;
+            });
+        if (FAILED(ioFailure)) return ioFailure;
+        if (result != LizardFrame::Result::Ok)
+            return LizardResultToHresult(result);
+        if ((inSize && totalIn != *inSize) ||
+            (outSize && totalOut != *outSize)) return S_FALSE;
+        return S_OK;
+    }
+
+    HRESULT EncodeLizardRaw(ISequentialInStream7z* in,
+                             ISequentialOutStream7z* out,
+                             const UINT64* inSize,
+                             ICompressProgressInfo7z* progress)
+    {
+        UINT64 totalIn = 0, totalOut = 0;
+        HRESULT ioFailure = S_OK;
+        const LizardFrame::Result result = LizardFrame::Encode(
+            [&](void* buffer, size_t capacity, size_t* got) {
+                if (capacity > std::numeric_limits<UINT32>::max())
+                    return false;
+                UINT32 amount = 0;
+                const HRESULT hr = in->Read(buffer, (UINT32)capacity, &amount);
+                if (FAILED(hr)) { ioFailure = hr; return false; }
+                *got = amount;
+                totalIn += amount;
+                return true;
+            },
+            [&](const void* buffer, size_t size) {
+                const HRESULT hr = WriteAll(out,
+                    static_cast<const BYTE*>(buffer), size);
+                if (FAILED(hr)) { ioFailure = hr; return false; }
+                totalOut += size;
+                return true;
+            },
+            inSize ? *inSize : 0, m_level, m_dictionaryBytes,
+            [&](uint64_t, uint64_t) {
+                if (!progress) return true;
+                const HRESULT hr = progress->SetRatioInfo(&totalIn, &totalOut);
+                if (FAILED(hr)) { ioFailure = hr; return false; }
+                return true;
+            });
+        if (FAILED(ioFailure)) return ioFailure;
+        if (result != LizardFrame::Result::Ok)
+            return LizardResultToHresult(result);
+        return (!inSize || totalIn == *inSize) ? S_OK : S_FALSE;
+    }
+
     HRESULT DecodeLz(ISequentialInStream7z* in,
                       ISequentialOutStream7z* out,
                       const UINT64* inSize, const UINT64* outSize,
                       ICompressProgressInfo7z* progress)
     {
         NativeLzFrameApi* api = GetNativeLzFrame(m_kind, false);
-        if (!api) return E_NOTIMPL;
+        if (!api)
+            return m_kind == NativeCodecKind::Lizard &&
+                   LizardFrame::DecoderAvailable()
+                ? DecodeLizardRaw(in, out, inSize, outSize, progress)
+                : E_NOTIMPL;
         void* ctx = nullptr;
         size_t rc = api->createDctx(&ctx, 100);
         if (api->isError(rc) || !ctx) return E_FAIL;
@@ -962,7 +1058,11 @@ private:
                       ICompressProgressInfo7z* progress)
     {
         NativeLzFrameApi* api = GetNativeLzFrame(m_kind, true);
-        if (!api) return E_NOTIMPL;
+        if (!api)
+            return m_kind == NativeCodecKind::Lizard &&
+                   LizardFrame::EncoderAvailable()
+                ? EncodeLizardRaw(in, out, inSize, progress)
+                : E_NOTIMPL;
         void* ctx = nullptr;
         size_t rc = api->createCctx(&ctx, 100);
         if (api->isError(rc) || !ctx) return E_FAIL;
@@ -1089,8 +1189,10 @@ public:
             GetNativeLzFrame(NativeCodecKind::Lz5, false) != nullptr,
             GetNativeLzFrame(NativeCodecKind::Lz5, true) != nullptr);
         add(0x04F71106ULL, NativeCodecKind::Lizard,
-            GetNativeLzFrame(NativeCodecKind::Lizard, false) != nullptr,
-            GetNativeLzFrame(NativeCodecKind::Lizard, true) != nullptr);
+            GetNativeLzFrame(NativeCodecKind::Lizard, false) != nullptr ||
+                LizardFrame::DecoderAvailable(),
+            GetNativeLzFrame(NativeCodecKind::Lizard, true) != nullptr ||
+                LizardFrame::EncoderAvailable());
         return !m_methods.empty();
     }
 
@@ -2775,14 +2877,18 @@ bool C7zArchiveEngine::ExtractIndices(const std::vector<UINT32>& indices,
                 m_lastError += L"\nNative LZ4 library: " + g_nativeLz4.path;
             if (GetNativeLzFrame(NativeCodecKind::Lz5, false))
                 m_lastError += L"\nNative LZ5 library: " + g_nativeLz5.path;
-            if (GetNativeLzFrame(NativeCodecKind::Lizard, false))
-                m_lastError += L"\nNative Lizard library: " + g_nativeLizard.path;
+            if (GetNativeLzFrame(NativeCodecKind::Lizard, false) ||
+                LizardFrame::DecoderAvailable())
+                m_lastError += L"\nNative Lizard library: " +
+                    (g_nativeLizard.path.empty() ? LizardFrame::LibraryPath()
+                                                 : g_nativeLizard.path);
             if (!g_externalCodecsFolder.empty())
                 m_lastError += L"\nCodecs folder: " + g_externalCodecsFolder;
             else if (!NativeZstdAvailable() && !NativeBrotliDecoderAvailable() &&
                      !GetNativeLzFrame(NativeCodecKind::Lz4, false) &&
                      !GetNativeLzFrame(NativeCodecKind::Lz5, false) &&
-                     !GetNativeLzFrame(NativeCodecKind::Lizard, false))
+                     !GetNativeLzFrame(NativeCodecKind::Lizard, false) &&
+                     !LizardFrame::DecoderAvailable())
                 m_lastError +=
                     L"\nNo compatible native ZSTD/Brotli/LZ4/LZ5/Lizard library "
                     L"or adjacent Codecs folder was found.";
@@ -3395,9 +3501,11 @@ bool NativeFormatWritable(const std::wstring& format)
     const NativeCodecKind kind = NativeKindForFormat(format);
     if (kind == NativeCodecKind::Zstd) return NativeZstdEncoderAvailable();
     if (kind == NativeCodecKind::Brotli) return NativeBrotliEncoderAvailable();
-    if (kind == NativeCodecKind::Lz4 || kind == NativeCodecKind::Lz5 ||
-        kind == NativeCodecKind::Lizard)
+    if (kind == NativeCodecKind::Lz4 || kind == NativeCodecKind::Lz5)
         return GetNativeLzFrame(kind, true) != nullptr;
+    if (kind == NativeCodecKind::Lizard)
+        return GetNativeLzFrame(kind, true) != nullptr ||
+               LizardFrame::EncoderAvailable();
     return false;
 }
 
@@ -3605,7 +3713,8 @@ bool IsAvailable()
            NativeBrotliEncoderAvailable() ||
            GetNativeLzFrame(NativeCodecKind::Lz4, true) ||
            GetNativeLzFrame(NativeCodecKind::Lz5, true) ||
-           GetNativeLzFrame(NativeCodecKind::Lizard, true);
+           GetNativeLzFrame(NativeCodecKind::Lizard, true) ||
+           LizardFrame::EncoderAvailable();
 }
 
 std::vector<std::wstring> WritableFormats()

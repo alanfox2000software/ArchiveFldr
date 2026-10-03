@@ -113,30 +113,35 @@ writes only `Release\x64` (or `Debug\x64`) — it does not also build the
 
 Only the DLLs are registered. The settings program is an ordinary
 executable that the DLL starts on demand, which keeps the whole Options
-window out of every process that loads the shell extension. Its four
+window out of every process that loads a context menu. Its four
 buttons — **Install 32-bit**, **Install 64-bit**, **Uninstall 32-bit**,
 **Uninstall 64-bit** — act on whichever of the two DLLs they find next
 to themselves, each with the matching `regsvr32`, so keep them
 together.
 
-All four act on the whole extension: browsing archives as folders, the
-right-click menu on files *inside* an opened archive, thumbnails,
-preview, and the Default apps entry. None of them adds or removes
-anything in Explorer's own right-click menu on archive files — that
-feature (the old "Integrate to shell context menu" page) was removed.
+All four act on the *base* extension: browsing archives as folders,
+thumbnails, preview, and the Default apps entry. None of them touches
+the right-click menu, which is a separate switch per bitness — the two
+**Integrate to shell context menu** ticks on the ArchiveFldr page. So
+uninstalling the 64-bit extension leaves an integrated 64-bit menu
+standing until its tick is cleared, and installing never adds one that
+was not asked for.
 
-An unattended install is just `regsvr32`:
+The same halves are available to an unattended install. `/n` is what
+keeps `regsvr32` from doing the whole job as well:
 
 ```
-regsvr32 /s    ArchiveFldr.64.dll   rem install everything
-regsvr32 /s /u ArchiveFldr.64.dll   rem remove everything
+regsvr32 /s                   ArchiveFldr.64.dll   rem everything
+regsvr32 /s /n /i:base        ArchiveFldr.64.dll   rem browsing half only
+regsvr32 /s /n /i:contextmenu ArchiveFldr.64.dll   rem menu only
+regsvr32 /s /u                ArchiveFldr.64.dll   rem remove everything
+regsvr32 /s /u /n /i:base        ArchiveFldr.64.dll
+regsvr32 /s /u /n /i:contextmenu ArchiveFldr.64.dll
 ```
 
-Older scripts that used the split halves still work:
-`/n /i:base` now does the same as a plain register, and
-`/n /i:contextmenu` installs nothing — it only cleans up the Explorer
-context menu registrations an older build may have left behind (any
-registration pass does that sweep too).
+Plain `regsvr32 ArchiveFldr.64.dll` with no `/i` follows whatever those
+ticks already say, and on a machine that has never run the settings
+program that means everything, exactly as it always did.
 
 A per-bitness uninstall only sweeps the keys the other build is not
 standing on. The file type registrations under `HKLM\Software\Classes`

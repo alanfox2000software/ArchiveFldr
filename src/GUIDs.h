@@ -15,11 +15,8 @@ DEFINE_GUID(CLSID_ArchiveFldrFolder,
     0xB1A2C3D4, 0xE5F6, 0x7890,
     0xAB, 0xCD, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11);
 
-// ── Context Menu Handler (retired) ───────────────────────
+// ── Context Menu Handler ─────────────────────────────────
 // CLSID_ContextMenu  {B1A2C3D4-E5F6-7890-ABCD-222222222222}
-// The Explorer-level context menu handler was removed; this id is kept
-// only so registration can delete what older builds left in the
-// registry. The context menu inside an opened archive does not use it.
 DEFINE_GUID(CLSID_ArchiveFldrContextMenu,
     0xB1A2C3D4, 0xE5F6, 0x7890,
     0xAB, 0xCD, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22);

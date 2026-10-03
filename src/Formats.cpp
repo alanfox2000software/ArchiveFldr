@@ -22,6 +22,7 @@ static const Format kFormats[] =
     // ── 7-Zip handles these ──────────────────────────────────────────────
     { L".7z",    L"7-Zip",         L"ArchiveFldr.7zFile",    EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".7zip",  L"7-Zip",         L"ArchiveFldr.7zipFile",               EK::SevenZip, L"7z",     nullptr,  nullptr },
+    { L".001",   L"Split archive",  L"ArchiveFldr.SplitFile", EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".zip",   L"ZIP",           L"ArchiveFldr.ZipFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".zipx",  L"ZIPX",          L"ArchiveFldr.ZipxFile",               EK::SevenZip, L"7z",     nullptr,  nullptr },
     { L".jar",   L"Java archive",  L"ArchiveFldr.JarFile",   EK::SevenZip, L"7z",     nullptr,  nullptr },

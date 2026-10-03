@@ -520,6 +520,7 @@ exit /b 0</Command>
     <ClCompile Include="src\ArchiveOps.cpp" />
     <ClCompile Include="src\DataObject.cpp" />
     <ClCompile Include="src\ThirdParty.cpp" />
+    <ClCompile Include="src\LizardFrame.cpp" />
     <ClCompile Include="src\SevenZipEngine.cpp" />
     <!-- Settings & GUI -->
     <ClCompile Include="src\CodecEngine.cpp" />
@@ -550,6 +551,7 @@ exit /b 0</Command>
     <ClInclude Include="src\ArchiveOps.h" />
     <ClInclude Include="src\DataObject.h" />
     <ClInclude Include="src\ThirdParty.h" />
+    <ClInclude Include="src\LizardFrame.h" />
     <ClInclude Include="src\SevenZipEngine.h" />
     <ClInclude Include="src\Sdk7z.h" />
     <ClInclude Include="src\Registry.h" />
@@ -592,10 +594,10 @@ exit /b 0</Command>
        loads ArchiveFldr.64.dll, while 32-bit hosts — the common file
        dialog in a 32-bit program, an old shell replacement, Office's
        file browser — load ArchiveFldr.32.dll. The settings program
-       registers and unregisters both, and the System page offers a
-       tick column for each, so an x64 build that produced only the
-       64-bit DLL left half of that pointing at a file that was never
-       built.
+       registers and unregisters both, and the ArchiveFldr page offers
+       a context-menu integration switch for each, so an x64 build that
+       produced only the 64-bit DLL left half of that UI pointing at a
+       file that was never built.
 
        A solution configuration maps each project to exactly one
        project configuration, so the solution cannot build this

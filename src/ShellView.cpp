@@ -6,7 +6,6 @@
 #include "GUIDs.h"
 #include "Settings.h"
 #include "ArchiveEngine.h"
-#include "PasswordDialog.h"
 
 static const wchar_t kViewClass[] = L"ArchiveFldr_View";
 
@@ -234,31 +233,6 @@ void CShellView::PopulateListView()
 {
     ListView_DeleteAllItems(m_hwndList);
     if (!m_pFolder) return;
-
-    // An archive whose headers are encrypted opened with nothing in it:
-    // even the file names need the password. Ask here, where there is a
-    // window to ask from, and reopen — the enumeration below then sees
-    // the real contents.
-    if (auto eng = m_pFolder->GetEngine())
-    {
-        const std::wstring& path = m_pFolder->GetArchivePath();
-        for (int attempt = 0; eng->PasswordNeededToOpen() && attempt < 3;
-             ++attempt)
-        {
-            std::wstring pw;
-            if (!PasswordDialog::Ask(m_hwnd,
-                    PathFindFileNameW(path.c_str()),
-                    attempt == 0
-                        ? L"This archive is encrypted.\nIts contents cannot "
-                          L"be shown without the password."
-                        : L"That password is not correct.\nEnter the "
-                          L"password to try again.",
-                    pw))
-                break;
-            eng->SetPassword(pw);
-            if (eng->Open(path)) break;
-        }
-    }
 
     IEnumIDList* pEnum = nullptr;
     if (FAILED(m_pFolder->EnumObjects(m_hwnd,

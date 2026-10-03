@@ -1,7 +1,8 @@
 // ShellFolder.h
 // Implements the core Shell Namespace Extension folder object.
-// Interfaces: IShellFolder2, IPersistFolder2, IShellDetails,
-//             IObjectWithFetchIcon, IDropTarget (on folder)
+// Interfaces: IShellFolder2, IPersistFolder2, IShellDetails.
+// The folder is intentionally not an IDropTarget: opened archives are read-only
+// from Explorer's paste/drag-in perspective.
 #pragma once
 #include "stdafx.h"
 #include "ArchiveEngine.h"
@@ -19,7 +20,10 @@ struct NSE_ITEMID {
     FILETIME mtime;       // last modified
     // Compression method, carried in the ID itself so the details view can
     // fill the column without re-listing the archive for every row.
-    WCHAR   method[16];
+    // External/encrypted coder chains can be long (for example
+    // "ZSTD 7zAES:19 (...)"). Keep enough text to avoid the visibly
+    // unterminated method shown by the old 15-character payload.
+    WCHAR   method[96];
     WCHAR   name[1];      // null-terminated name (variable length)
 };
 #pragma pack(pop)
@@ -55,14 +59,19 @@ public:
     static LPITEMIDLIST   RemoveLast(LPCITEMIDLIST pidl);
 };
 
+// Parse an archive path into a fully qualified PIDL explicitly bound to the
+// ArchiveFldr ProgID for its extension. The file's default association is not
+// consulted, so this remains an ArchiveFldr folder even when another program
+// owns the extension.
+PIDLIST_ABSOLUTE CreateArchiveFolderPidl(const std::wstring& archivePath);
+
 // ─────────────────────────────────────────────────────────
 // CShellFolder
 // ─────────────────────────────────────────────────────────
 class CShellFolder :
     public IShellFolder2,
     public IPersistFolder2,
-    public IShellDetails,
-    public IDropTarget
+    public IShellDetails
 {
 public:
     CShellFolder();
@@ -110,12 +119,6 @@ public:
     // ── IShellDetails ────────────────────────────────────
     STDMETHODIMP ColumnClick (UINT col) override;
 
-    // ── IDropTarget ──────────────────────────────────────
-    STDMETHODIMP DragEnter(IDataObject*, DWORD, POINTL, DWORD*) override;
-    STDMETHODIMP DragOver (DWORD, POINTL, DWORD*) override;
-    STDMETHODIMP DragLeave() override;
-    STDMETHODIMP Drop     (IDataObject*, DWORD, POINTL, DWORD*) override;
-
     // ── Internal helpers ─────────────────────────────────
     std::shared_ptr<IArchiveEngine> GetEngine() const { return m_engine; }
     const std::wstring& GetArchivePath() const { return m_archivePath; }
@@ -138,10 +141,6 @@ private:
     std::wstring   m_internalPath;  // path inside archive e.g. "src/utils/"
 
     std::shared_ptr<IArchiveEngine> m_engine;
-
-    // Drop feedback between DragEnter and Drop. (This used to be a file
-    // scope global shared by every folder instance.)
-    DWORD    m_lastEffect = DROPEFFECT_NONE;
 
     // Column definitions
     struct ColDef { const wchar_t* name; int width; SHCOLSTATEF state; };

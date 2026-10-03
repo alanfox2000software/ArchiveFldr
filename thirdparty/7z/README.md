@@ -22,6 +22,68 @@ most people only need `7z.64.dll` on modern 64-bit Windows.
 A plain, unrenamed `thirdparty\7z\7z.dll` is also accepted as a fallback
 if you don't want to rename the file.
 
+### Archives using external methods (ZSTD, Brotli, LZ4, …)
+
+A 7z archive can refer to a compression method that is not built into the
+selected `7z.dll`. For example, 7-Zip ZS uses method `04F71101` for ZSTD.
+ArchiveFldr adapts the same raw ZSTD runtime already used for `.zst` files and
+publishes it to the 7z handler through `ICompressCodecsInfo`:
+
+```
+thirdparty\zstd\
+├─ libzstd.64.dll
+└─ libzstd.32.dll
+```
+
+No separate 7-Zip ZSTD plug-in is required when the matching raw library is
+present. The adapter creates and extracts standalone Zstandard streams and
+encodes/decodes both the 7-Zip ZS method (`04F71101`) and official ZSTD coder
+ID (`04015D`), including concatenated/skippable frames. ZIP creation uses
+standardized ZSTD method 93.
+
+The same adapter publishes Brotli (`04F71102`), LZ4 (`04F71104`), LZ5
+(`04F71105`) and Lizard (`04F71106`) encoders and decoders from these raw
+runtime libraries:
+
+```
+thirdparty\brotli\32\libbrotlicommon.dll
+thirdparty\brotli\32\libbrotlidec.dll
+thirdparty\brotli\32\libbrotlienc.dll
+thirdparty\brotli\64\libbrotlicommon.dll
+thirdparty\brotli\64\libbrotlidec.dll
+thirdparty\brotli\64\libbrotlienc.dll
+thirdparty\brunsli\liblz4.32.dll
+thirdparty\brunsli\liblz4.64.dll
+thirdparty\brunsli\liblz5.32.dll
+thirdparty\brunsli\liblz5.64.dll
+thirdparty\lizard\liblizard.32.dll
+thirdparty\lizard\liblizard.64.dll
+```
+
+Only the matching process bitness is loaded. Dedicated `thirdparty\lz4` and
+`thirdparty\lz5` folders remain accepted; `thirdparty\brunsli` is their
+shared fallback location. Lizard creation and extraction support all four
+families: fastLZ4 (levels 10–19), LIZv1 (20–29), fastLZ4 + Huffman (30–39),
+and LIZv1 + Huffman (40–49). The same choices are available for standalone
+`.liz` streams and Lizard-compressed 7z archives. Official liblizard builds
+that export only the raw block API are supported: ArchiveFldr supplies the
+standard Lizard frame reader/writer when `LizardF_…` exports are absent.
+
+ArchiveFldr additionally discovers genuine 7-Zip codec plug-ins from a
+`Codecs` folder beside the selected engine. This remains useful for other
+external methods:
+
+```
+thirdparty\7z\
+├─ 7z.64.dll
+└─ Codecs\
+   └─ another-codec-x64.dll
+```
+
+All DLLs must match Explorer's bitness. When ArchiveFldr falls back to an
+installed `C:\Program Files\7-Zip\7z.dll`, it automatically scans that
+installation's adjacent `Codecs` folder.
+
 ### Full runtime search order
 
 `7z` is one component of the shared third-party layout documented in
@@ -62,21 +124,21 @@ If no usable engine DLL is found (here, or via a system-wide 7-Zip install
 registered under `HKLM\SOFTWARE\7-Zip`), `.7z` archives will simply fail to
 open in ArchiveFldr — there is no fake/placeholder data shown.
 
-## Current limitations (v1 of the 7z engine integration)
+## Capabilities and limitations
 
-- **Extraction only** — creating or modifying `.7z` archives isn't
-  supported (7-Zip's own LZMA encoder has a separate, more complex SDK
-  surface not yet wired up here). ArchiveFldr reports this through
-  `IArchiveEngine::GetCaps()`, so the shell hides or explains the commands
-  that would need to write: dropping files onto an open `.7z` says why it
-  cannot be done instead of silently doing nothing, and Delete/Rename are
-  never offered for items inside it.
-- **No password-prompt UI** — unencrypted archives are unaffected, but an
-  archive with encrypted headers will fail to open, and individual
-  encrypted items inside an otherwise-open archive will fail to extract.
+ArchiveFldr supports browsing, password prompts (including encrypted file
+names), Details columns, opening an item, Extract/Extract-here, Test, copying
+or dragging items out, and creating formats for which the selected `7z.dll` publishes a
+writer. An archive opened as an Explorer folder is intentionally read-only:
+Paste, Ctrl+V, and dragging files into it are not accepted.
 
-What *does* work with this engine: browsing, the Details columns (size,
-packed, ratio, method, date, CRC), opening an item (extracted to a private
-read-only temp copy), Extract/Extract-here for the whole archive or a
-selection, Test, and copying or dragging items **out** of the archive into
-Explorer.
+The Add to Archive dialog exposes Dictionary size and Word size (`d` and
+`fb` writer properties), plus a sized Solid Block setting (`s`) for solid 7z
+archives. It can also split a completed archive at an exact byte count. Parts
+are named `archive.ext.001`, `.002`, and so on; opening `.001` uses the
+extension before that suffix to select the underlying handler and supplies
+sibling volumes through 7-Zip's volume callback.
+
+Per-item Delete and Rename are not currently offered. Capabilities are read
+from the loaded handler, so commands that its particular `7z.dll` cannot
+perform are hidden or explained instead of silently doing nothing.

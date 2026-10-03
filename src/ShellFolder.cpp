@@ -4,12 +4,25 @@
 #include "SysInfo.h"
 #include "ShellView.h"
 #include "ContextMenu.h"
-#include "DropTarget.h"
 #include "DataObject.h"
 #include "ArchiveOps.h"
 #include "ThumbnailProvider.h"
 #include "GUIDs.h"
 #include "Settings.h"
+#include "Formats.h"
+
+// These bind-context names were added after the XP SDK. Spell them out so
+// the XP-toolset configuration can compile the same source; the feature is
+// only used on Windows 7 and later at runtime.
+#ifndef STR_PARSE_WITH_EXPLICIT_PROGID
+#define STR_PARSE_WITH_EXPLICIT_PROGID L"ExplicitProgid"
+#endif
+#ifndef STR_PARSE_EXPLICIT_ASSOCIATION_SUCCESSFUL
+#define STR_PARSE_EXPLICIT_ASSOCIATION_SUCCESSFUL L"ExplicitAssociationSuccessful"
+#endif
+#ifndef STR_PROPERTYBAG_PARAM
+#define STR_PROPERTYBAG_PARAM L"SHBindCtxPropertyBag"
+#endif
 
 // ─────────────────────────────────────────────────────────
 // CFolderViewCB — the view callback handed to the Shell's default folder
@@ -71,6 +84,109 @@ public:
 private:
     ~CFolderViewCB() { InterlockedDecrement(&g_cDllRefCount); }
     long m_cRef = 1;
+};
+
+// SHParseDisplayName receives typed options through an IPropertyBag stored
+// in its bind context. Only two values are involved here: the ProgID we ask
+// it to use and the Boolean it writes back to confirm that it did so.
+// Keeping the implementation local avoids a Propsys.dll dependency, which
+// would prevent the XP-compatible build from loading on XP.
+class CParsePropertyBag final : public IPropertyBag
+{
+public:
+    CParsePropertyBag()
+    {
+        VariantInit(&m_progId);
+        VariantInit(&m_associationSuccessful);
+        InterlockedIncrement(&g_cDllRefCount);
+    }
+
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override
+    {
+        if (!ppv) return E_POINTER;
+        *ppv = nullptr;
+        if (IsEqualIID(riid, IID_IUnknown) ||
+            IsEqualIID(riid, IID_IPropertyBag))
+        {
+            *ppv = static_cast<IPropertyBag*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+
+    STDMETHODIMP_(ULONG) AddRef() override
+    { return InterlockedIncrement(&m_cRef); }
+
+    STDMETHODIMP_(ULONG) Release() override
+    {
+        ULONG n = InterlockedDecrement(&m_cRef);
+        if (!n) delete this;
+        return n;
+    }
+
+    STDMETHODIMP Read(LPCOLESTR pszPropName, VARIANT* pValue,
+                       IErrorLog* /*pErrorLog*/) override
+    {
+        if (!pszPropName || !pValue) return E_POINTER;
+
+        const VARIANT* source = nullptr;
+        if (_wcsicmp(pszPropName, STR_PARSE_WITH_EXPLICIT_PROGID) == 0 &&
+            m_hasProgId)
+            source = &m_progId;
+        else if (_wcsicmp(pszPropName,
+                          STR_PARSE_EXPLICIT_ASSOCIATION_SUCCESSFUL) == 0 &&
+                 m_hasAssociationSuccessful)
+            source = &m_associationSuccessful;
+
+        if (!source) return E_INVALIDARG;
+        return VariantCopy(pValue, const_cast<VARIANT*>(source));
+    }
+
+    STDMETHODIMP Write(LPCOLESTR pszPropName, VARIANT* pValue) override
+    {
+        if (!pszPropName || !pValue) return E_POINTER;
+
+        VARIANT* destination = nullptr;
+        bool* present = nullptr;
+        if (_wcsicmp(pszPropName, STR_PARSE_WITH_EXPLICIT_PROGID) == 0)
+        {
+            destination = &m_progId;
+            present = &m_hasProgId;
+        }
+        else if (_wcsicmp(pszPropName,
+                          STR_PARSE_EXPLICIT_ASSOCIATION_SUCCESSFUL) == 0)
+        {
+            destination = &m_associationSuccessful;
+            present = &m_hasAssociationSuccessful;
+        }
+        else
+            return E_INVALIDARG;
+
+        VARIANT copy;
+        VariantInit(&copy);
+        HRESULT hr = VariantCopy(&copy, pValue);
+        if (FAILED(hr)) return hr;
+
+        VariantClear(destination);
+        *destination = copy; // ownership of any BSTR moves into the member
+        *present = true;
+        return S_OK;
+    }
+
+private:
+    ~CParsePropertyBag()
+    {
+        VariantClear(&m_progId);
+        VariantClear(&m_associationSuccessful);
+        InterlockedDecrement(&g_cDllRefCount);
+    }
+
+    long m_cRef = 1;
+    VARIANT m_progId{};
+    VARIANT m_associationSuccessful{};
+    bool m_hasProgId = false;
+    bool m_hasAssociationSuccessful = false;
 };
 
 // Flip to true in the same change that implements
@@ -209,6 +325,91 @@ std::wstring CPidlMgr::GetChainPath(LPCITEMIDLIST pidl)
     return path;
 }
 
+PIDLIST_ABSOLUTE CreateArchiveFolderPidl(const std::wstring& archivePath)
+{
+    if (archivePath.empty()) return nullptr;
+
+    std::wstring path = archivePath;
+    wchar_t full[32768] = {};
+    const DWORD count = GetFullPathNameW(
+        archivePath.c_str(), ARRAYSIZE(full), full, nullptr);
+    if (count && count < ARRAYSIZE(full)) path.assign(full, count);
+
+    const Formats::Format* format =
+        Formats::Find(PathFindExtensionW(path.c_str()));
+    if (!format) return nullptr;
+
+    // Formats such as .docx are readable when explicitly requested but do
+    // not publish their own ProgID, because appearing as a default handler
+    // for somebody else's document type would be hostile. Every registered
+    // ArchiveFldr ProgID points at the same folder CLSID, so those formats
+    // can use the first one solely as an explicit binding selector. This
+    // does not create or alter a file association.
+    const wchar_t* progId = format->progId;
+    std::vector<const Formats::Format*> registrable;
+    if (!progId)
+    {
+        registrable = Formats::Registrable();
+        if (registrable.empty()) return nullptr;
+        progId = registrable.front()->progId;
+    }
+
+    // Explicit-ProgID parsing is supported by the Windows 7+ filesystem
+    // parser. Older systems retain the previous filesystem PIDL behavior;
+    // there is no supported explicit-association option for them.
+    if (!SysInfo::IsWin7OrLater())
+        return ILCreateFromPathW(path.c_str());
+
+    ComPtr<IBindCtx> bindContext;
+    if (FAILED(CreateBindCtx(0, bindContext.GetAddressOf())) || !bindContext)
+        return nullptr;
+
+    ComPtr<IPropertyBag> properties;
+    properties.Attach(new(std::nothrow) CParsePropertyBag());
+    if (!properties) return nullptr;
+
+    VARIANT explicitProgId;
+    VariantInit(&explicitProgId);
+    V_VT(&explicitProgId) = VT_BSTR;
+    V_BSTR(&explicitProgId) = SysAllocString(progId);
+    if (!V_BSTR(&explicitProgId)) return nullptr;
+
+    HRESULT hr = properties->Write(STR_PARSE_WITH_EXPLICIT_PROGID,
+                                   &explicitProgId);
+    VariantClear(&explicitProgId);
+    if (FAILED(hr)) return nullptr;
+
+    hr = bindContext->RegisterObjectParam(
+        const_cast<LPOLESTR>(STR_PROPERTYBAG_PARAM), properties.Get());
+    if (FAILED(hr)) return nullptr;
+
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    hr = SHParseDisplayName(path.c_str(), bindContext.Get(), &pidl, 0, nullptr);
+    if (FAILED(hr) || !pidl)
+    {
+        if (pidl) ILFree(pidl);
+        return nullptr;
+    }
+
+    // A successful parse alone is not enough: without this output flag the
+    // PIDL is just the ordinary filesystem item and a Desktop invocation
+    // can still launch the default program. Reject that silent downgrade.
+    VARIANT associated;
+    VariantInit(&associated);
+    hr = properties->Read(STR_PARSE_EXPLICIT_ASSOCIATION_SUCCESSFUL,
+                          &associated, nullptr);
+    const bool forced = SUCCEEDED(hr) && V_VT(&associated) == VT_BOOL &&
+                        V_BOOL(&associated) != VARIANT_FALSE;
+    VariantClear(&associated);
+    if (!forced)
+    {
+        ILFree(pidl);
+        return nullptr;
+    }
+
+    return pidl;
+}
+
 // ─────────────────────────────────────────────────────────
 // CShellFolder — constructors / destructor
 // ─────────────────────────────────────────────────────────
@@ -273,8 +474,6 @@ STDMETHODIMP CShellFolder::QueryInterface(REFIID riid, void** ppv)
         *ppv = static_cast<IPersistFolder2*>(this);
     else if (IsEqualIID(riid, IID_IShellDetails))
         *ppv = static_cast<IShellDetails*>(this);
-    else if (IsEqualIID(riid, IID_IDropTarget))
-        *ppv = static_cast<IDropTarget*>(this);
     else
         return E_NOINTERFACE;
 
@@ -441,10 +640,22 @@ STDMETHODIMP CShellFolder::ParseDisplayName(
 // ─────────────────────────────────────────────────────────
 // IShellFolder::EnumObjects
 // ─────────────────────────────────────────────────────────
-STDMETHODIMP CShellFolder::EnumObjects(HWND /*hwnd*/, DWORD grfFlags, IEnumIDList** ppEnum)
+STDMETHODIMP CShellFolder::EnumObjects(HWND hwnd, DWORD grfFlags, IEnumIDList** ppEnum)
 {
     if (!ppEnum) return E_POINTER;
     *ppEnum = nullptr;
+
+    // Both Explorer's DefView and ArchiveFldr's fallback view enumerate
+    // through this method. Prompt here, immediately before List(), so an
+    // archive with encrypted file names is reopened before either view can
+    // mistake its still-hidden entries for an empty archive.
+    if (!ArchiveOps::EnsureOpenPassword(hwnd, m_engine))
+    {
+        // Cancellation is not an empty archive. Propagate it to Explorer so
+        // the failed navigation cannot be presented as a valid folder with
+        // no files in it.
+        return HRESULT_FROM_WIN32(ERROR_CANCELLED);
+    }
 
     std::vector<LPITEMIDLIST> items;
     if (m_engine) {
@@ -556,6 +767,13 @@ STDMETHODIMP CShellFolder::CreateViewObject(HWND hwnd, REFIID riid, void** ppv)
     *ppv = nullptr;
 
     if (IsEqualIID(riid, IID_IShellView) || IsEqualIID(riid, IID_IShellView2)) {
+        // This is the last point in navigation at which a failure can stop
+        // Explorer from entering the folder. Prompt before handing back a
+        // view; if the user cancels, return cancellation instead of creating
+        // a view that can only look like a successfully opened empty archive.
+        if (!ArchiveOps::EnsureOpenPassword(hwnd, m_engine))
+            return HRESULT_FROM_WIN32(ERROR_CANCELLED);
+
         // Prefer the Shell's own default folder view (DefView). It is the
         // view Explorer expects to host, and it drives this folder through
         // the IShellFolder2 methods we already implement — columns, sorting,
@@ -582,7 +800,7 @@ STDMETHODIMP CShellFolder::CreateViewObject(HWND hwnd, REFIID riid, void** ppv)
         pView->Release(); return hr;
     }
     // Right-click on empty space in the view: the background menu belongs to
-    // the folder, not to any item (Extract all, Paste, Refresh, Info...).
+    // the folder, not to any item (Extract all, Refresh, Info...).
     if (IsEqualIID(riid, IID_IContextMenu)  ||
         IsEqualIID(riid, IID_IContextMenu2) ||
         IsEqualIID(riid, IID_IContextMenu3)) {
@@ -593,10 +811,6 @@ STDMETHODIMP CShellFolder::CreateViewObject(HWND hwnd, REFIID riid, void** ppv)
         p->Release(); return hr;
     }
 
-    if (IsEqualIID(riid, IID_IDropTarget)) {
-        AddRef(); *ppv = static_cast<IDropTarget*>(this);
-        return S_OK;
-    }
     return E_NOINTERFACE;
 }
 
@@ -614,7 +828,7 @@ STDMETHODIMP CShellFolder::GetAttributesOf(
     // shell give up on the archive.
     if (cidl == 0 || !apidl) {
         *rgfInOut &= (SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_BROWSABLE |
-                      SFGAO_DROPTARGET | SFGAO_HASPROPSHEET);
+                      SFGAO_HASPROPSHEET);
         return S_OK;
     }
 
@@ -673,19 +887,11 @@ STDMETHODIMP CShellFolder::GetUIObjectOf(
         HRESULT hr = p->QueryInterface(riid, ppv);
         p->Release(); return hr;
     }
-    if (IsEqualIID(riid, IID_IDropTarget)) {
-        auto* p = new(std::nothrow) CDropTarget();
-        if (!p) return E_OUTOFMEMORY;
-        p->SetFolder(this);
-        p->SetSite(hwnd);
-        HRESULT hr = p->QueryInterface(riid, ppv);
-        p->Release(); return hr;
-    }
     // Copy (Ctrl+C) and drag-OUT of the archive. Without this the shell has
     // no way to ask for the bytes, so dragging an entry to the desktop did
     // nothing at all.
     if (IsEqualIID(riid, IID_IDataObject)) {
-        return CArchiveDataObject::Create(this, cidl, apidl, riid, ppv);
+        return CArchiveDataObject::Create(this, hwnd, cidl, apidl, riid, ppv);
     }
     if (IsEqualIID(riid, IID_IExtractIconW) ||
         IsEqualIID(riid, IID_IExtractIconA)) {
@@ -996,41 +1202,6 @@ STDMETHODIMP CShellFolder::MapColumnToSCID(UINT col, SHCOLUMNID* pscid)
 }
 
 STDMETHODIMP CShellFolder::ColumnClick(UINT /*col*/) { return S_FALSE; }
-
-// ─────────────────────────────────────────────────────────
-// IDropTarget (folder-level — accept drops FROM Explorer)
-// ─────────────────────────────────────────────────────────
-STDMETHODIMP CShellFolder::DragEnter(
-    IDataObject* pObj, DWORD /*grfKey*/, POINTL pt, DWORD* pdwEffect)
-{
-    (void)pt;
-    if (!pdwEffect) return E_POINTER;
-    // Dropping into an archive is always a COPY: the engine cannot promise
-    // the data landed, so the source must never delete its originals.
-    m_lastEffect = ArchiveDrop::EffectFor(pObj);
-    *pdwEffect   = m_lastEffect;
-    return S_OK;
-}
-STDMETHODIMP CShellFolder::DragOver(DWORD grfKeyState, POINTL pt, DWORD* pdwEffect)
-{
-    (void)grfKeyState;
-    (void)pt;
-    if (pdwEffect) *pdwEffect = m_lastEffect;
-    return S_OK;
-}
-STDMETHODIMP CShellFolder::DragLeave()
-{
-    m_lastEffect = DROPEFFECT_NONE;
-    return S_OK;
-}
-STDMETHODIMP CShellFolder::Drop(IDataObject* pObj,DWORD,POINTL,DWORD* pdwEffect)
-{
-    if (!pdwEffect) return E_POINTER;
-    HRESULT hr = ArchiveDrop::Perform(nullptr, this, pObj);
-    *pdwEffect = (hr == S_OK) ? DROPEFFECT_COPY : DROPEFFECT_NONE;
-    m_lastEffect = DROPEFFECT_NONE;
-    return S_OK;
-}
 
 // ─────────────────────────────────────────────────────────
 // CEnumIDList::Next

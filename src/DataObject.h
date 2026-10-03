@@ -4,7 +4,7 @@
 //
 // Formats served:
 //   CFSTR_FILEDESCRIPTORW  flattened list of the selection (folders expand)
-//   CFSTR_FILECONTENTS     one IStream per descriptor, extracted on demand
+//   CFSTR_FILECONTENTS     one IStream per descriptor, backed by staged files
 //   CF_HDROP               same selection staged in a temp folder
 //   CFSTR_SHELLIDLIST      the shell's own identity format (CIDA)
 //   CFSTR_PREFERREDDROPEFFECT = DROPEFFECT_COPY (an archive item is never
@@ -19,7 +19,7 @@ class CArchiveDataObject : public IDataObject
 {
 public:
     // Builds a data object for `cidl` children of `folder`.
-    static HRESULT Create(CShellFolder* folder, UINT cidl,
+    static HRESULT Create(CShellFolder* folder, HWND owner, UINT cidl,
                           LPCITEMIDLIST* apidl, REFIID riid, void** ppv);
 
     // IUnknown
@@ -58,7 +58,7 @@ private:
     HRESULT RenderHDrop       (STGMEDIUM* pmed);
     HRESULT RenderDropEffect  (STGMEDIUM* pmed);
 
-    bool EnsureStaged(Item& it);
+    bool EnsureStaged(Item& it, HWND promptOwner = nullptr);
     bool EnsureTempRoot();
 
     long  m_cRef = 1;

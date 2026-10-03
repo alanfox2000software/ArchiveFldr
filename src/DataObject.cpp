@@ -126,7 +126,7 @@ CArchiveDataObject::~CArchiveDataObject()
     InterlockedDecrement(&g_cDllRefCount);
 }
 
-HRESULT CArchiveDataObject::Create(CShellFolder* folder, UINT cidl,
+HRESULT CArchiveDataObject::Create(CShellFolder* folder, HWND owner, UINT cidl,
                                    LPCITEMIDLIST* apidl, REFIID riid, void** ppv)
 {
     if (!ppv) return E_POINTER;
@@ -135,6 +135,12 @@ HRESULT CArchiveDataObject::Create(CShellFolder* folder, UINT cidl,
 
     auto engine = folder->GetEngine();
     if (!engine) return E_FAIL;
+    // Explorer can request IDataObject directly for drag-out, without going
+    // through ArchiveFldr's Copy command. Reopen a header-encrypted sibling
+    // engine (normally from the verified in-process password cache) before
+    // resolving PIDLs or staging any bytes.
+    if (!ArchiveOps::EnsureOpenPassword(owner, engine))
+        return HRESULT_FROM_WIN32(ERROR_CANCELLED);
 
     auto* p = new(std::nothrow) CArchiveDataObject();
     if (!p) return E_OUTOFMEMORY;
@@ -177,6 +183,30 @@ HRESULT CArchiveDataObject::Create(CShellFolder* folder, UINT cidl,
 
     if (p->m_roots.empty()) { p->Release(); return E_FAIL; }
 
+    // Do not put up a password dialog from IDataObject::GetData. Explorer
+    // calls GetData in the middle of an OLE transfer; a modal prompt there
+    // can make the destination abandon the request and report the opaque
+    // "Error Copying File or Folder: Unspecified error" even after a valid
+    // password was entered. Stage the whole selection now, while
+    // GetUIObjectOf still gives us the source window and before OLE starts
+    // asking for FILECONTENTS / CF_HDROP.  This deliberately does not trust
+    // ArchiveEntry::isEncrypted: some handler versions omit kpidEncrypted,
+    // and the extraction callback itself is the final authority on whether
+    // a password is required.
+    for (auto& item : p->m_items)
+    {
+        if (!p->EnsureStaged(item, owner))
+        {
+            // A clean failure means the user dismissed the password prompt;
+            // an engine error must reach Copy so it can display the useful
+            // reason instead of the same opaque message for every fault.
+            const HRESULT hr = engine->GetLastErrorText().empty()
+                ? HRESULT_FROM_WIN32(ERROR_CANCELLED) : E_FAIL;
+            p->Release();
+            return hr;
+        }
+    }
+
     HRESULT hr = p->QueryInterface(riid, ppv);
     p->Release();
     return hr;
@@ -199,7 +229,7 @@ STDMETHODIMP_(ULONG) CArchiveDataObject::Release()
 { ULONG n = InterlockedDecrement(&m_cRef); if (!n) delete this; return n; }
 
 // ─────────────────────────────────────────────────────────
-// Staging (extract on demand into one private temp folder)
+// Staging (extract before OLE transfer into one private temp folder)
 // ─────────────────────────────────────────────────────────
 bool CArchiveDataObject::EnsureTempRoot()
 {
@@ -209,17 +239,18 @@ bool CArchiveDataObject::EnsureTempRoot()
     return !m_tempRoot.empty();
 }
 
-bool CArchiveDataObject::EnsureStaged(Item& it)
+bool CArchiveDataObject::EnsureStaged(Item& it, HWND promptOwner)
 {
     if (!it.staged.empty())
         return GetFileAttributesW(it.staged.c_str()) != INVALID_FILE_ATTRIBUTES;
     if (!EnsureTempRoot()) return false;
 
     std::wstring produced;
-    // Rendering happens inside a drag-drop or paste, where no window of
-    // ours exists — the prompt parents to whatever window is active so
-    // an encrypted entry can still ask for its password.
-    if (!ArchiveOps::ExtractEntryPrompting(GetActiveWindow(), m_engine,
+    // Selections are normally staged before OLE starts (see Create).
+    // Keep this path usable for defensive late calls too; use the active
+    // window only when the caller could not provide the source archive view.
+    if (!promptOwner) promptOwner = GetActiveWindow();
+    if (!ArchiveOps::ExtractEntryPrompting(promptOwner, m_engine,
                                            it.entry, m_tempRoot, &produced))
         return false;
     it.staged = produced;
@@ -523,8 +554,8 @@ STDMETHODIMP CArchiveDataObject::EnumFormatEtc(DWORD dwDirection,
 
     const Formats& f = CF();
     std::vector<FORMATETC> list = {
-        // Virtual-file formats first: they stream straight out of the
-        // archive, no up-front extraction of the whole selection.
+        // Virtual-file formats first. Their streams read the files staged
+        // before OLE began, so password UI never appears inside GetData().
         { f.descriptorW,     nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL },
         { f.contents,        nullptr, DVASPECT_CONTENT,  0, TYMED_ISTREAM },
         { f.idList,          nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL },

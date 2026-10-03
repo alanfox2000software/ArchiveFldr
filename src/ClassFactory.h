@@ -32,6 +32,7 @@ public:
 
     // ── Static creator helpers ────────────────────────────
     static HRESULT CreateShellFolder      (REFIID, LPVOID*);
+    static HRESULT CreateContextMenu      (REFIID, LPVOID*);
     static HRESULT CreateDropTarget       (REFIID, LPVOID*);
 #ifndef ARCHIVEFLDR_NO_VISTA_HANDLERS
     static HRESULT CreateThumbnailProvider(REFIID, LPVOID*);

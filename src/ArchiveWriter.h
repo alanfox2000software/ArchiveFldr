@@ -37,7 +37,11 @@ struct Options
     bool         encryptNames = false;   // 7z only, needs a password
     std::wstring password;               // empty = no encryption
     std::wstring encMethod;              // zip only: "ZipCrypto", "AES256"
-    int          threads      = 0;       // 0 = let 7-Zip decide
+    int          threads        = 0;     // 0 = let 7-Zip decide
+    uint64_t     dictionaryBytes = 0;    // 0 = automatic
+    uint32_t     wordBytes       = 0;    // 0 = automatic (7-Zip "fb")
+    uint64_t     solidBlockBytes = 0;    // 0 = automatic when solid is enabled
+    uint64_t     volumeBytes     = 0;    // 0 = one file; otherwise .001, .002, ...
 };
 
 // ── Choice lists for the Add to Archive dialog ───────────

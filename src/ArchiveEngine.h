@@ -133,9 +133,19 @@ public:
     // again rather than reporting plain corruption.
     virtual bool LastErrorWasWrongPassword() const { return false; }
 
+    // The narrower first-attempt case: the decoder actually requested a
+    // password, but none had been supplied. This lets callers show the
+    // initial prompt rather than incorrectly saying an empty password was
+    // "wrong" when a handler omitted its encrypted-item property.
+    virtual bool LastErrorNeedsPassword() const { return false; }
+
     // Any entry flagged encrypted? (Names may be readable while the
     // data still needs a password — a plain encrypted zip.)
     virtual bool HasEncryptedItems() const { return false; }
+
+    // Human-readable detail from the most recent failed operation. Engines
+    // that do not expose one leave this empty.
+    virtual std::wstring GetLastErrorText() const { return L""; }
 
     // Short handler id of the open archive ("zip", "7z", ...), empty when
     // unknown. This is the format key ArchiveWriter's choice lists take,

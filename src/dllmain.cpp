@@ -5,6 +5,7 @@
 #include "Sdk7z.h"           // emits storage for the 7z-engine GUIDs (see Sdk7z.h)
 #include "ClassFactory.h"
 #include "Registry.h"
+#include "Settings.h"
 
 // ── Module-level globals ─────────────────────────────────
 HINSTANCE g_hDllInstance = nullptr;
@@ -93,11 +94,9 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
         HRESULT(*create)(REFIID, LPVOID*);
     };
 
-    // No entry for CLSID_ArchiveFldrContextMenu: the Explorer-level
-    // context menu handler is gone. The context menu inside an opened
-    // archive is created directly by the shell folder, not through COM.
     static const Entry kEntries[] = {
         { &CLSID_ArchiveFldrFolder,      CClassFactory::CreateShellFolder      },
+        { &CLSID_ArchiveFldrContextMenu, CClassFactory::CreateContextMenu      },
         { &CLSID_ArchiveFldrDropTarget,  CClassFactory::CreateDropTarget       },
 #ifndef ARCHIVEFLDR_NO_VISTA_HANDLERS
         { &CLSID_ArchiveFldrThumbnail,   CClassFactory::CreateThumbnailProvider},
@@ -155,39 +154,70 @@ STDAPI DllUnregisterServer()
 // ─────────────────────────────────────────────────────────
 // DllInstall — Called by regsvr32 /i (install) /u /i (uninstall)
 //
-// There are no halves any more. Earlier builds split registration into
-// "base" (browsing archives as folders) and "contextmenu" (an
-// Explorer-level right-click menu on archives). That menu never worked
-// reliably and is gone, so:
+// The command line is how an unattended install asks for the same
+// halves the settings program's buttons do. /n matters: without it
+// regsvr32 calls DllRegisterServer or DllUnregisterServer as well,
+// which would do the whole job either side of this.
 //
-//   regsvr32 /s        ArchiveFldr.64.dll       everything
-//   regsvr32 /s /u     ArchiveFldr.64.dll       remove everything
-//   regsvr32 /s /n /i:base        …             same as everything —
-//                                               kept so old scripts work
-//   regsvr32 /s /n /i:contextmenu …             nothing to install;
-//                                               cleans up what an older
-//                                               build left behind
+//   regsvr32 /s        ArchiveFldr.64.dll   everything
+//   regsvr32 /s /n /i:base        …         the browsing half only
+//   regsvr32 /s /n /i:contextmenu …         the right-click menu only
+//   regsvr32 /s /u     ArchiveFldr.64.dll   remove everything
+//   regsvr32 /s /u /n /i:base        …      remove the browsing half,
+//                                           leave the menu standing
+//   regsvr32 /s /u /n /i:contextmenu …      remove the menu only
 //
-// "Everything" includes the context menu on files INSIDE an opened
-// archive: that comes with the namespace extension itself and needs no
-// registration of its own.
+// Both words are per bitness: this DLL can only speak for its own
+// build. A context-menu command records its answer as a setting too;
+// a base command preserves the menu's actual registration state.
+//
+// Anything else on the command line is the whole thing, which is what
+// every earlier build did with any command line at all.
 // ─────────────────────────────────────────────────────────
 STDAPI DllInstall(BOOL bInstall, LPCWSTR pszCmdLine)
 {
-    const bool ctx = pszCmdLine && _wcsicmp(pszCmdLine, L"contextmenu") == 0;
+    const bool base = pszCmdLine && _wcsicmp(pszCmdLine, L"base") == 0;
+    const bool ctx  = pszCmdLine && _wcsicmp(pszCmdLine, L"contextmenu") == 0;
 
     if (ctx)
     {
-        // The Explorer right-click menu no longer exists. Whichever
-        // direction was asked for, the honest answer is the same: make
-        // sure no stale registration from an older build is left
-        // claiming a handler this DLL no longer provides.
-        const HRESULT hr = CRegistry::RemoveLegacyExplorerContextMenu();
+        Settings& s = Settings::Get();
+        s.CtxMenuHere() = (bInstall != FALSE);
+        s.Save();
+
+        HRESULT hr;
+        if (bInstall)
+        {
+            wchar_t dllPath[MAX_PATH] = {};
+            GetModuleFileNameW(g_hDllInstance, dllPath, MAX_PATH);
+            hr = CRegistry::RegisterContextMenuOnly(dllPath);
+        }
+        else
+        {
+            hr = CRegistry::UnregisterContextMenuOnly();
+        }
         if (SUCCEEDED(hr))
             SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
         return hr;
     }
 
-    // "base" — or anything else — is the whole thing now.
+    if (base)
+    {
+        if (!bInstall)
+        {
+            const HRESULT hr = CRegistry::UnregisterBase();
+            if (SUCCEEDED(hr))
+                SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+            return hr;
+        }
+
+        wchar_t dllPath[MAX_PATH] = {};
+        GetModuleFileNameW(g_hDllInstance, dllPath, MAX_PATH);
+        const HRESULT hr = CRegistry::RegisterBase(dllPath);
+        if (SUCCEEDED(hr))
+            SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+        return hr;
+    }
+
     return bInstall ? DllRegisterServer() : DllUnregisterServer();
 }

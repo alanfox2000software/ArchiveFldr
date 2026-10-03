@@ -16,6 +16,9 @@
 //   solid archive           7z only
 //   encrypt file names      7z only, needs a password
 //   threads                 Auto / 1 / 2 / 4 / 8
+//   dictionary / word size  advanced coder settings where supported
+//   solid block size        sized solid 7z archives
+//   split volume bytes      empty for one file, otherwise .001/.002/...
 //
 // The dialog only collects; the caller does the compressing.
 // ─────────────────────────────────────────────────────────────────────────
@@ -30,6 +33,7 @@ struct Request
     std::wstring path;         // initial archive location
     std::wstring format;       // handler name ("zip", "7z", ...)
     bool         lockFormat = false;  // true when updating an existing archive
+    bool         singleStreamAllowed = false; // exactly one ordinary source file
     size_t       fileCount  = 0;      // how many files are being added (caption)
 };
 

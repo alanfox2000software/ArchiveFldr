@@ -159,12 +159,23 @@ bool EnsureCanRead(HWND hwnd, const EnginePtr& eng)
         Explain(hwnd, L"This archive is not open.", L"");
         return false;
     }
-    EngineCaps caps = eng->GetCaps();
-    if (caps.canExtract) return true;
 
-    Explain(hwnd, L"ArchiveFldr cannot read the contents of this archive.",
-            caps.unavailableReason);
-    return false;
+    EngineCaps caps = eng->GetCaps();
+    if (!caps.canExtract)
+    {
+        Explain(hwnd, L"ArchiveFldr cannot read the contents of this archive.",
+                caps.unavailableReason);
+        return false;
+    }
+    if (!eng->IsOpen())
+    {
+        Explain(hwnd, L"This archive is not open.",
+                eng->PasswordNeededToOpen()
+                    ? L"A password is required before its contents can be read."
+                    : L"The archive may be damaged, incomplete, or unsupported.");
+        return false;
+    }
+    return true;
 }
 
 bool EnsureCanAdd(HWND hwnd, const EnginePtr& eng)
@@ -384,10 +395,45 @@ static std::wstring ArchiveLeafName(const EnginePtr& eng)
     return leaf ? leaf : L"";
 }
 
+bool EnsureOpenPassword(HWND hwnd, const EnginePtr& eng)
+{
+    if (!eng) return false;
+    if (eng->IsOpen()) return true;
+    if (!eng->PasswordNeededToOpen()) return false;
+
+    const std::wstring path = eng->GetFilePath();
+    if (path.empty()) return false;
+
+    // Another Explorer shell object may already have verified and cached the
+    // password for this archive. Let Open() consume that in-process cache
+    // before showing a duplicate prompt in this object.
+    if (eng->GetPassword().empty() && eng->Open(path)) return true;
+
+    for (int attempt = 0; eng->PasswordNeededToOpen() && attempt < 3;
+         ++attempt)
+    {
+        std::wstring pw;
+        if (!PasswordDialog::Ask(hwnd, ArchiveLeafName(eng),
+                attempt == 0
+                    ? L"This archive is encrypted.\nIts contents cannot "
+                      L"be shown without the password."
+                    : L"That password is not correct.\nEnter the password "
+                      L"to try again.",
+                pw))
+            return false;
+
+        eng->SetPassword(pw);
+        if (eng->Open(path)) return true;
+    }
+    return false;
+}
+
 bool EnsureReadPassword(HWND hwnd, const EnginePtr& eng)
 {
     if (!eng) return false;
-    if (!eng->HasEncryptedItems() || !eng->GetPassword().empty())
+    const bool decoderAsked = eng->LastErrorNeedsPassword();
+    if ((!eng->HasEncryptedItems() && !decoderAsked) ||
+        !eng->GetPassword().empty())
         return true;                        // nothing to ask about
 
     std::wstring pw;
@@ -421,13 +467,21 @@ bool ExtractEntryPrompting(HWND hwnd, const EnginePtr& eng,
     if (e.isEncrypted && !EnsureReadPassword(hwnd, eng))
         return false;
 
-    for (int attempt = 0; attempt < 3; ++attempt)
+    int passwordAttempts = 0;
+    for (;;)
     {
+        const bool hadPassword = eng && !eng->GetPassword().empty();
+        if (hadPassword) ++passwordAttempts;
+
         if (ExtractEntry(eng, e, destDir, produced)) return true;
         if (!eng || !eng->LastErrorWasWrongPassword()) return false;
-        if (!AskPasswordAgain(hwnd, eng)) return false;
+        if (hadPassword && passwordAttempts >= 3) return false;
+
+        const bool supplied = eng->LastErrorNeedsPassword()
+            ? EnsureReadPassword(hwnd, eng)
+            : AskPasswordAgain(hwnd, eng);
+        if (!supplied) return false;
     }
-    return false;
 }
 
 // ─────────────────────────────────────────────────────────

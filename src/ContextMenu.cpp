@@ -1208,30 +1208,22 @@ void CContextMenu::DoOpenShell()
         }
     }
 
-    // Browse the archive in the window the user is already looking at.
-    //
-    // This used to launch "explorer.exe /e,::{CLSID},<archive>". Explorer's
-    // command line has no ::{CLSID},<object> form — the documented shape is
-    // /e[,/root,<object>][[,/select],<sub object>] — so the trailing path was
-    // simply navigated to as an ordinary object. That always opened a second
-    // window, and it resolved the archive through the file association, which
-    // is why the built-in zip folder answered whenever it owned the type.
-    PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(m_archivePath.c_str());
+    // Build an explicit ArchiveFldr namespace PIDL. ILCreateFromPath gives
+    // us only a normal filesystem item, so opening it in a new window asks
+    // the extension's default ProgID what to do. That is why invoking this
+    // command from an ordinary Explorer folder happened to stay here while
+    // invoking the same command on the Desktop launched Bandizip. The PIDL
+    // below is rooted at our CLSID and carries the archive path in a private
+    // junction child; no file association participates in resolving it.
+    PIDLIST_ABSOLUTE pidl = CreateArchiveFolderPidl(m_archivePath);
     if (!pidl)
     {
         MessageBoxW(m_hwnd,
-            (L"Windows could not resolve this path:\n\n" + m_archivePath).c_str(),
+            (L"Windows could not create an ArchiveFldr view for:\n\n" +
+             m_archivePath).c_str(),
             L"ArchiveFldr", MB_ICONERROR | MB_OK);
         return;
     }
-
-    // No ownership check in front of this. There used to be one, and it
-    // put a dialog about Default apps between the user and the archive
-    // every time another program held the file type — which is most of
-    // them on a stock Windows 11. The command says "open", so it opens:
-    // SystemFileAssociations\<ext>\CLSID is registered too, and the shell
-    // falls back to it whenever the owning ProgID is not itself a
-    // file-as-folder, so this usually lands in ArchiveFldr's view anyway.
 
     // Same window first; a new one only if there is no browser to reuse
     // (invoked from the desktop, or from a host that exposes no site).

@@ -127,6 +127,23 @@ LPITEMIDLIST CPidlMgr::Create(const ArchiveEntry& e)
     return pidl;
 }
 
+LPITEMIDLIST CPidlMgr::CreateArchiveRoot(const std::wstring& archivePath)
+{
+    const size_t maxChars =
+        (std::numeric_limits<USHORT>::max() - offsetof(NSE_ITEMID, name)) /
+        sizeof(WCHAR) - 1;
+    if (archivePath.empty() || archivePath.size() > maxChars) return nullptr;
+
+    ArchiveEntry e;
+    e.name = archivePath;
+    e.fullPath = archivePath;
+    e.isDirectory = true;
+    LPITEMIDLIST pidl = Create(e);
+    if (pidl)
+        reinterpret_cast<NSE_ITEMID*>(pidl)->flags |= NSE_FLAG_ARCHIVE_ROOT;
+    return pidl;
+}
+
 LPITEMIDLIST CPidlMgr::Clone(LPCITEMIDLIST pidl)
 {
     if (!pidl) return nullptr;
@@ -180,6 +197,12 @@ bool CPidlMgr::IsDir(LPCITEMIDLIST pidl)
     return item ? (item->flags & NSE_FLAG_DIR) != 0 : false;
 }
 
+bool CPidlMgr::IsArchiveRoot(LPCITEMIDLIST pidl)
+{
+    auto* item = GetItem(pidl);
+    return item ? (item->flags & NSE_FLAG_ARCHIVE_ROOT) != 0 : false;
+}
+
 LPCITEMIDLIST CPidlMgr::GetLast(LPCITEMIDLIST pidl)
 {
     return ILFindLastID(pidl);
@@ -206,6 +229,33 @@ std::wstring CPidlMgr::GetChainPath(LPCITEMIDLIST pidl)
         path += GetName(cur);
     }
     return path;
+}
+
+PIDLIST_ABSOLUTE CreateArchiveFolderPidl(const std::wstring& archivePath)
+{
+    if (archivePath.empty()) return nullptr;
+
+    std::wstring path = archivePath;
+    wchar_t full[32768] = {};
+    const DWORD count = GetFullPathNameW(
+        archivePath.c_str(), ARRAYSIZE(full), full, nullptr);
+    if (count && count < ARRAYSIZE(full)) path.assign(full, count);
+
+    wchar_t sid[64] = {};
+    if (!StringFromGUID2(CLSID_ArchiveFldrFolder, sid, ARRAYSIZE(sid)))
+        return nullptr;
+    const std::wstring parsing = std::wstring(L"::") + sid;
+
+    PIDLIST_ABSOLUTE root = nullptr;
+    if (FAILED(SHParseDisplayName(parsing.c_str(), nullptr, &root, 0, nullptr)) ||
+        !root)
+        return nullptr;
+
+    LPITEMIDLIST child = CPidlMgr::CreateArchiveRoot(path);
+    PIDLIST_ABSOLUTE result = child ? ILCombine(root, child) : nullptr;
+    if (child) ILFree(child);
+    ILFree(root);
+    return result;
 }
 
 // ─────────────────────────────────────────────────────────
@@ -247,7 +297,8 @@ void CShellFolder::BuildInternalPath()
     if (!m_pidlAbs) return;
     LPCITEMIDLIST cur = m_pidlAbs;
     while (cur && cur->mkid.cb) {
-        if (CPidlMgr::IsOurs(cur) && CPidlMgr::IsDir(cur)) {
+        if (CPidlMgr::IsOurs(cur) && CPidlMgr::IsDir(cur) &&
+            !CPidlMgr::IsArchiveRoot(cur)) {
             m_internalPath += CPidlMgr::GetName(cur) + L"/";
         }
         cur = ILNext(cur);
@@ -301,7 +352,16 @@ STDMETHODIMP CShellFolder::Initialize(LPCITEMIDLIST pidl)
     m_internalPath.clear();
 
     wchar_t path[MAX_PATH * 2] = {};
-    if (!SHGetPathFromIDListW(pidl, path))
+    // A forced ArchiveFldr PIDL carries the archive path in our private
+    // junction child. Prefer it over shell association resolution.
+    for (LPCITEMIDLIST cur = pidl; cur && cur->mkid.cb; cur = ILNext(cur))
+        if (CPidlMgr::IsArchiveRoot(cur))
+        {
+            wcsncpy_s(path, CPidlMgr::GetName(cur).c_str(), _TRUNCATE);
+            break;
+        }
+
+    if (!path[0] && !SHGetPathFromIDListW(pidl, path))
     {
         // SHGetPathFromIDList is limited to MAX_PATH and to "simple" file
         // system PIDLs; fall back to the modern name API before giving up.
@@ -494,9 +554,27 @@ STDMETHODIMP CShellFolder::BindToObject(
     LPCITEMIDLIST leaf = multi ? (LPCITEMIDLIST)first : pidl;
     if (multi && !first) return E_OUTOFMEMORY;
 
+    std::shared_ptr<IArchiveEngine> engine = m_engine;
+    std::wstring archivePath = m_archivePath;
+    if (CPidlMgr::IsArchiveRoot(leaf))
+    {
+        // This child is the explicit junction created by
+        // CreateArchiveFolderPidl(). It bypasses the file's default ProgID,
+        // so opening from the Desktop cannot fall through to Bandizip (or
+        // any other associated application).
+        archivePath = CPidlMgr::GetName(leaf);
+        engine = CreateArchiveEngine(archivePath);
+        if (!engine)
+        {
+            if (first) ILFree(first);
+            return E_NOINTERFACE;
+        }
+        engine->Open(archivePath); // encrypted headers are prompted by the view
+    }
+
     LPITEMIDLIST pidlAbs = CPidlMgr::Concat(m_pidlAbs, leaf);
     auto* pSub = new(std::nothrow) CShellFolder(
-        this, pidlAbs, leaf, m_engine, m_archivePath);
+        this, pidlAbs, leaf, engine, archivePath);
     ILFree(pidlAbs);
     if (first) ILFree(first);
     if (!pSub) return E_OUTOFMEMORY;
@@ -742,7 +820,10 @@ STDMETHODIMP CShellFolder::GetDisplayNameOf(
         else if (m_pidlRel && CPidlMgr::IsOurs(m_pidlRel))
         {
             // Leaf, not the first segment: m_pidlRel can hold several levels.
-            self = CPidlMgr::GetName(CPidlMgr::GetLast(m_pidlRel));
+            LPCITEMIDLIST leaf = CPidlMgr::GetLast(m_pidlRel);
+            self = CPidlMgr::GetName(leaf);
+            if (CPidlMgr::IsArchiveRoot(leaf))
+                self = PathFindFileNameW(self.c_str());
         }
         else
         {
@@ -753,9 +834,18 @@ STDMETHODIMP CShellFolder::GetDisplayNameOf(
 
     if (!CPidlMgr::IsOurs(pidl)) return E_INVALIDARG;
 
+    LPCITEMIDLIST leaf = CPidlMgr::GetLast(pidl);
+    if (CPidlMgr::IsArchiveRoot(leaf))
+    {
+        std::wstring name = CPidlMgr::GetName(leaf);
+        if (!(uFlags & SHGDN_FORPARSING))
+            name = PathFindFileNameW(name.c_str());
+        return SHStrDupW(name.c_str(), &pName->pOleStr);
+    }
+
     // The name shown in the view is the leaf's; a relative PIDL that spans
     // several levels still has to parse back as the whole chain.
-    std::wstring name = CPidlMgr::GetName(CPidlMgr::GetLast(pidl));
+    std::wstring name = CPidlMgr::GetName(leaf);
 
     // A fully qualified parsing name (SHGDN_FORPARSING without
     // SHGDN_INFOLDER) must identify the item from the desktop down, the way

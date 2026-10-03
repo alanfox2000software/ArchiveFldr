@@ -5,11 +5,20 @@
 #pragma once
 #include "stdafx.h"
 
+// Deliberately NOT IInitializeWithStream.
+//
+// The preview host asks for the stream initialiser first and uses it if
+// the QueryInterface succeeds — it does not fall back to
+// IInitializeWithFile when the Initialize that follows fails. This class
+// used to advertise IInitializeWithStream and answer E_NOTIMPL from it,
+// which is the one combination that guarantees an empty preview pane for
+// every archive. An archive is read by path (the engines open files, not
+// streams), so the file initialiser is the only one offered and the host
+// picks it. See the same note in ThumbnailProvider.h.
 class CPreviewHandler :
     public IPreviewHandler,
     public IPreviewHandlerVisuals,
     public IInitializeWithFile,
-    public IInitializeWithStream,
     public IOleWindow
 {
 public:
@@ -22,9 +31,6 @@ public:
 
     // IInitializeWithFile
     STDMETHODIMP Initialize(LPCWSTR pszFilePath, DWORD grfMode) override;
-
-    // IInitializeWithStream
-    STDMETHODIMP Initialize(IStream* pstream, DWORD grfMode) override;
 
     // IOleWindow
     STDMETHODIMP GetWindow(HWND*) override;
@@ -53,6 +59,9 @@ private:
     void RegisterClass();
     void CreatePreviewWindow();
     void DestroyPreviewWindow();
+    // Scroll to an absolute position, clamped to the current range, and
+    // keep the scrollbar and the drawing in step.
+    void ApplyScrollPos(HWND hwnd, int pos);
 
     // Rendering
     void PaintPreview(HDC hdc, const RECT& rc);

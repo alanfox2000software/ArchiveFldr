@@ -62,9 +62,13 @@ critical sections.
 out `CThumbnailProvider` and `CPreviewHandler`. `IThumbnailProvider` and
 `IPreviewHandler` are Vista-era interfaces; XP uses `IExtractImage` and
 has no preview pane, so on XP those two classes are dead weight that would
-not compile against the 7.1A SDK anyway. Registration skips their registry
-keys at runtime (`SysInfo::IsVistaOrLater()`), so even the modern binary
-leaves a clean registry if it is ever run somewhere old.
+not compile against the 7.1A SDK anyway. Registration follows the same
+switch: `kHasVistaHandlers` (`Registry.cpp`) is the compile-time inverse of
+`ARCHIVEFLDR_NO_VISTA_HANDLERS`, and an `if constexpr` on it decides whether
+`RegisterAll` writes the thumbnail and preview keys or removes any left
+behind by an earlier install. A build without the handlers can therefore
+never advertise them — the keys are not written and then skipped at run
+time, they are not written at all.
 
 Both link configurations stamp a subsystem floor of 5.01 (Win32) and 5.02
 (x64) through `MinimumRequiredVersion`. Without it the linker writes 6.00
@@ -89,9 +93,17 @@ Outputs land in `<Configuration>\x32` (Win32) or `<Configuration>\x64` (x64):
 |---|---|---|
 | `ArchiveFldr.64.dll` | the shell extension, for 64-bit hosts | x64 |
 | `ArchiveFldr.32.dll` | the shell extension, for 32-bit hosts | Win32 |
-| `ArchiveFldrSetting.64.exe` / `ArchiveFldrSetting.32.exe` | the settings window, started by "ArchiveFldr settings..." | x64 / Win32 |
+| `ArchiveFldrSetting.exe` | the settings window, started by "ArchiveFldr settings..." | x64 / Win32 |
 | `Lang\*.txt` | the language files, copied from `Lang\` | both |
 | `thirdparty\**\*.dll` | the codec engines, copied from `thirdparty\` | both |
+
+The settings program is named the same in both folders — `x32` and `x64`
+each hold one `ArchiveFldrSetting.exe`, matching the bitness of the DLL
+beside it. (Earlier builds tagged it `ArchiveFldrSetting.64.exe` /
+`.32.exe`, from when both landed in one folder. Nothing looks for those
+names any more except the upgrade paths that clean them up.) The DLLs
+keep their tags, because both are registered on a 64-bit machine and the
+registry has to name each one.
 
 A Win32 build writes only `Release\x32` (or `Debug\x32`). An x64 build
 writes only `Release\x64` (or `Debug\x64`) — it does not also build the
@@ -101,9 +113,41 @@ writes only `Release\x64` (or `Debug\x64`) — it does not also build the
 
 Only the DLLs are registered. The settings program is an ordinary
 executable that the DLL starts on demand, which keeps the whole Options
-window out of every process that loads a context menu. Its Install
-button registers whichever of the two DLLs it finds next to itself,
-each with the matching `regsvr32`, so keep them together.
+window out of every process that loads a context menu. Its four
+buttons — **Install 32-bit**, **Install 64-bit**, **Uninstall 32-bit**,
+**Uninstall 64-bit** — act on whichever of the two DLLs they find next
+to themselves, each with the matching `regsvr32`, so keep them
+together.
+
+All four act on the *base* extension: browsing archives as folders,
+thumbnails, preview, and the Default apps entry. None of them touches
+the right-click menu, which is a separate switch per bitness — the two
+**Integrate to shell context menu** ticks on the ArchiveFldr page. So
+uninstalling the 64-bit extension leaves an integrated 64-bit menu
+standing until its tick is cleared, and installing never adds one that
+was not asked for.
+
+The same halves are available to an unattended install. `/n` is what
+keeps `regsvr32` from doing the whole job as well:
+
+```
+regsvr32 /s                   ArchiveFldr.64.dll   rem everything
+regsvr32 /s /n /i:base        ArchiveFldr.64.dll   rem browsing half only
+regsvr32 /s /n /i:contextmenu ArchiveFldr.64.dll   rem menu only
+regsvr32 /s /u                ArchiveFldr.64.dll   rem remove everything
+regsvr32 /s /u /n /i:base        ArchiveFldr.64.dll
+regsvr32 /s /u /n /i:contextmenu ArchiveFldr.64.dll
+```
+
+Plain `regsvr32 ArchiveFldr.64.dll` with no `/i` follows whatever those
+ticks already say, and on a machine that has never run the settings
+program that means everything, exactly as it always did.
+
+A per-bitness uninstall only sweeps the keys the other build is not
+standing on. The file type registrations under `HKLM\Software\Classes`
+are one set that WOW64 shows to both builds, so removing the 64-bit
+extension while the 32-bit one is registered leaves them alone and
+takes out only the 64-bit COM registrations.
 
 Everything the settings program writes is machine-wide —
 `HKLM\SOFTWARE\ArchiveFldr` for preferences, `HKLM\SOFTWARE\Classes`

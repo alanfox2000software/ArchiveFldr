@@ -83,6 +83,17 @@ public:
     HWND GetHwnd() const override { return m_hwnd; }
     void Retranslate() override;
 
+    // Register (or deregister) the context menu handler wherever one of
+    // the two per-bitness ticks has moved. Called from OnApply once the
+    // ticks are saved, and not before: registration reads them back out
+    // of the registry, so the order is the whole trick.
+    void ApplyIntegration();
+
+    // Re-read those two ticks and the install state behind them. The
+    // Settings page calls this after an install or uninstall, which
+    // changes both.
+    void ReloadIntegration();
+
 private:
     static INT_PTR CALLBACK DlgProc(HWND, UINT, WPARAM, LPARAM);
     void SyncEnabled();
@@ -91,6 +102,11 @@ private:
     HWND m_hwnd = nullptr;
     HWND m_list = nullptr;
     bool m_dirty = false;
+    // What the per-bitness ticks said when they were last loaded or
+    // applied. Apply compares against these so it only shells out to
+    // regsvr32 for a bitness the user actually changed.
+    bool m_was32 = false;
+    bool m_was64 = false;
 };
 
 // ── Folders: working folder ──────────────────────────────
@@ -117,6 +133,11 @@ private:
 };
 
 // ── Settings: install / uninstall the shell extension ────
+//
+// Four buttons: install and uninstall, once per bitness. All four act
+// on the base extension only -- browsing archives as folders,
+// thumbnails, preview, Default apps -- because the right-click menu
+// is switched on and off by the two ticks on the ArchiveFldr page.
 class CPageInstall : public ISettingsPage
 {
 public:
@@ -132,7 +153,11 @@ public:
 
 private:
     static INT_PTR CALLBACK DlgProc(HWND, UINT, WPARAM, LPARAM);
-    void Run(bool install);
+    // One bitness, the one x64 names, and only the base extension:
+    // the context menu is the ArchiveFldr page's business in both
+    // directions. install == false removes that same half and leaves
+    // an integrated menu standing.
+    void Run(bool install, bool x64);
     void RefreshState();
 
     HWND m_hwnd = nullptr;
@@ -194,11 +219,20 @@ private:
 public:
     void EnableApply(bool en);
 
+    // The Settings page has installed or removed something. The
+    // ArchiveFldr page shows part of that same state -- which bitness
+    // is integrated into the shell menu -- so it has to follow.
+    void OnInstallChanged();
+
 private:
     HWND m_hDlg   = nullptr;
     HWND m_hTab   = nullptr;
     int  m_cur    = 0;
 
     std::vector<std::unique_ptr<ISettingsPage>> m_pages;
-    CPageLanguage* m_langPage = nullptr;   // owned by m_pages
+    // All owned by m_pages; kept by hand for the pages that have to
+    // talk to each other.
+    CPageLanguage*    m_langPage    = nullptr;
+    CPageArchiveFldr* m_ctxPage     = nullptr;
+    CPageInstall*     m_installPage = nullptr;
 };

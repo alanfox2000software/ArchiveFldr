@@ -153,8 +153,72 @@ STDAPI DllUnregisterServer()
 
 // ─────────────────────────────────────────────────────────
 // DllInstall — Called by regsvr32 /i (install) /u /i (uninstall)
+//
+// The command line is how an unattended install asks for the same
+// halves the settings program's buttons do. /n matters: without it
+// regsvr32 calls DllRegisterServer or DllUnregisterServer as well,
+// which would do the whole job either side of this.
+//
+//   regsvr32 /s        ArchiveFldr.64.dll   everything
+//   regsvr32 /s /n /i:base        …         the browsing half only
+//   regsvr32 /s /n /i:contextmenu …         the right-click menu only
+//   regsvr32 /s /u     ArchiveFldr.64.dll   remove everything
+//   regsvr32 /s /u /n /i:base        …      remove the browsing half,
+//                                           leave the menu standing
+//   regsvr32 /s /u /n /i:contextmenu …      remove the menu only
+//
+// Both words are per bitness: this DLL can only speak for its own
+// build. The answer is recorded as a setting as well as acted on,
+// because that is where the next registration -- and the other
+// bitness -- will read it from.
+//
+// Anything else on the command line is the whole thing, which is what
+// every earlier build did with any command line at all.
 // ─────────────────────────────────────────────────────────
-STDAPI DllInstall(BOOL bInstall, LPCWSTR /*pszCmdLine*/)
+STDAPI DllInstall(BOOL bInstall, LPCWSTR pszCmdLine)
 {
+    const bool base = pszCmdLine && _wcsicmp(pszCmdLine, L"base") == 0;
+    const bool ctx  = pszCmdLine && _wcsicmp(pszCmdLine, L"contextmenu") == 0;
+
+    if (ctx)
+    {
+        Settings& s = Settings::Get();
+        s.CtxMenuHere() = (bInstall != FALSE);
+        s.Save();
+
+        HRESULT hr;
+        if (bInstall)
+        {
+            wchar_t dllPath[MAX_PATH] = {};
+            GetModuleFileNameW(g_hDllInstance, dllPath, MAX_PATH);
+            hr = CRegistry::RegisterContextMenuOnly(dllPath);
+        }
+        else
+        {
+            hr = CRegistry::UnregisterContextMenuOnly();
+        }
+        if (SUCCEEDED(hr))
+            SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+        return hr;
+    }
+
+    if (base)
+    {
+        if (!bInstall)
+        {
+            const HRESULT hr = CRegistry::UnregisterBase();
+            if (SUCCEEDED(hr))
+                SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+            return hr;
+        }
+
+        // A base install is one without a menu, so say so before
+        // registering: RegisterAll reads the flag back.
+        Settings& s = Settings::Get();
+        s.CtxMenuHere() = false;
+        s.Save();
+        return DllRegisterServer();
+    }
+
     return bInstall ? DllRegisterServer() : DllUnregisterServer();
 }

@@ -4,7 +4,6 @@
 #include "stdafx.h"
 #ifndef ARCHIVEFLDR_NO_VISTA_HANDLERS
 // ThumbnailProvider.cpp
-#include "stdafx.h"
 #include "ThumbnailProvider.h"
 #include "ArchiveEngine.h"
 #include "GUIDs.h"

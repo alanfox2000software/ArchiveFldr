@@ -28,9 +28,6 @@
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567891}</ProjectGuid>
     <RootNamespace>ArchiveFldrSetting</RootNamespace>
     <Keyword>Win32Proj</Keyword>
-    <!-- The XP toolset brings its own (Windows 7.1A) SDK, so only pin the
-         modern SDK version when we are not building for XP. -->
-    <WindowsTargetPlatformVersion Condition="!$(ArchiveFldrToolset.EndsWith('_xp'))">10.0.28000.0</WindowsTargetPlatformVersion>
     <!-- Toolset override. Defaults to v145 (VS2026) for a normal build:
            msbuild ArchiveFldr.sln /p:Configuration=Release /p:Platform=x64
          To produce a binary whose CRT actually runs on Windows XP, build
@@ -39,6 +36,19 @@
            msbuild ArchiveFldr.sln /p:ArchiveFldrToolset=v141_xp
          See BUILD-XP.md. -->
     <ArchiveFldrToolset Condition="'$(ArchiveFldrToolset)'==''">v145</ArchiveFldrToolset>
+    <!-- The XP toolset brings its own (Windows 7.1A) SDK, so only pin the
+         modern SDK version when we are not building for XP. The default
+         above has to come first: this test used to read the property
+         before it had a value, and only worked because an unset property
+         compares equal to the empty string. -->
+    <WindowsTargetPlatformVersion Condition="!$(ArchiveFldrToolset.EndsWith('_xp'))">10.0.28000.0</WindowsTargetPlatformVersion>
+    <!-- The language standard follows the toolset as well. v141 predates
+         /std:c++20 — it would warn D9002, ignore the switch and fall back
+         to C++14, which is not a dialect this code compiles in. C++17 is
+         the newest the XP toolset understands, and nothing here needs
+         more than that. -->
+    <ArchiveFldrLangStandard Condition="'$(ArchiveFldrLangStandard)'=='' And $(ArchiveFldrToolset.EndsWith('_xp'))">stdcpp17</ArchiveFldrLangStandard>
+    <ArchiveFldrLangStandard Condition="'$(ArchiveFldrLangStandard)'==''">stdcpp20</ArchiveFldrLangStandard>
     <!-- Targeting macros follow the toolset. They have to: with
          _WIN32_WINNT at 0x0A00 the STL compiles std::mutex down to SRW
          locks, which XP's kernel32 does not export, and the extension
@@ -98,8 +108,10 @@
        ArchiveFldr.32.dll and ArchiveFldr.64.dll landed side by side.
        That had one real virtue — the settings program could find its
        opposite-bitness DLL by looking next to itself — and one real
-       vice: ArchiveFldrOpen.exe carries the same name in both
-       platforms, so whichever built last silently overwrote the
+       vice: everything that is not name-decorated by bitness (the
+       .pdb and .res of a given project, and anything else a future
+       platform-neutral output might add) carries the same name in
+       both platforms, so whichever built last silently overwrote the
        other. Separate folders end the overwrite, and CPageInstall
        learned to look in the sibling folder to keep the virtue.
 
@@ -113,29 +125,42 @@
        same resource.res, and MSBuild's file trackers (CL.*.tlog,
        link.*.tlog, mt.*.tlog) collided in the same place: that is
        warning MSB8028, and it makes clean and incremental builds
-       unreliable. -->
+       unreliable.
+
+       TargetName is plain ArchiveFldrSetting on every platform. The
+       bitness tag the two builds used to carry (ArchiveFldrSetting.32
+       / .64) existed only because both landed in one folder; they do
+       not any more, and the suffix outlived its reason. It also
+       contradicted the program's own version resource, which says
+       OriginalFilename = ArchiveFldrSetting.exe, and made the name
+       the user sees depend on which platform produced the build.
+
+       The DLL keeps its tag: ArchiveFldr.32.dll and ArchiveFldr.64.dll
+       are both registered on a 64-bit machine, both are named in the
+       registry, and the settings program has to be able to talk about
+       one while running as the other. -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <OutDir>$(SolutionDir)$(Configuration)\x32\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x86\$(ProjectName)\</IntDir>
-    <TargetName>ArchiveFldrSetting.32</TargetName>
+    <TargetName>ArchiveFldrSetting</TargetName>
     <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <OutDir>$(SolutionDir)$(Configuration)\x32\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x86\$(ProjectName)\</IntDir>
-    <TargetName>ArchiveFldrSetting.32</TargetName>
+    <TargetName>ArchiveFldrSetting</TargetName>
     <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(SolutionDir)$(Configuration)\x64\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x64\$(ProjectName)\</IntDir>
-    <TargetName>ArchiveFldrSetting.64</TargetName>
+    <TargetName>ArchiveFldrSetting</TargetName>
     <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(SolutionDir)$(Configuration)\x64\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\x64\$(ProjectName)\</IntDir>
-    <TargetName>ArchiveFldrSetting.64</TargetName>
+    <TargetName>ArchiveFldrSetting</TargetName>
     <TargetExt>.exe</TargetExt>
   </PropertyGroup>
   <!-- ═══════════════════════════════════════════════════
@@ -196,7 +221,7 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <!-- C++20 — do NOT use stdcpp23, it pulls <expected> & WinRT -->
-      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard>$(ArchiveFldrLangStandard)</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>
         src;res;%(AdditionalIncludeDirectories)
@@ -270,7 +295,7 @@
       <SDLCheck>true</SDLCheck>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <WholeProgramOptimization>true</WholeProgramOptimization>
-      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard>$(ArchiveFldrLangStandard)</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>
         src;res;%(AdditionalIncludeDirectories)
@@ -342,7 +367,7 @@
       <SDLCheck>true</SDLCheck>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard>$(ArchiveFldrLangStandard)</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>
         src;res;%(AdditionalIncludeDirectories)
@@ -414,7 +439,7 @@
       <SDLCheck>true</SDLCheck>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <WholeProgramOptimization>true</WholeProgramOptimization>
-      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard>$(ArchiveFldrLangStandard)</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>
         src;res;%(AdditionalIncludeDirectories)

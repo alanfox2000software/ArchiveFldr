@@ -96,13 +96,93 @@ STDMETHODIMP CDropTarget::QueryInterface(REFIID riid, void** ppv)
 {
     if (!ppv) return E_POINTER; *ppv = nullptr;
     if (IsEqualIID(riid,IID_IUnknown)||IsEqualIID(riid,IID_IDropTarget))
-    { *ppv=static_cast<IDropTarget*>(this); AddRef(); return S_OK; }
-    return E_NOINTERFACE;
+        *ppv = static_cast<IDropTarget*>(this);
+    else if (IsEqualIID(riid,IID_IPersist)||IsEqualIID(riid,IID_IPersistFile))
+        *ppv = static_cast<IPersistFile*>(this);
+    else
+        return E_NOINTERFACE;
+
+    AddRef(); return S_OK;
 }
 STDMETHODIMP_(ULONG) CDropTarget::AddRef()
     { return InterlockedIncrement(&m_cRef); }
 STDMETHODIMP_(ULONG) CDropTarget::Release()
     { ULONG n=InterlockedDecrement(&m_cRef); if(!n) delete this; return n; }
+
+// ─────────────────────────────────────────────────────────
+// IPersistFile — how the shell tells a DropHandler which file it is
+// standing in for. Called once, before the first DragEnter.
+// ─────────────────────────────────────────────────────────
+STDMETHODIMP CDropTarget::GetClassID(CLSID* pClassID)
+{
+    if (!pClassID) return E_POINTER;
+    *pClassID = CLSID_ArchiveFldrDropTarget;
+    return S_OK;
+}
+
+STDMETHODIMP CDropTarget::IsDirty()
+{
+    // Nothing here is ever edited, so there is never anything to save.
+    return S_FALSE;
+}
+
+STDMETHODIMP CDropTarget::Load(LPCOLESTR pszFileName, DWORD /*dwMode*/)
+{
+    if (!pszFileName || !*pszFileName) return E_INVALIDARG;
+
+    m_archive = pszFileName;
+
+    // Build the same folder object the namespace extension uses, so a
+    // drop onto an archive's icon and a drop into an open archive window
+    // run through identical code — including the engine's "can this
+    // format be written to?" check.
+    LPITEMIDLIST pidl = ILCreateFromPathW(pszFileName);
+    if (!pidl) return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+
+    auto* folder = new (std::nothrow) CShellFolder();
+    if (!folder) { ILFree(pidl); return E_OUTOFMEMORY; }
+
+    HRESULT hr = folder->Initialize(pidl);
+    ILFree(pidl);
+
+    if (SUCCEEDED(hr) && folder->GetEngine())
+    {
+        SetFolder(folder);     // takes its own reference
+    }
+    else
+    {
+        // No engine for this file: say so now rather than accepting a
+        // drag and discarding it at the end.
+        hr = FAILED(hr) ? hr : E_FAIL;
+    }
+
+    folder->Release();
+    return hr;
+}
+
+STDMETHODIMP CDropTarget::Save(LPCOLESTR, BOOL)
+{
+    return E_NOTIMPL;          // a drop handler is never asked to save
+}
+
+STDMETHODIMP CDropTarget::SaveCompleted(LPCOLESTR)
+{
+    return S_OK;
+}
+
+STDMETHODIMP CDropTarget::GetCurFile(LPOLESTR* ppszFileName)
+{
+    if (!ppszFileName) return E_POINTER;
+    *ppszFileName = nullptr;
+    if (m_archive.empty()) return S_FALSE;
+
+    const size_t cb = (m_archive.size() + 1) * sizeof(wchar_t);
+    auto* out = static_cast<LPOLESTR>(CoTaskMemAlloc(cb));
+    if (!out) return E_OUTOFMEMORY;
+    memcpy(out, m_archive.c_str(), cb);
+    *ppszFileName = out;
+    return S_OK;
+}
 
 STDMETHODIMP CDropTarget::DragEnter(
     IDataObject* pObj, DWORD /*grfKey*/, POINTL, DWORD* pdwEffect)
@@ -112,6 +192,15 @@ STDMETHODIMP CDropTarget::DragEnter(
     if (m_pDataObj) { m_pDataObj->Release(); m_pDataObj = nullptr; }
     m_pDataObj = pObj;
     if (m_pDataObj) m_pDataObj->AddRef();
+
+    // Nothing to drop into: refuse the drag instead of showing a copy
+    // cursor over a target that will discard the payload.
+    if (!m_pFolder)
+    {
+        m_lastEffect = DROPEFFECT_NONE;
+        *pdwEffect   = DROPEFFECT_NONE;
+        return S_OK;
+    }
 
     m_lastEffect = ArchiveDrop::EffectFor(pObj) & *pdwEffect;
     // The source may only be offering MOVE/LINK; we still take a copy.

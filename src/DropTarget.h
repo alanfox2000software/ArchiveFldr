@@ -20,7 +20,17 @@ HRESULT Perform(HWND hwnd, CShellFolder* folder, IDataObject* pdo);
 
 } // namespace ArchiveDrop
 
-class CDropTarget : public IDropTarget
+// IPersistFile is not decoration.
+//
+// This class is registered as the shell's DropHandler for every archive
+// type (shellex\DropHandler, written by RegisterShellExOnBase). A drop
+// handler is created by CLSID and then told which file it is standing in
+// for — and the shell does that through IPersistFile::Load, before the
+// first DragEnter. Without it the QueryInterface fails, the shell drops
+// the handler on the floor, and dragging files onto an archive icon
+// silently does nothing at all.
+class CDropTarget : public IDropTarget,
+                    public IPersistFile
 {
 public:
     CDropTarget();
@@ -36,6 +46,14 @@ public:
     STDMETHODIMP DragLeave()                             override;
     STDMETHODIMP Drop     (IDataObject*, DWORD, POINTL, DWORD*) override;
 
+    // ── IPersist / IPersistFile ──────────────────────────
+    STDMETHODIMP GetClassID(CLSID* pClassID) override;
+    STDMETHODIMP IsDirty() override;
+    STDMETHODIMP Load(LPCOLESTR pszFileName, DWORD dwMode) override;
+    STDMETHODIMP Save(LPCOLESTR pszFileName, BOOL fRemember) override;
+    STDMETHODIMP SaveCompleted(LPCOLESTR pszFileName) override;
+    STDMETHODIMP GetCurFile(LPOLESTR* ppszFileName) override;
+
 private:
     ~CDropTarget();
 
@@ -44,4 +62,5 @@ private:
     CShellFolder*  m_pFolder    = nullptr;
     DWORD          m_lastEffect = DROPEFFECT_NONE;
     IDataObject*   m_pDataObj   = nullptr;   // held between Enter and Drop
+    std::wstring   m_archive;                // set by IPersistFile::Load
 };

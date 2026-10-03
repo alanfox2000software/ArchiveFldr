@@ -111,6 +111,7 @@
     <ClInclude Include="src\Lang.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\Settings.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\BrowseTo.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ArchiveWriter.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="res\resource.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
 

@@ -32,9 +32,8 @@ struct NSE_ITEMID {
 #define NSE_FLAG_DIR    0x01
 #define NSE_FLAG_ENC    0x02  // encrypted
 #define NSE_FLAG_SOLID  0x04  // part of solid block
-#define NSE_FLAG_HASCRC       0x08  // crc32 below is a real checksum
-#define NSE_FLAG_NOSIZE       0x10  // uncompressed size is unknown
-#define NSE_FLAG_ARCHIVE_ROOT 0x20  // explicit archive junction under our CLSID
+#define NSE_FLAG_HASCRC 0x08  // crc32 below is a real checksum
+#define NSE_FLAG_NOSIZE 0x10  // uncompressed size is unknown
 
 // ─────────────────────────────────────────────────────────
 // PIDL factory & parser
@@ -43,7 +42,6 @@ class CPidlMgr
 {
 public:
     static LPITEMIDLIST  Create(const ArchiveEntry& e);
-    static LPITEMIDLIST  CreateArchiveRoot(const std::wstring& archivePath);
     static LPITEMIDLIST  Clone (LPCITEMIDLIST pidl);
     static LPITEMIDLIST  Concat(LPCITEMIDLIST a, LPCITEMIDLIST b);
     static void          Free  (LPITEMIDLIST& pidl);
@@ -52,7 +50,6 @@ public:
     static std::wstring  GetName(LPCITEMIDLIST pidl);
     static std::wstring  GetMethod(LPCITEMIDLIST pidl);
     static bool          IsDir (LPCITEMIDLIST pidl);
-    static bool          IsArchiveRoot(LPCITEMIDLIST pidl);
     // Walk to last item in a multi-level PIDL
     static LPCITEMIDLIST  GetLast(LPCITEMIDLIST pidl);
     // Copy just the FIRST item of a multi-level PIDL.
@@ -62,9 +59,10 @@ public:
     static LPITEMIDLIST   RemoveLast(LPCITEMIDLIST pidl);
 };
 
-// Build a fully qualified PIDL rooted at ArchiveFldr's own namespace CLSID,
-// with `archivePath` carried in a private child. Unlike ILCreateFromPath,
-// this never resolves the archive through its default application.
+// Parse an archive path into a fully qualified PIDL explicitly bound to the
+// ArchiveFldr ProgID for its extension. The file's default association is not
+// consulted, so this remains an ArchiveFldr folder even when another program
+// owns the extension.
 PIDLIST_ABSOLUTE CreateArchiveFolderPidl(const std::wstring& archivePath);
 
 // ─────────────────────────────────────────────────────────

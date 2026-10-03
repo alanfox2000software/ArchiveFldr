@@ -9,6 +9,20 @@
 #include "ThumbnailProvider.h"
 #include "GUIDs.h"
 #include "Settings.h"
+#include "Formats.h"
+
+// These bind-context names were added after the XP SDK. Spell them out so
+// the XP-toolset configuration can compile the same source; the feature is
+// only used on Windows 7 and later at runtime.
+#ifndef STR_PARSE_WITH_EXPLICIT_PROGID
+#define STR_PARSE_WITH_EXPLICIT_PROGID L"ExplicitProgid"
+#endif
+#ifndef STR_PARSE_EXPLICIT_ASSOCIATION_SUCCESSFUL
+#define STR_PARSE_EXPLICIT_ASSOCIATION_SUCCESSFUL L"ExplicitAssociationSuccessful"
+#endif
+#ifndef STR_PROPERTYBAG_PARAM
+#define STR_PROPERTYBAG_PARAM L"SHBindCtxPropertyBag"
+#endif
 
 // ─────────────────────────────────────────────────────────
 // CFolderViewCB — the view callback handed to the Shell's default folder
@@ -72,6 +86,109 @@ private:
     long m_cRef = 1;
 };
 
+// SHParseDisplayName receives typed options through an IPropertyBag stored
+// in its bind context. Only two values are involved here: the ProgID we ask
+// it to use and the Boolean it writes back to confirm that it did so.
+// Keeping the implementation local avoids a Propsys.dll dependency, which
+// would prevent the XP-compatible build from loading on XP.
+class CParsePropertyBag final : public IPropertyBag
+{
+public:
+    CParsePropertyBag()
+    {
+        VariantInit(&m_progId);
+        VariantInit(&m_associationSuccessful);
+        InterlockedIncrement(&g_cDllRefCount);
+    }
+
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override
+    {
+        if (!ppv) return E_POINTER;
+        *ppv = nullptr;
+        if (IsEqualIID(riid, IID_IUnknown) ||
+            IsEqualIID(riid, IID_IPropertyBag))
+        {
+            *ppv = static_cast<IPropertyBag*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+
+    STDMETHODIMP_(ULONG) AddRef() override
+    { return InterlockedIncrement(&m_cRef); }
+
+    STDMETHODIMP_(ULONG) Release() override
+    {
+        ULONG n = InterlockedDecrement(&m_cRef);
+        if (!n) delete this;
+        return n;
+    }
+
+    STDMETHODIMP Read(LPCOLESTR pszPropName, VARIANT* pValue,
+                       IErrorLog* /*pErrorLog*/) override
+    {
+        if (!pszPropName || !pValue) return E_POINTER;
+
+        const VARIANT* source = nullptr;
+        if (_wcsicmp(pszPropName, STR_PARSE_WITH_EXPLICIT_PROGID) == 0 &&
+            m_hasProgId)
+            source = &m_progId;
+        else if (_wcsicmp(pszPropName,
+                          STR_PARSE_EXPLICIT_ASSOCIATION_SUCCESSFUL) == 0 &&
+                 m_hasAssociationSuccessful)
+            source = &m_associationSuccessful;
+
+        if (!source) return E_INVALIDARG;
+        return VariantCopy(pValue, const_cast<VARIANT*>(source));
+    }
+
+    STDMETHODIMP Write(LPCOLESTR pszPropName, VARIANT* pValue) override
+    {
+        if (!pszPropName || !pValue) return E_POINTER;
+
+        VARIANT* destination = nullptr;
+        bool* present = nullptr;
+        if (_wcsicmp(pszPropName, STR_PARSE_WITH_EXPLICIT_PROGID) == 0)
+        {
+            destination = &m_progId;
+            present = &m_hasProgId;
+        }
+        else if (_wcsicmp(pszPropName,
+                          STR_PARSE_EXPLICIT_ASSOCIATION_SUCCESSFUL) == 0)
+        {
+            destination = &m_associationSuccessful;
+            present = &m_hasAssociationSuccessful;
+        }
+        else
+            return E_INVALIDARG;
+
+        VARIANT copy;
+        VariantInit(&copy);
+        HRESULT hr = VariantCopy(&copy, pValue);
+        if (FAILED(hr)) return hr;
+
+        VariantClear(destination);
+        *destination = copy; // ownership of any BSTR moves into the member
+        *present = true;
+        return S_OK;
+    }
+
+private:
+    ~CParsePropertyBag()
+    {
+        VariantClear(&m_progId);
+        VariantClear(&m_associationSuccessful);
+        InterlockedDecrement(&g_cDllRefCount);
+    }
+
+    long m_cRef = 1;
+    VARIANT m_progId{};
+    VARIANT m_associationSuccessful{};
+    bool m_hasProgId = false;
+    bool m_hasAssociationSuccessful = false;
+};
+
 // Flip to true in the same change that implements
 // CShellFolder::SetNameOf(); see the use in GetAttributesOf().
 constexpr bool kFolderCanRename = false;
@@ -124,23 +241,6 @@ LPITEMIDLIST CPidlMgr::Create(const ArchiveEntry& e)
     // Terminating zero USHORT
     USHORT* term = (USHORT*)((BYTE*)pidl + total);
     *term = 0;
-    return pidl;
-}
-
-LPITEMIDLIST CPidlMgr::CreateArchiveRoot(const std::wstring& archivePath)
-{
-    const size_t maxChars =
-        (std::numeric_limits<USHORT>::max() - offsetof(NSE_ITEMID, name)) /
-        sizeof(WCHAR) - 1;
-    if (archivePath.empty() || archivePath.size() > maxChars) return nullptr;
-
-    ArchiveEntry e;
-    e.name = archivePath;
-    e.fullPath = archivePath;
-    e.isDirectory = true;
-    LPITEMIDLIST pidl = Create(e);
-    if (pidl)
-        reinterpret_cast<NSE_ITEMID*>(pidl)->flags |= NSE_FLAG_ARCHIVE_ROOT;
     return pidl;
 }
 
@@ -197,12 +297,6 @@ bool CPidlMgr::IsDir(LPCITEMIDLIST pidl)
     return item ? (item->flags & NSE_FLAG_DIR) != 0 : false;
 }
 
-bool CPidlMgr::IsArchiveRoot(LPCITEMIDLIST pidl)
-{
-    auto* item = GetItem(pidl);
-    return item ? (item->flags & NSE_FLAG_ARCHIVE_ROOT) != 0 : false;
-}
-
 LPCITEMIDLIST CPidlMgr::GetLast(LPCITEMIDLIST pidl)
 {
     return ILFindLastID(pidl);
@@ -241,21 +335,79 @@ PIDLIST_ABSOLUTE CreateArchiveFolderPidl(const std::wstring& archivePath)
         archivePath.c_str(), ARRAYSIZE(full), full, nullptr);
     if (count && count < ARRAYSIZE(full)) path.assign(full, count);
 
-    wchar_t sid[64] = {};
-    if (!StringFromGUID2(CLSID_ArchiveFldrFolder, sid, ARRAYSIZE(sid)))
-        return nullptr;
-    const std::wstring parsing = std::wstring(L"::") + sid;
+    const Formats::Format* format =
+        Formats::Find(PathFindExtensionW(path.c_str()));
+    if (!format) return nullptr;
 
-    PIDLIST_ABSOLUTE root = nullptr;
-    if (FAILED(SHParseDisplayName(parsing.c_str(), nullptr, &root, 0, nullptr)) ||
-        !root)
+    // Formats such as .docx are readable when explicitly requested but do
+    // not publish their own ProgID, because appearing as a default handler
+    // for somebody else's document type would be hostile. Every registered
+    // ArchiveFldr ProgID points at the same folder CLSID, so those formats
+    // can use the first one solely as an explicit binding selector. This
+    // does not create or alter a file association.
+    const wchar_t* progId = format->progId;
+    std::vector<const Formats::Format*> registrable;
+    if (!progId)
+    {
+        registrable = Formats::Registrable();
+        if (registrable.empty()) return nullptr;
+        progId = registrable.front()->progId;
+    }
+
+    // Explicit-ProgID parsing is supported by the Windows 7+ filesystem
+    // parser. Older systems retain the previous filesystem PIDL behavior;
+    // there is no supported explicit-association option for them.
+    if (!SysInfo::IsWin7OrLater())
+        return ILCreateFromPathW(path.c_str());
+
+    ComPtr<IBindCtx> bindContext;
+    if (FAILED(CreateBindCtx(0, bindContext.GetAddressOf())) || !bindContext)
         return nullptr;
 
-    LPITEMIDLIST child = CPidlMgr::CreateArchiveRoot(path);
-    PIDLIST_ABSOLUTE result = child ? ILCombine(root, child) : nullptr;
-    if (child) ILFree(child);
-    ILFree(root);
-    return result;
+    ComPtr<IPropertyBag> properties;
+    properties.Attach(new(std::nothrow) CParsePropertyBag());
+    if (!properties) return nullptr;
+
+    VARIANT explicitProgId;
+    VariantInit(&explicitProgId);
+    V_VT(&explicitProgId) = VT_BSTR;
+    V_BSTR(&explicitProgId) = SysAllocString(progId);
+    if (!V_BSTR(&explicitProgId)) return nullptr;
+
+    HRESULT hr = properties->Write(STR_PARSE_WITH_EXPLICIT_PROGID,
+                                   &explicitProgId);
+    VariantClear(&explicitProgId);
+    if (FAILED(hr)) return nullptr;
+
+    hr = bindContext->RegisterObjectParam(
+        const_cast<LPOLESTR>(STR_PROPERTYBAG_PARAM), properties.Get());
+    if (FAILED(hr)) return nullptr;
+
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    hr = SHParseDisplayName(path.c_str(), bindContext.Get(), &pidl, 0, nullptr);
+    if (FAILED(hr) || !pidl)
+    {
+        if (pidl) ILFree(pidl);
+        return nullptr;
+    }
+
+    // A successful parse alone is not enough: without this output flag the
+    // PIDL is just the ordinary filesystem item and a Desktop invocation
+    // can still launch the default program. Reject that silent downgrade.
+    VARIANT associated;
+    VariantInit(&associated);
+    hr = properties->Read(STR_PARSE_EXPLICIT_ASSOCIATION_SUCCESSFUL,
+                          &associated, nullptr);
+    const bool forced = SUCCEEDED(hr) && V_VT(&associated) == VT_BOOL &&
+                        V_BOOL(&associated) != VARIANT_FALSE;
+    VariantClear(&associated);
+    if (!forced)
+    {
+        ILFree(pidl);
+        return nullptr;
+    }
+
+    return pidl;
 }
 
 // ─────────────────────────────────────────────────────────
@@ -297,8 +449,7 @@ void CShellFolder::BuildInternalPath()
     if (!m_pidlAbs) return;
     LPCITEMIDLIST cur = m_pidlAbs;
     while (cur && cur->mkid.cb) {
-        if (CPidlMgr::IsOurs(cur) && CPidlMgr::IsDir(cur) &&
-            !CPidlMgr::IsArchiveRoot(cur)) {
+        if (CPidlMgr::IsOurs(cur) && CPidlMgr::IsDir(cur)) {
             m_internalPath += CPidlMgr::GetName(cur) + L"/";
         }
         cur = ILNext(cur);
@@ -352,16 +503,7 @@ STDMETHODIMP CShellFolder::Initialize(LPCITEMIDLIST pidl)
     m_internalPath.clear();
 
     wchar_t path[MAX_PATH * 2] = {};
-    // A forced ArchiveFldr PIDL carries the archive path in our private
-    // junction child. Prefer it over shell association resolution.
-    for (LPCITEMIDLIST cur = pidl; cur && cur->mkid.cb; cur = ILNext(cur))
-        if (CPidlMgr::IsArchiveRoot(cur))
-        {
-            wcsncpy_s(path, CPidlMgr::GetName(cur).c_str(), _TRUNCATE);
-            break;
-        }
-
-    if (!path[0] && !SHGetPathFromIDListW(pidl, path))
+    if (!SHGetPathFromIDListW(pidl, path))
     {
         // SHGetPathFromIDList is limited to MAX_PATH and to "simple" file
         // system PIDLs; fall back to the modern name API before giving up.
@@ -554,27 +696,9 @@ STDMETHODIMP CShellFolder::BindToObject(
     LPCITEMIDLIST leaf = multi ? (LPCITEMIDLIST)first : pidl;
     if (multi && !first) return E_OUTOFMEMORY;
 
-    std::shared_ptr<IArchiveEngine> engine = m_engine;
-    std::wstring archivePath = m_archivePath;
-    if (CPidlMgr::IsArchiveRoot(leaf))
-    {
-        // This child is the explicit junction created by
-        // CreateArchiveFolderPidl(). It bypasses the file's default ProgID,
-        // so opening from the Desktop cannot fall through to Bandizip (or
-        // any other associated application).
-        archivePath = CPidlMgr::GetName(leaf);
-        engine = CreateArchiveEngine(archivePath);
-        if (!engine)
-        {
-            if (first) ILFree(first);
-            return E_NOINTERFACE;
-        }
-        engine->Open(archivePath); // encrypted headers are prompted by the view
-    }
-
     LPITEMIDLIST pidlAbs = CPidlMgr::Concat(m_pidlAbs, leaf);
     auto* pSub = new(std::nothrow) CShellFolder(
-        this, pidlAbs, leaf, engine, archivePath);
+        this, pidlAbs, leaf, m_engine, m_archivePath);
     ILFree(pidlAbs);
     if (first) ILFree(first);
     if (!pSub) return E_OUTOFMEMORY;
@@ -820,10 +944,7 @@ STDMETHODIMP CShellFolder::GetDisplayNameOf(
         else if (m_pidlRel && CPidlMgr::IsOurs(m_pidlRel))
         {
             // Leaf, not the first segment: m_pidlRel can hold several levels.
-            LPCITEMIDLIST leaf = CPidlMgr::GetLast(m_pidlRel);
-            self = CPidlMgr::GetName(leaf);
-            if (CPidlMgr::IsArchiveRoot(leaf))
-                self = PathFindFileNameW(self.c_str());
+            self = CPidlMgr::GetName(CPidlMgr::GetLast(m_pidlRel));
         }
         else
         {
@@ -834,18 +955,9 @@ STDMETHODIMP CShellFolder::GetDisplayNameOf(
 
     if (!CPidlMgr::IsOurs(pidl)) return E_INVALIDARG;
 
-    LPCITEMIDLIST leaf = CPidlMgr::GetLast(pidl);
-    if (CPidlMgr::IsArchiveRoot(leaf))
-    {
-        std::wstring name = CPidlMgr::GetName(leaf);
-        if (!(uFlags & SHGDN_FORPARSING))
-            name = PathFindFileNameW(name.c_str());
-        return SHStrDupW(name.c_str(), &pName->pOleStr);
-    }
-
     // The name shown in the view is the leaf's; a relative PIDL that spans
     // several levels still has to parse back as the whole chain.
-    std::wstring name = CPidlMgr::GetName(leaf);
+    std::wstring name = CPidlMgr::GetName(CPidlMgr::GetLast(pidl));
 
     // A fully qualified parsing name (SHGDN_FORPARSING without
     // SHGDN_INFOLDER) must identify the item from the desktop down, the way

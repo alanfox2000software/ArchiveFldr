@@ -1150,10 +1150,9 @@ void CContextMenu::DoOpenShell()
     //
     // There is no command line that opens a namespace extension on a
     // specific file either — Explorer's /e takes an object to browse, not
-    // a ::{CLSID} to browse it with. What works is the ordinary thing:
-    // build the archive's PIDL and ask the browser to navigate to it. The
-    // file-as-folder junction registered on the file type is what makes
-    // that land in CShellFolder.
+    // a ::{CLSID} to browse it with. Instead, build a PIDL explicitly bound
+    // to ArchiveFldr's file-as-folder ProgID and ask the browser to navigate
+    // to it.
     // ─────────────────────────────────────────────────────────────────
     if (m_archivePath.empty()) {
         MessageBoxW(m_hwnd, L"No archive was selected.",
@@ -1208,13 +1207,12 @@ void CContextMenu::DoOpenShell()
         }
     }
 
-    // Build an explicit ArchiveFldr namespace PIDL. ILCreateFromPath gives
-    // us only a normal filesystem item, so opening it in a new window asks
-    // the extension's default ProgID what to do. That is why invoking this
-    // command from an ordinary Explorer folder happened to stay here while
-    // invoking the same command on the Desktop launched Bandizip. The PIDL
-    // below is rooted at our CLSID and carries the archive path in a private
-    // junction child; no file association participates in resolving it.
+    // Ask the filesystem parser to bind this real path through ArchiveFldr's
+    // ProgID explicitly. A normal filesystem PIDL is resolved through the
+    // extension's default handler when Explorer has to open a new window,
+    // which is why a Desktop invocation used to launch Bandizip. The bind
+    // context keeps the item associated with ArchiveFldr without changing
+    // the user's default application.
     PIDLIST_ABSOLUTE pidl = CreateArchiveFolderPidl(m_archivePath);
     if (!pidl)
     {

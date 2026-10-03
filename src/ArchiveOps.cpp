@@ -384,6 +384,33 @@ static std::wstring ArchiveLeafName(const EnginePtr& eng)
     return leaf ? leaf : L"";
 }
 
+bool EnsureOpenPassword(HWND hwnd, const EnginePtr& eng)
+{
+    if (!eng) return false;
+    if (!eng->PasswordNeededToOpen()) return true;
+
+    const std::wstring path = eng->GetFilePath();
+    if (path.empty()) return false;
+
+    for (int attempt = 0; eng->PasswordNeededToOpen() && attempt < 3;
+         ++attempt)
+    {
+        std::wstring pw;
+        if (!PasswordDialog::Ask(hwnd, ArchiveLeafName(eng),
+                attempt == 0
+                    ? L"This archive is encrypted.\nIts contents cannot "
+                      L"be shown without the password."
+                    : L"That password is not correct.\nEnter the password "
+                      L"to try again.",
+                pw))
+            return false;
+
+        eng->SetPassword(pw);
+        if (eng->Open(path)) return true;
+    }
+    return false;
+}
+
 bool EnsureReadPassword(HWND hwnd, const EnginePtr& eng)
 {
     if (!eng) return false;

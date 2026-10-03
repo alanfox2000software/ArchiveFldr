@@ -191,6 +191,14 @@ void Apply(HWND hDlg, UINT dlgId)
     {
         const int id = GetDlgCtrlID(child);
         if (id <= 0) continue;              // -1 is IDC_STATIC, shared
+
+        // Language-file id 1 is metadata: the language's English name.
+        // Win32 also defines IDOK as 1, so applying it to dialog children
+        // renamed every standard OK button to "English" (visible in the
+        // Add to Archive screenshot). Standard buttons keep the caption
+        // from the dialog resource; translated dialogs use dedicated ids.
+        if (id == IDOK) continue;
+
         auto e = g_table.find((UINT)id);
         if (e != g_table.end() && !e->second.empty())
             SetWindowTextW(child, e->second.c_str());

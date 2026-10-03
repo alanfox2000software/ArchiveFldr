@@ -39,6 +39,11 @@ bool EnsureCanRead(HWND hwnd, const EnginePtr& eng);
 bool EnsureCanAdd (HWND hwnd, const EnginePtr& eng);
 
 // ── Passwords ───────────────────────────────────────────────────────────
+// An archive with encrypted headers cannot even enumerate its names.
+// Prompt and reopen it (up to three attempts). False means the user
+// cancelled or no supplied password could open the archive.
+bool EnsureOpenPassword(HWND hwnd, const EnginePtr& eng);
+
 // Make sure the engine holds a password before encrypted items are read:
 // when the archive has encrypted entries and no password yet, prompt and
 // store the answer. False only when the user cancels the prompt.

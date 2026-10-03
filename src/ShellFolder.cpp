@@ -441,10 +441,16 @@ STDMETHODIMP CShellFolder::ParseDisplayName(
 // ─────────────────────────────────────────────────────────
 // IShellFolder::EnumObjects
 // ─────────────────────────────────────────────────────────
-STDMETHODIMP CShellFolder::EnumObjects(HWND /*hwnd*/, DWORD grfFlags, IEnumIDList** ppEnum)
+STDMETHODIMP CShellFolder::EnumObjects(HWND hwnd, DWORD grfFlags, IEnumIDList** ppEnum)
 {
     if (!ppEnum) return E_POINTER;
     *ppEnum = nullptr;
+
+    // Both Explorer's DefView and ArchiveFldr's fallback view enumerate
+    // through this method. Prompt here, immediately before List(), so an
+    // archive with encrypted file names is reopened before either view can
+    // mistake its still-hidden entries for an empty archive.
+    ArchiveOps::EnsureOpenPassword(hwnd, m_engine);
 
     std::vector<LPITEMIDLIST> items;
     if (m_engine) {

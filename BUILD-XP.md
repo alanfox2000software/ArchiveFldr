@@ -113,9 +113,28 @@ writes only `Release\x64` (or `Debug\x64`) — it does not also build the
 
 Only the DLLs are registered. The settings program is an ordinary
 executable that the DLL starts on demand, which keeps the whole Options
-window out of every process that loads a context menu. Its Install
-button registers whichever of the two DLLs it finds next to itself,
-each with the matching `regsvr32`, so keep them together.
+window out of every process that loads a context menu. Its **Install
+32-bit** and **Install 64-bit** buttons register whichever of the two
+DLLs they find next to themselves, each with the matching `regsvr32`,
+so keep them together.
+
+Those two buttons install the *base* extension: browsing archives as
+folders, thumbnails, preview, and the Default apps entry. They
+deliberately leave the right-click menu alone, because that is a
+separate switch per bitness — the two **Integrate to shell context
+menu** ticks on the ArchiveFldr page, which are applied by registering
+that DLL again. The same choice is available to an unattended install
+through `regsvr32 /i`:
+
+```
+regsvr32 /s /i             ArchiveFldr.64.dll   rem everything
+regsvr32 /s /i:base        ArchiveFldr.64.dll   rem no context menu
+regsvr32 /s /i:contextmenu ArchiveFldr.64.dll   rem with context menu
+```
+
+Plain `regsvr32 ArchiveFldr.64.dll` with no `/i` follows whatever those
+ticks already say, and on a machine that has never run the settings
+program that means everything, exactly as it always did.
 
 Everything the settings program writes is machine-wide —
 `HKLM\SOFTWARE\ArchiveFldr` for preferences, `HKLM\SOFTWARE\Classes`

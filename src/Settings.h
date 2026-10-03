@@ -134,6 +134,50 @@ public:
     bool          ctxMenuIcons        = true;   // "Icons in context menu"
     std::wstring  ctxSubMenuTitle     = L"ArchiveFldr";
 
+    // Is the context menu handler wanted, per bitness?
+    //
+    // Two flags for the same reason there are two association sets: a
+    // 64-bit Explorer can only load ArchiveFldr.64.dll and a 32-bit host
+    // only ArchiveFldr.32.dll, and each registers its own copy of the
+    // handler's CLSID in its own view of HKLM\Software\Classes. One flag
+    // could not describe both.
+    //
+    // These are what the two "Integrate to shell context menu" ticks on
+    // the ArchiveFldr page write. Registration reads them back: a build
+    // registers the context menu CLSID only when its own flag is set,
+    // and the shellex keys that point at it — which are shared between
+    // the two registry views, not per bitness — stand as long as either
+    // flag is set. Both default to true, so an unattended
+    // "regsvr32 ArchiveFldr.64.dll" on a machine that has never run the
+    // settings program behaves exactly as it always did.
+    //
+    // showContextMenu above is a different switch: it is read at
+    // runtime, by a handler that is already registered and loaded, and
+    // turns the menu off everywhere without touching the registry.
+    bool          ctxMenu32           = true;
+    bool          ctxMenu64           = true;
+
+    // The flag belonging to the build that is asking, like
+    // AssociatedHere() above.
+    bool& CtxMenuHere() {
+#ifdef _WIN64
+        return ctxMenu64;
+#else
+        return ctxMenu32;
+#endif
+    }
+    bool CtxMenuHere() const {
+#ifdef _WIN64
+        return ctxMenu64;
+#else
+        return ctxMenu32;
+#endif
+    }
+
+    // ...and whether anyone wants it, which is what the shared keys
+    // under Software\Classes follow.
+    bool CtxMenuAnywhere() const { return ctxMenu32 || ctxMenu64; }
+
     // ── Appearance ────────────────────────────────────────
     bool          showSizeColumn      = true;
     bool          showDateColumn      = true;

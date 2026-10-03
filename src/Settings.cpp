@@ -206,6 +206,13 @@ void Settings::Load()
     ctxMenuIcons     = ReadBool(hk, L"CtxMenuIcons",    ctxMenuIcons);
     ctxSubMenuTitle  = ReadStr (hk, L"CtxSubmenuTitle", ctxSubMenuTitle.c_str());
 
+    // One per bitness, both defaulting to true: absent means "nobody has
+    // said otherwise", which has to keep meaning "register the context
+    // menu" or an upgrade would silently take the right-click menu away
+    // from every existing install. See Settings.h.
+    ctxMenu32        = ReadBool(hk, L"ContextMenu32",   ctxMenu32);
+    ctxMenu64        = ReadBool(hk, L"ContextMenu64",   ctxMenu64);
+
     // Appearance
     showSizeColumn    = ReadBool (hk, L"ColSize",         showSizeColumn);
     showDateColumn    = ReadBool (hk, L"ColDate",         showDateColumn);
@@ -277,6 +284,8 @@ void Settings::Save() const
     WriteBool(hk, L"CtxSubmenu",      ctxUseSubMenu);
     WriteBool(hk, L"CtxMenuIcons",    ctxMenuIcons);
     WriteStr (hk, L"CtxSubmenuTitle", ctxSubMenuTitle);
+    WriteBool(hk, L"ContextMenu32",   ctxMenu32);
+    WriteBool(hk, L"ContextMenu64",   ctxMenu64);
 
     // Appearance
     WriteBool (hk, L"ColSize",     showSizeColumn);
@@ -339,6 +348,8 @@ void Settings::Reset()
     ctxSettings      = true;
     ctxUseSubMenu    = true;
     ctxSubMenuTitle  = L"ArchiveFldr";
+    ctxMenu32        = true;
+    ctxMenu64        = true;
 
     // ── Appearance ────────────────────────────────────────
     showSizeColumn    = true;

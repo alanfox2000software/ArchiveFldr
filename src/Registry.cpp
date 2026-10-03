@@ -326,16 +326,25 @@ HRESULT CRegistry::RegisterNamespaceFolder(const wchar_t* dllPath)
 // to compress.
 static const wchar_t* const kAllFilesBases[] = { L"*", L"Directory" };
 
-HRESULT CRegistry::RegisterShellExOnBase(const std::wstring& base)
+HRESULT CRegistry::RegisterShellExOnBase(const std::wstring& base,
+                                         bool withContextMenu)
 {
     const std::wstring ctx  = ClsidToStr(CLSID_ArchiveFldrContextMenu);
     const std::wstring drop = ClsidToStr(CLSID_ArchiveFldrDropTarget);
     const std::wstring th   = ClsidToStr(CLSID_ArchiveFldrThumbnail);
     const std::wstring pv   = ClsidToStr(CLSID_ArchiveFldrPreview);
 
-    RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
-        (base + L"\\shellex\\ContextMenuHandlers\\ArchiveFldr").c_str(),
-        nullptr, ctx.c_str()));
+    // The context menu is opt-out: an install can ask for the browsing
+    // half of the extension and nothing else. Clearing it deletes the
+    // key rather than skipping it, or a machine that had the menu would
+    // keep it after being re-registered without.
+    if (withContextMenu)
+        RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
+            (base + L"\\shellex\\ContextMenuHandlers\\ArchiveFldr").c_str(),
+            nullptr, ctx.c_str()));
+    else
+        DelRegKey(HKEY_LOCAL_MACHINE,
+            (base + L"\\shellex\\ContextMenuHandlers\\ArchiveFldr").c_str());
 
     RETURN_IF_FAILED(SetRegStr(HKEY_LOCAL_MACHINE,
         (base + L"\\shellex\\DropHandler").c_str(),
@@ -615,7 +624,8 @@ struct FirstFailure
 // ── File extension registration ───────────────────────────
 HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
                                       const wchar_t* progId,
-                                      const wchar_t* dllPath)
+                                      const wchar_t* dllPath,
+                                      bool withContextMenu)
 {
     FirstFailure keep;
     const std::wstring folder = ClsidToStr(CLSID_ArchiveFldrFolder);
@@ -676,7 +686,7 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
     keep(SetRegStr(HKEY_LOCAL_MACHINE, progBase.c_str(),
         L"FriendlyTypeName", typeName.c_str()));
 
-    keep(RegisterShellExOnBase(progBase));
+    keep(RegisterShellExOnBase(progBase, withContextMenu));
 
     // Make the ProgID a "file as folder" junction: this single value is what
     // makes Explorer hand the archive to our namespace extension instead of
@@ -764,7 +774,7 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
     DelRegKey(HKEY_LOCAL_MACHINE, (extBase + L"\\ShellFolder").c_str());
 
     // Also on the extension (harmless; ignored when ProgID owns the type)
-    keep(RegisterShellExOnBase(extBase));
+    keep(RegisterShellExOnBase(extBase, withContextMenu));
 
     // ── 3) SystemFileAssociations\.ext ────────────────────
     // Used by Explorer even when UserChoice / ProgID differs. The CLSID
@@ -773,7 +783,7 @@ HRESULT CRegistry::RegisterExtension(const wchar_t* ext,
     // archiver owns the file association.
     std::wstring sfaBase =
         std::wstring(L"Software\\Classes\\SystemFileAssociations\\") + ext;
-    keep(RegisterShellExOnBase(sfaBase));
+    keep(RegisterShellExOnBase(sfaBase, withContextMenu));
     keep(TakeOverJunction(sfaBase + L"\\CLSID", folder));
 
     return keep.hr;
@@ -1015,11 +1025,41 @@ HRESULT CRegistry::UnregisterCapabilities()
 // ─────────────────────────────────────────────────────────
 HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
 {
+    // Is the right-click menu part of this install?
+    //
+    // Registration honours the stored answer rather than deciding for
+    // itself, the same way the Default apps entry in step 6 does. The
+    // settings program writes the two ticks from the ArchiveFldr page
+    // and then re-registers; "Install 32-bit" / "Install 64-bit" on the
+    // Settings page clear the tick for that bitness first, which is
+    // what makes them a base install with no context menu.
+    //
+    // Two questions, not one:
+    //
+    //   ctxHere — does THIS build's handler get a COM registration?
+    //             CLSID keys are per registry view, so the 32- and
+    //             64-bit DLLs each answer for themselves.
+    //
+    //   ctxAny  — do the shellex keys that point at that CLSID stand?
+    //             Those live under Software\Classes\<type>, which WOW64
+    //             shares between both views, so they belong to whichever
+    //             bitness still wants them. Removing them while the
+    //             other bitness is integrated would quietly take its
+    //             menu away too. A flag left set for a bitness that is
+    //             not installed only leaves a key naming a CLSID nobody
+    //             answers for, which the shell skips; uninstalling
+    //             clears both flags and the keys with them.
+    const bool ctxHere = Settings::Get().CtxMenuHere();
+    const bool ctxAny  = Settings::Get().CtxMenuAnywhere();
+
     // 1. COM servers
     RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrFolder,
         L"ArchiveFldr Shell Namespace Extension", dllPath));
-    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrContextMenu,
-        L"ArchiveFldr Context Menu Handler", dllPath));
+    if (ctxHere)
+        RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrContextMenu,
+            L"ArchiveFldr Context Menu Handler", dllPath));
+    else
+        UnregisterCOMServer(CLSID_ArchiveFldrContextMenu);
     RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrDropTarget,
         L"ArchiveFldr Drop Target Handler", dllPath));
     if constexpr (kHasVistaHandlers)
@@ -1045,8 +1085,11 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
     // 2. Approved list (Vista+)
     RETURN_IF_FAILED(RegisterApproved(CLSID_ArchiveFldrFolder,
         L"ArchiveFldr Shell Namespace Extension"));
-    RETURN_IF_FAILED(RegisterApproved(CLSID_ArchiveFldrContextMenu,
-        L"ArchiveFldr Context Menu Handler"));
+    if (ctxHere)
+        RETURN_IF_FAILED(RegisterApproved(CLSID_ArchiveFldrContextMenu,
+            L"ArchiveFldr Context Menu Handler"));
+    else
+        UnregisterApproved(CLSID_ArchiveFldrContextMenu);
     RETURN_IF_FAILED(RegisterApproved(CLSID_ArchiveFldrDropTarget,
         L"ArchiveFldr Drop Target Handler"));
 
@@ -1106,7 +1149,7 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
     //    rest of them theirs, so the loop records and continues.
     FirstFailure extensions;
     for (const auto* f : Formats::Registrable())
-        extensions(RegisterExtension(f->ext, f->progId, dllPath));
+        extensions(RegisterExtension(f->ext, f->progId, dllPath, ctxAny));
 
     // 6. Offer ourselves in Settings > Default apps. This is the only way
     //    to take a file type that Windows' built-in archive handler owns
@@ -1125,9 +1168,15 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
     //    the types ArchiveFldr can open, so the context menu handler goes
     //    on "*" and "Directory" as well. Only the menu: see
     //    RegisterContextMenuOnBase for why the other handlers do not.
+    //    Nobody integrated means nobody holds these keys either.
     for (const wchar_t* base : kAllFilesBases)
-        RETURN_IF_FAILED(RegisterContextMenuOnBase(
-            std::wstring(L"Software\\Classes\\") + base));
+    {
+        const std::wstring key = std::wstring(L"Software\\Classes\\") + base;
+        if (ctxAny)
+            RETURN_IF_FAILED(RegisterContextMenuOnBase(key));
+        else
+            UnregisterContextMenuOnBase(key);
+    }
 
     // Everything that could be registered has been. If a file type refused,
     // report it — but only after the other twenty got their turn.

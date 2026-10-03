@@ -153,8 +153,39 @@ STDAPI DllUnregisterServer()
 
 // ─────────────────────────────────────────────────────────
 // DllInstall — Called by regsvr32 /i (install) /u /i (uninstall)
+//
+// The command line is how an unattended install asks for the same
+// thing the buttons in the settings program do:
+//
+//   regsvr32 /i ArchiveFldr.64.dll                everything
+//   regsvr32 /i:base ArchiveFldr.64.dll           no context menu
+//   regsvr32 /i:contextmenu ArchiveFldr.64.dll    with context menu
+//
+// It is recorded as a setting and then acted on by RegisterAll, rather
+// than passed down as an argument, because that is where the answer has
+// to live anyway: the other bitness, and the next re-registration,
+// both read it from there. Per bitness, naturally — this DLL can only
+// speak for its own build.
+//
+// Anything else on the command line is a full install, which is what
+// every earlier build did with any command line at all.
 // ─────────────────────────────────────────────────────────
-STDAPI DllInstall(BOOL bInstall, LPCWSTR /*pszCmdLine*/)
+STDAPI DllInstall(BOOL bInstall, LPCWSTR pszCmdLine)
 {
-    return bInstall ? DllRegisterServer() : DllUnregisterServer();
+    if (!bInstall)
+        return DllUnregisterServer();
+
+    if (pszCmdLine && *pszCmdLine)
+    {
+        Settings& s = Settings::Get();
+        const bool off = _wcsicmp(pszCmdLine, L"base") == 0 ||
+                         _wcsicmp(pszCmdLine, L"nocontextmenu") == 0;
+        const bool on  = _wcsicmp(pszCmdLine, L"contextmenu") == 0;
+        if (off || on)
+        {
+            s.CtxMenuHere() = on;
+            s.Save();
+        }
+    }
+    return DllRegisterServer();
 }

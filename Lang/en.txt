@@ -61,7 +61,12 @@
 
 
 ; ── ArchiveFldr page ─────────────────────────────────────
+; 1020 is the master switch. 1025 and 1026 are the registration, one
+; per build of the DLL: a 64-bit Explorer loads ArchiveFldr.64.dll and
+; a 32-bit host ArchiveFldr.32.dll, so each is integrated on its own.
 1020 = "Integrate ArchiveFldr to shell context menu"
+1025 = "Integrate to shell context menu (64-bit)"
+1026 = "Integrate to shell context menu (32-bit)"
 1021 = "Cascaded context menu"
 1022 = "Icons in context menu"
 1023 = "Context menu items:"
@@ -90,14 +95,22 @@
 
 
 ; ── Settings page ────────────────────────────────────────
+; Install is per bitness and installs the base extension only; the
+; right-click menu is 1025 / 1026 on the ArchiveFldr page. 1042 was the
+; single "Install" button these two replaced — the number is retired,
+; not reused, so an old translation cannot put the wrong caption on a
+; new button.
 1040 = "Shell extension"
-1042 = "Install"
+1045 = "Install 32-bit"
+1046 = "Install 64-bit"
 1043 = "Uninstall"
 
+; State of one bitness, on the line above the buttons.
 2040 = "registered"
 2041 = "not registered"
+2049 = "registered, with context menu"
 
-2043 = "Install registers the shell extension so Explorer can browse archives as folders, and lists ArchiveFldr in Settings > Default apps for the file types ticked on the System page.\n\nUninstall removes both, leaving the files on disk.\n\nExplorer caches shell extensions, so sign out and back in — or restart Explorer — for a change to take effect everywhere."
+2043 = "Install registers one build of the shell extension so Explorer can browse archives as folders, and lists ArchiveFldr in Settings > Default apps for the file types ticked on the System page. It adds nothing to the right-click menu: that is switched on separately, per bitness, on the ArchiveFldr page.\n\nUninstall removes all of it, both bitnesses, leaving the files on disk.\n\nExplorer caches shell extensions, so sign out and back in — or restart Explorer — for a change to take effect everywhere."
 2044 = "ArchiveFldr was installed."
 2045 = "Some parts could not be changed."
 2046 = "ArchiveFldr was removed."

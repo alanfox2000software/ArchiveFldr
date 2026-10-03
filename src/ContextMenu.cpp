@@ -238,6 +238,16 @@ STDMETHODIMP CContextMenu::QueryContextMenu(
     if (!Settings::Get().showContextMenu)
         return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
 
+    // ...and the tick for this bitness on the ArchiveFldr page.
+    // Clearing it deregisters the handler, but a registration is not a
+    // guarantee: the keys may still be there because the other bitness
+    // wants them, and a host that already holds this DLL goes on
+    // calling it whatever the registry now says. Checking the flag here
+    // means an un-integrated build stays silent in either case. See
+    // Settings::CtxMenuHere.
+    if (!Settings::Get().CtxMenuHere())
+        return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
+
     // CMF_DEFAULTONLY = "tell me the one command a double-click should run".
     //
     // Every item in this view needs an answer here, FOLDERS INCLUDED. The

@@ -66,11 +66,20 @@
 #define IDC_BTN_ASSOC_NONE_64       1017
 
 // ── ArchiveFldr page ──────────────────────────────────────
+// IDC_CHK_INTEGRATE is the master switch: off means the handler is
+// still registered but contributes nothing to any menu. The two ticks
+// below it are the registration itself, one per build of the DLL — a
+// 64-bit Explorer can only load ArchiveFldr.64.dll and a 32-bit host
+// only ArchiveFldr.32.dll, so each has its own COM registration and a
+// single tick would be a lie on x64. Same reasoning as the two columns
+// on the System page.
 #define IDC_CHK_INTEGRATE           1020
 #define IDC_CHK_CASCADED            1021
 #define IDC_CHK_MENUICONS           1022
 #define IDC_LBL_CTXITEMS            1023
 #define IDC_LIST_CTXITEMS           1024
+#define IDC_CHK_INTEGRATE_64        1025
+#define IDC_CHK_INTEGRATE_32        1026
 
 // ── Folders page ──────────────────────────────────────────
 #define IDC_GRP_WORKFOLDER          1030
@@ -80,11 +89,20 @@
 #define IDC_BTN_WORKDIR             1034
 
 // ── Settings page ─────────────────────────────────────────
+// Install is per bitness, and installs the base shell extension only:
+// the right-click menu is registered separately by the two ticks on the
+// ArchiveFldr page. Uninstall takes everything, so it stays single.
+//
+// 1042 was a single "Install" button covering both bitnesses. It is
+// retired rather than reused: the number is a key in every Lang\<x>.txt
+// on disk, and giving it to another control would put the old caption
+// on the new button in every translation that has not been updated.
 #define IDC_GRP_INSTALL             1040
 #define IDC_LBL_INSTALL_STATE       1041
-#define IDC_BTN_INSTALL             1042
 #define IDC_BTN_UNINSTALL           1043
 #define IDC_LBL_INSTALL_NOTE        1044
+#define IDC_BTN_INSTALL_32          1045
+#define IDC_BTN_INSTALL_64          1046
 
 // ── Language page ─────────────────────────────────────────
 #define IDC_LBL_LANG                1050

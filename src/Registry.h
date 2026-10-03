@@ -31,8 +31,12 @@ private:
                                         const wchar_t* threadModel = L"Apartment");
     static HRESULT UnregisterCOMServer (const CLSID&);
 
+    // withContextMenu == false registers the file type without the
+    // right-click handler — the "base" install the Settings page's
+    // Install buttons perform. See RegisterAll.
     static HRESULT RegisterExtension   (const wchar_t* ext, const wchar_t* progId,
-                                        const wchar_t* dllPath);
+                                        const wchar_t* dllPath,
+                                        bool withContextMenu);
     static HRESULT UnregisterExtension (const wchar_t* ext, const wchar_t* progId);
 
     // Removes HKCR\Applications\<settings exe> and
@@ -49,7 +53,13 @@ private:
     static void    UnregisterPreviewHandlerEntry();
 
     // NEW
-    static HRESULT RegisterShellExOnBase  (const std::wstring& base);
+    // The handlers that hang off one Software\Classes base: context
+    // menu, drop, thumbnail, preview. withContextMenu == false deletes
+    // the ContextMenuHandlers entry instead of writing it, so switching
+    // an install from "with menu" to "base only" really does take the
+    // menu away rather than leaving the old key behind.
+    static HRESULT RegisterShellExOnBase  (const std::wstring& base,
+                                           bool withContextMenu);
     static void    UnregisterShellExOnBase(const std::wstring& base);
 
     // Context menu only — no drop handler, no thumbnail, no preview.

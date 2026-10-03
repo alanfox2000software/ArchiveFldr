@@ -41,9 +41,10 @@ enum : UINT {
     LNG_UNINSTALL_OK  = 2046,
     LNG_BROWSE_WORK   = 2047,
     LNG_RESTART_SHELL = 2048,
-    // Third state of a bitness line: registered, and the right-click
-    // menu with it.
+    // The other two answers a bitness line can give, now that the
+    // browsing half and the right-click menu are installed separately.
     LNG_STATE_CTXMENU = 2049,
+    LNG_STATE_CTXONLY = 2050,
 };
 
 namespace {
@@ -275,7 +276,14 @@ bool DllRegistered(bool x64)
 // 32-bit Windows there is only System32. Either way this picks a
 // regsvr32 whose bitness matches the DLL, which is the whole point —
 // the wrong one fails with "the module is not compatible".
-bool RunRegsvr32(bool x64, bool unregister, DWORD* exitCode)
+//
+// `part` names one half of the registration, and goes through as
+// /n /i:<part> — DllInstall and nothing else. /n is what keeps
+// regsvr32 from calling DllRegisterServer or DllUnregisterServer
+// either side of it, which would do the whole job and undo the point
+// of asking for half. nullptr means the whole thing, as before.
+bool RunRegsvr32(bool x64, bool unregister, DWORD* exitCode,
+                 const wchar_t* part = nullptr)
 {
     wchar_t win[MAX_PATH] = {};
     if (!GetWindowsDirectoryW(win, ARRAYSIZE(win))) return false;
@@ -292,6 +300,7 @@ bool RunRegsvr32(bool x64, bool unregister, DWORD* exitCode)
 
     std::wstring args = L"\"" + tool + L"\" /s ";
     if (unregister) args += L"/u ";
+    if (part && *part) args += std::wstring(L"/n /i:") + part + L" ";
     args += L"\"" + DllPath(x64) + L"\"";
 
     STARTUPINFOW si{ sizeof(si) };
@@ -620,17 +629,18 @@ void CPageArchiveFldr::SyncEnabled()
 {
     const bool on = IsDlgButtonChecked(m_hwnd, IDC_CHK_INTEGRATE) == BST_CHECKED;
 
-    // The two per-bitness ticks are the registration itself, so each one
-    // is only answerable where that build of the DLL is installed.
-    // Nothing to integrate with is not a preference, it is a missing
-    // install -- and the Settings page is where that is fixed, which is
-    // why the tick greys out rather than offering to do it from here.
+    // The two per-bitness ticks are the registration itself -- applied
+    // by registering that DLL's context menu handler and nothing else
+    // -- so all they need is the DLL to be there. Deliberately not
+    // "and the base install too": the menu stands on its own, which is
+    // what lets "Uninstall 64-bit" take the browsing half away without
+    // stranding a menu nobody can then untick.
 #ifdef _WIN64
-    const bool can64 = DllPresent(true) && DllRegistered(true);
+    const bool can64 = DllPresent(true);
 #else
     const bool can64 = false;   // 32-bit build: no 64-bit shell to integrate with
 #endif
-    const bool can32 = DllPresent(false) && DllRegistered(false);
+    const bool can32 = DllPresent(false);
 
     EnableWindow(GetDlgItem(m_hwnd, IDC_CHK_INTEGRATE_64), on && can64);
     EnableWindow(GetDlgItem(m_hwnd, IDC_CHK_INTEGRATE_32), on && can32);
@@ -711,10 +721,12 @@ void CPageArchiveFldr::Save()
 //
 // The two per-bitness ticks are not a preference the DLL reads and
 // acts on later: they decide whether the context menu handler is
-// registered at all, so applying one means registering that DLL again.
-// Settings::Save has already written the flags by the time this runs --
-// registration reads them back from HKLM -- so a plain re-register
-// writes the menu keys or removes them, whichever the tick now says.
+// registered at all, so applying one means going to the registry.
+//
+// Only the menu, though -- regsvr32 /n /i:contextmenu, which reaches
+// DllInstall and nothing else. A full re-registration would quietly
+// reinstall a base extension the user had just uninstalled, and a full
+// /u would take one away that they had not.
 //
 // regsvr32 rather than calling CRegistry here: the CLSID half of the
 // registration lives in the 32- or 64-bit view of the registry, and the
@@ -735,9 +747,7 @@ void CPageArchiveFldr::ApplyIntegration()
         if (!DllPresent(x64)) return;   // and there is nothing to register
         ran = true;
         DWORD code = 0;
-        // Register, in both directions: /u would take the whole shell
-        // extension out, and only the menu is being asked about.
-        const bool ok = RunRegsvr32(x64, false, &code);
+        const bool ok = RunRegsvr32(x64, !want, &code, L"contextmenu");
         allOk = allOk && ok;
         if (!ok)
             report += std::wstring(x64 ? L"64-bit" : L"32-bit") +
@@ -989,17 +999,21 @@ void CPageInstall::RefreshState()
                     L" not found next to this program\r\n";
             return;
         }
-        // Three states, not two: the context menu is now a separate
-        // half of the install, so "registered" on its own would not
-        // say whether the right-click menu is part of it.
+        // Four answers, because the two halves are installed
+        // separately: the browsing extension, the right-click menu,
+        // both, or neither.
         const bool reg = DllRegistered(x64);
         const bool ctx = x64 ? s.ctxMenu64 : s.ctxMenu32;
-        text += std::wstring(which) + L": " +
-                (!reg ? L(LNG_STATE_NO,  L"not registered")
-                      : ctx ? L(LNG_STATE_CTXMENU,
-                               L"registered, with context menu")
-                            : L(LNG_STATE_YES, L"registered")) +
-                L"\r\n";
+        std::wstring state;
+        if (reg && ctx)
+            state = L(LNG_STATE_CTXMENU, L"registered, with context menu");
+        else if (reg)
+            state = L(LNG_STATE_YES, L"registered");
+        else if (ctx)
+            state = L(LNG_STATE_CTXONLY, L"context menu only");
+        else
+            state = L(LNG_STATE_NO, L"not registered");
+        text += std::wstring(which) + L": " + state + L"\r\n";
     };
 
 #ifdef _WIN64
@@ -1016,18 +1030,20 @@ void CPageInstall::RefreshState()
           L"Install registers one build of the shell extension so Explorer "
           L"can browse archives as folders, and lists ArchiveFldr in "
           L"Settings > Default apps for the file types ticked on the System "
-          L"page. It adds nothing to the right-click menu: that is switched "
-          L"on separately, per bitness, on the ArchiveFldr page.\r\n\r\n"
-          L"Uninstall removes all of it, both bitnesses, leaving the files "
-          L"on disk.\r\n\r\n"
+          L"page. Uninstall takes that same half back out, leaving the "
+          L"files on disk.\r\n\r\n"
+          L"Neither touches the right-click menu: that is switched on and "
+          L"off per bitness on the ArchiveFldr page.\r\n\r\n"
           L"Explorer caches shell extensions, so sign out and back in — or "
           L"restart Explorer — for a change to take effect everywhere.")
         .c_str());
 
-    // One button per bitness, each live only when its own DLL is there
-    // to register. A 32-bit settings program never offers the 64-bit
-    // one: it runs on a 32-bit Windows, and could not start a 64-bit
-    // regsvr32 even if a 64-bit DLL were sitting beside it.
+    // One pair of buttons per bitness, live only while that DLL is
+    // there: both directions go through its own regsvr32, so the file
+    // has to exist even to be unregistered. A 32-bit settings program
+    // never offers the 64-bit pair -- it runs on a 32-bit Windows, and
+    // could not start a 64-bit regsvr32 even if a 64-bit DLL were
+    // sitting beside it.
 #ifdef _WIN64
     const bool have64 = DllPresent(true);
 #else
@@ -1035,79 +1051,78 @@ void CPageInstall::RefreshState()
 #endif
     const bool have32 = DllPresent(false);
 
-    EnableWindow(GetDlgItem(m_hwnd, IDC_BTN_INSTALL_64), have64);
-    EnableWindow(GetDlgItem(m_hwnd, IDC_BTN_INSTALL_32), have32);
-    EnableWindow(GetDlgItem(m_hwnd, IDC_BTN_UNINSTALL),  have64 || have32);
+    EnableWindow(GetDlgItem(m_hwnd, IDC_BTN_INSTALL_64),   have64);
+    EnableWindow(GetDlgItem(m_hwnd, IDC_BTN_INSTALL_32),   have32);
+    EnableWindow(GetDlgItem(m_hwnd, IDC_BTN_UNINSTALL_64), have64);
+    EnableWindow(GetDlgItem(m_hwnd, IDC_BTN_UNINSTALL_32), have32);
 }
 
 void CPageInstall::Run(bool install, bool x64)
 {
-    // The settings themselves have to be on disk first: registration
-    // reads the association ticks straight out of HKLM, so running it
-    // against stale values would register the wrong set of file types.
+    // Both directions are per bitness and both are the base extension
+    // only: browsing archives as folders, thumbnails, preview, and the
+    // Default apps entry. The right-click menu is the ArchiveFldr
+    // page's business and neither button here disturbs it, so
+    // uninstalling the browsing half leaves an integrated menu
+    // standing until its tick is cleared.
     Settings& s = Settings::Get();
-    s.registerAsDefaultApp = install;
 
-    // Install means the base shell extension and nothing else. Whether
-    // the right-click menu comes with it is a separate decision, made
-    // per bitness on the ArchiveFldr page, so clear the flag for the
-    // bitness being installed -- registration reads it back a moment
-    // from now, and that is what keeps the menu out of a base install.
-    //
-    // An uninstall clears both: an extension that is not there cannot
-    // be integrated with anything, and leaving the ticks set would have
-    // the ArchiveFldr page claiming a menu that no longer exists.
+    // Is the other build still registered? Everything shared -- the
+    // file types, and the Default apps entry with them -- stays while
+    // it is, so this is also the question of whether the stored
+    // "list in Default apps" answer still has an owner.
+#ifdef _WIN64
+    const bool otherStillThere = DllRegistered(!x64);
+#else
+    const bool otherStillThere = false;   // 32-bit Windows: there is no other
+#endif
+
+    // The settings have to be on disk before regsvr32 starts:
+    // registration reads the association ticks, and the context menu
+    // flags, straight out of HKLM.
     if (install)
     {
+        s.registerAsDefaultApp = true;
+
+        // A base install is one without a menu. Saying so here is what
+        // keeps RegisterAll from adding one -- and what keeps the tick
+        // on the ArchiveFldr page honest about it.
         bool& ctxFlag = x64 ? s.ctxMenu64 : s.ctxMenu32;
         ctxFlag = false;
     }
-    else
+    else if (!otherStillThere)
     {
-        s.ctxMenu32 = false;
-        s.ctxMenu64 = false;
+        // The last build goes, and the Default apps entry with it.
+        s.registerAsDefaultApp = false;
     }
     s.Save();
 
-    std::wstring report;
-    bool allOk = true;
-
-    auto one = [&](bool bits64) {
-        if (!DllPresent(bits64)) return;
-        DWORD code = 0;
-        const bool ok = RunRegsvr32(bits64, !install, &code);
-        allOk = allOk && ok;
-        report += std::wstring(bits64 ? L"64-bit" : L"32-bit") + L": " +
-                  (ok ? L"OK" : (L"failed (regsvr32 exit code " +
-                                 std::to_wstring((int)code) + L")")) +
-                  L"\r\n";
-    };
-
+    DWORD code = 0;
     HCURSOR prev = SetCursor(LoadCursorW(nullptr, IDC_WAIT));
-    if (install)
-    {
-        // One bitness, the one whose button was pressed.
-        one(x64);
-    }
-    else
-    {
-        // Uninstall is not per bitness: most of what registration
-        // writes lives in keys the two builds share, so taking one out
-        // and leaving the other would leave a half-wired install.
-#ifdef _WIN64
-        one(true);
-#endif
-        one(false);
-    }
+    // /n /i:base — the base half, through DllInstall. Not a plain
+    // register or /u, either of which would take the context menu with
+    // it.
+    const bool ok = DllPresent(x64) &&
+                    RunRegsvr32(x64, !install, &code, L"base");
     SetCursor(prev);
 
-    const std::wstring head = allOk
+    const std::wstring report =
+        std::wstring(x64 ? L"64-bit" : L"32-bit") + L": " +
+        (ok ? std::wstring(L"OK")
+            : (!DllPresent(x64)
+                   ? std::wstring(PathFindFileNameW(DllPath(x64).c_str())) +
+                     L" not found"
+                   : L"failed (regsvr32 exit code " +
+                     std::to_wstring((int)code) + L")")) +
+        L"\r\n";
+
+    const std::wstring head = ok
         ? (install ? L(LNG_INSTALL_OK,   L"ArchiveFldr was installed.")
                    : L(LNG_UNINSTALL_OK, L"ArchiveFldr was removed."))
         : L(LNG_INSTALL_FAIL, L"Some parts could not be changed.");
 
     MessageBoxW(m_hwnd, (head + L"\r\n\r\n" + report).c_str(), L"ArchiveFldr",
-                MB_OK | (allOk ? MB_ICONINFORMATION : MB_ICONWARNING));
+                MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONWARNING));
 
     // Tell the shell the association table moved, so open icons and verbs
     // refresh without a sign-out where the shell is willing.
@@ -1148,9 +1163,10 @@ INT_PTR CALLBACK CPageInstall::DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp
 
     if (msg == WM_COMMAND && HIWORD(wp) == BN_CLICKED)
     {
-        if (LOWORD(wp) == IDC_BTN_INSTALL_32) { p->Run(true,  false); return TRUE; }
-        if (LOWORD(wp) == IDC_BTN_INSTALL_64) { p->Run(true,  true);  return TRUE; }
-        if (LOWORD(wp) == IDC_BTN_UNINSTALL)  { p->Run(false, false); return TRUE; }
+        if (LOWORD(wp) == IDC_BTN_INSTALL_32)   { p->Run(true,  false); return TRUE; }
+        if (LOWORD(wp) == IDC_BTN_INSTALL_64)   { p->Run(true,  true);  return TRUE; }
+        if (LOWORD(wp) == IDC_BTN_UNINSTALL_32) { p->Run(false, false); return TRUE; }
+        if (LOWORD(wp) == IDC_BTN_UNINSTALL_64) { p->Run(false, true);  return TRUE; }
     }
     return FALSE;
 }

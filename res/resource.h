@@ -89,20 +89,23 @@
 #define IDC_BTN_WORKDIR             1034
 
 // ── Settings page ─────────────────────────────────────────
-// Install is per bitness, and installs the base shell extension only:
-// the right-click menu is registered separately by the two ticks on the
-// ArchiveFldr page. Uninstall takes everything, so it stays single.
+// Install and Uninstall are both per bitness, and both act on the base
+// shell extension only: the right-click menu is registered separately
+// by the two ticks on the ArchiveFldr page, and neither button here
+// touches it.
 //
-// 1042 was a single "Install" button covering both bitnesses. It is
-// retired rather than reused: the number is a key in every Lang\<x>.txt
-// on disk, and giving it to another control would put the old caption
-// on the new button in every translation that has not been updated.
+// 1042 and 1043 were a single "Install" and a single "Uninstall"
+// button covering both bitnesses. They are retired rather than reused:
+// each number is a key in every Lang\<x>.txt on disk, and giving one to
+// another control would put the old caption on the new button in every
+// translation that has not been updated.
 #define IDC_GRP_INSTALL             1040
 #define IDC_LBL_INSTALL_STATE       1041
-#define IDC_BTN_UNINSTALL           1043
 #define IDC_LBL_INSTALL_NOTE        1044
 #define IDC_BTN_INSTALL_32          1045
 #define IDC_BTN_INSTALL_64          1046
+#define IDC_BTN_UNINSTALL_32        1047
+#define IDC_BTN_UNINSTALL_64        1048
 
 // ── Language page ─────────────────────────────────────────
 #define IDC_LBL_LANG                1050

@@ -133,6 +133,11 @@ private:
 };
 
 // ── Settings: install / uninstall the shell extension ────
+//
+// Four buttons: install and uninstall, once per bitness. All four act
+// on the base extension only -- browsing archives as folders,
+// thumbnails, preview, Default apps -- because the right-click menu
+// is switched on and off by the two ticks on the ArchiveFldr page.
 class CPageInstall : public ISettingsPage
 {
 public:
@@ -148,10 +153,10 @@ public:
 
 private:
     static INT_PTR CALLBACK DlgProc(HWND, UINT, WPARAM, LPARAM);
-    // install == true registers one bitness, the one x64 names, and
-    // only the base extension: the context menu is the ArchiveFldr
-    // page's business. install == false takes everything out, both
-    // bitnesses at once, and ignores x64.
+    // One bitness, the one x64 names, and only the base extension:
+    // the context menu is the ArchiveFldr page's business in both
+    // directions. install == false removes that same half and leaves
+    // an integrated menu standing.
     void Run(bool install, bool x64);
     void RefreshState();
 

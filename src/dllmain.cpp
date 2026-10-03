@@ -155,37 +155,70 @@ STDAPI DllUnregisterServer()
 // DllInstall — Called by regsvr32 /i (install) /u /i (uninstall)
 //
 // The command line is how an unattended install asks for the same
-// thing the buttons in the settings program do:
+// halves the settings program's buttons do. /n matters: without it
+// regsvr32 calls DllRegisterServer or DllUnregisterServer as well,
+// which would do the whole job either side of this.
 //
-//   regsvr32 /i ArchiveFldr.64.dll                everything
-//   regsvr32 /i:base ArchiveFldr.64.dll           no context menu
-//   regsvr32 /i:contextmenu ArchiveFldr.64.dll    with context menu
+//   regsvr32 /s        ArchiveFldr.64.dll   everything
+//   regsvr32 /s /n /i:base        …         the browsing half only
+//   regsvr32 /s /n /i:contextmenu …         the right-click menu only
+//   regsvr32 /s /u     ArchiveFldr.64.dll   remove everything
+//   regsvr32 /s /u /n /i:base        …      remove the browsing half,
+//                                           leave the menu standing
+//   regsvr32 /s /u /n /i:contextmenu …      remove the menu only
 //
-// It is recorded as a setting and then acted on by RegisterAll, rather
-// than passed down as an argument, because that is where the answer has
-// to live anyway: the other bitness, and the next re-registration,
-// both read it from there. Per bitness, naturally — this DLL can only
-// speak for its own build.
+// Both words are per bitness: this DLL can only speak for its own
+// build. The answer is recorded as a setting as well as acted on,
+// because that is where the next registration -- and the other
+// bitness -- will read it from.
 //
-// Anything else on the command line is a full install, which is what
+// Anything else on the command line is the whole thing, which is what
 // every earlier build did with any command line at all.
 // ─────────────────────────────────────────────────────────
 STDAPI DllInstall(BOOL bInstall, LPCWSTR pszCmdLine)
 {
-    if (!bInstall)
-        return DllUnregisterServer();
+    const bool base = pszCmdLine && _wcsicmp(pszCmdLine, L"base") == 0;
+    const bool ctx  = pszCmdLine && _wcsicmp(pszCmdLine, L"contextmenu") == 0;
 
-    if (pszCmdLine && *pszCmdLine)
+    if (ctx)
     {
         Settings& s = Settings::Get();
-        const bool off = _wcsicmp(pszCmdLine, L"base") == 0 ||
-                         _wcsicmp(pszCmdLine, L"nocontextmenu") == 0;
-        const bool on  = _wcsicmp(pszCmdLine, L"contextmenu") == 0;
-        if (off || on)
+        s.CtxMenuHere() = (bInstall != FALSE);
+        s.Save();
+
+        HRESULT hr;
+        if (bInstall)
         {
-            s.CtxMenuHere() = on;
-            s.Save();
+            wchar_t dllPath[MAX_PATH] = {};
+            GetModuleFileNameW(g_hDllInstance, dllPath, MAX_PATH);
+            hr = CRegistry::RegisterContextMenuOnly(dllPath);
         }
+        else
+        {
+            hr = CRegistry::UnregisterContextMenuOnly();
+        }
+        if (SUCCEEDED(hr))
+            SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+        return hr;
     }
-    return DllRegisterServer();
+
+    if (base)
+    {
+        if (!bInstall)
+        {
+            const HRESULT hr = CRegistry::UnregisterBase();
+            if (SUCCEEDED(hr))
+                SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+            return hr;
+        }
+
+        // A base install is one without a menu, so say so before
+        // registering: RegisterAll reads the flag back.
+        Settings& s = Settings::Get();
+        s.CtxMenuHere() = false;
+        s.Save();
+        return DllRegisterServer();
+    }
+
+    return bInstall ? DllRegisterServer() : DllUnregisterServer();
 }

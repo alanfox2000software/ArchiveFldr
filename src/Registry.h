@@ -8,6 +8,26 @@ public:
     static HRESULT RegisterAll  (const wchar_t* dllPath);
     static HRESULT UnregisterAll();
 
+    // ── The two halves, separately ───────────────────────
+    //
+    // The browsing extension and the right-click menu are installed
+    // and removed independently, per bitness: the Settings page has an
+    // Install and an Uninstall button for each build of the DLL, and
+    // the ArchiveFldr page has a tick for each build's context menu.
+    // regsvr32 /n /i:base and /n /i:contextmenu reach the same code.
+    //
+    // UnregisterBase leaves the context menu standing when this build
+    // still wants it (Settings::CtxMenuHere), which is what makes
+    // "Uninstall 64-bit" remove the browsing half and nothing else.
+    static HRESULT UnregisterBase();
+
+    // Just the context menu handler: its COM registration in this
+    // build's view of the registry, and the shellex keys that name it.
+    // Nothing here touches the namespace extension, the file type
+    // junctions or the Default apps entry.
+    static HRESULT RegisterContextMenuOnly  (const wchar_t* dllPath);
+    static HRESULT UnregisterContextMenuOnly();
+
     // Windows "Default apps" integration. Publishing a Capabilities key
     // under HKLM\SOFTWARE\RegisteredApplications is what puts ArchiveFldr
     // in the Default apps list, so the user can hand it a file type that
@@ -26,6 +46,22 @@ public:
     static void    RefreshOpenWithProgids();
 
 private:
+    // Shared body of UnregisterAll and UnregisterBase.
+    //
+    // keepContextMenu keeps this build's context menu COM registration,
+    // and the shellex keys that name it, out of the sweep. What else
+    // comes out depends on the other build: the keys under
+    // Software\Classes are one set that WOW64 shows to both, so they
+    // are only removed when nothing of the other bitness is standing
+    // on them.
+    static HRESULT UnregisterInternal(bool keepContextMenu);
+
+    // Everything of ours that lives in one view of the registry: COM
+    // servers, Approved entries, the preview handler list, the legacy
+    // overlay entries. keepContextMenu spares the one handler that is
+    // allowed to outlive the rest.
+    static void    UnregisterOwnServers(bool keepContextMenu);
+
     static HRESULT RegisterCOMServer   (const CLSID&, const wchar_t* name,
                                         const wchar_t* dllPath,
                                         const wchar_t* threadModel = L"Apartment");

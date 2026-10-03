@@ -113,28 +113,41 @@ writes only `Release\x64` (or `Debug\x64`) — it does not also build the
 
 Only the DLLs are registered. The settings program is an ordinary
 executable that the DLL starts on demand, which keeps the whole Options
-window out of every process that loads a context menu. Its **Install
-32-bit** and **Install 64-bit** buttons register whichever of the two
-DLLs they find next to themselves, each with the matching `regsvr32`,
-so keep them together.
+window out of every process that loads a context menu. Its four
+buttons — **Install 32-bit**, **Install 64-bit**, **Uninstall 32-bit**,
+**Uninstall 64-bit** — act on whichever of the two DLLs they find next
+to themselves, each with the matching `regsvr32`, so keep them
+together.
 
-Those two buttons install the *base* extension: browsing archives as
-folders, thumbnails, preview, and the Default apps entry. They
-deliberately leave the right-click menu alone, because that is a
-separate switch per bitness — the two **Integrate to shell context
-menu** ticks on the ArchiveFldr page, which are applied by registering
-that DLL again. The same choice is available to an unattended install
-through `regsvr32 /i`:
+All four act on the *base* extension: browsing archives as folders,
+thumbnails, preview, and the Default apps entry. None of them touches
+the right-click menu, which is a separate switch per bitness — the two
+**Integrate to shell context menu** ticks on the ArchiveFldr page. So
+uninstalling the 64-bit extension leaves an integrated 64-bit menu
+standing until its tick is cleared, and installing never adds one that
+was not asked for.
+
+The same halves are available to an unattended install. `/n` is what
+keeps `regsvr32` from doing the whole job as well:
 
 ```
-regsvr32 /s /i             ArchiveFldr.64.dll   rem everything
-regsvr32 /s /i:base        ArchiveFldr.64.dll   rem no context menu
-regsvr32 /s /i:contextmenu ArchiveFldr.64.dll   rem with context menu
+regsvr32 /s                   ArchiveFldr.64.dll   rem everything
+regsvr32 /s /n /i:base        ArchiveFldr.64.dll   rem browsing half only
+regsvr32 /s /n /i:contextmenu ArchiveFldr.64.dll   rem menu only
+regsvr32 /s /u                ArchiveFldr.64.dll   rem remove everything
+regsvr32 /s /u /n /i:base        ArchiveFldr.64.dll
+regsvr32 /s /u /n /i:contextmenu ArchiveFldr.64.dll
 ```
 
 Plain `regsvr32 ArchiveFldr.64.dll` with no `/i` follows whatever those
 ticks already say, and on a machine that has never run the settings
 program that means everything, exactly as it always did.
+
+A per-bitness uninstall only sweeps the keys the other build is not
+standing on. The file type registrations under `HKLM\Software\Classes`
+are one set that WOW64 shows to both builds, so removing the 64-bit
+extension while the 32-bit one is registered leaves them alone and
+takes out only the 64-bit COM registrations.
 
 Everything the settings program writes is machine-wide —
 `HKLM\SOFTWARE\ArchiveFldr` for preferences, `HKLM\SOFTWARE\Classes`

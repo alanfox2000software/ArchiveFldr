@@ -326,6 +326,84 @@ HRESULT CRegistry::RegisterNamespaceFolder(const wchar_t* dllPath)
 // to compress.
 static const wchar_t* const kAllFilesBases[] = { L"*", L"Directory" };
 
+// ─────────────────────────────────────────────────────────
+// What the other build has registered
+//
+// Two things in this file have to know: a per-bitness uninstall must
+// not sweep keys the other build is still standing on, and the shellex
+// keys that name our context menu handler are one set shared by both
+// views of the registry, so they may only be written or removed on
+// behalf of everybody who wants them.
+//
+// Asking the registry rather than the settings, because this is a
+// question about what is installed, not about what someone ticked. A
+// flag set for a bitness that was never installed must not keep keys
+// alive, and a bitness installed by hand must not have its keys pulled
+// out from under it.
+//
+// There is only an "other build" on 64-bit Windows. A 32-bit Windows
+// has a single view and ignores KEY_WOW64_64KEY, so the probe would
+// find this very build and cheerfully answer its own question with
+// yes.
+// ─────────────────────────────────────────────────────────
+static bool OtherViewHasServer(const CLSID& clsid)
+{
+#ifdef _WIN64
+    const REGSAM other = KEY_WOW64_32KEY;
+#else
+    if (!SysInfo::Is64BitWindows()) return false;
+    const REGSAM other = KEY_WOW64_64KEY;
+#endif
+
+    wchar_t sid[64] = {};
+    if (!StringFromGUID2(clsid, sid, ARRAYSIZE(sid))) return false;
+
+    const std::wstring key =
+        std::wstring(L"Software\\Classes\\CLSID\\") + sid + L"\\InProcServer32";
+
+    HKEY hk = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key.c_str(), 0,
+                      KEY_QUERY_VALUE | other, &hk) != ERROR_SUCCESS)
+        return false;
+
+    // One element of slack in a zeroed buffer: see ReadRegStr.
+    wchar_t buf[MAX_PATH * 2 + 1] = {};
+    DWORD cb = sizeof(buf) - sizeof(wchar_t);
+    const bool got = RegQueryValueExW(hk, nullptr, nullptr, nullptr,
+                                      (BYTE*)buf, &cb) == ERROR_SUCCESS;
+    RegCloseKey(hk);
+    return got && buf[0] != L'\0';
+}
+
+// Does this key exist at all? Used before putting a context menu entry
+// under a file type: RegCreateKeyEx would conjure up the whole ProgID
+// tree as a side effect, and a menu-only install has no business
+// creating file types.
+static bool KeyExists(const std::wstring& path)
+{
+    HKEY hk = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, path.c_str(), 0,
+                      KEY_QUERY_VALUE, &hk) != ERROR_SUCCESS)
+        return false;
+    RegCloseKey(hk);
+    return true;
+}
+
+// The three places a file type carries our context menu entry: its
+// ProgID, the extension itself, and SystemFileAssociations.
+static std::vector<std::wstring> PerTypeMenuBases()
+{
+    std::vector<std::wstring> out;
+    for (const auto* f : Formats::Registrable())
+    {
+        out.push_back(std::wstring(L"Software\\Classes\\") + f->progId);
+        out.push_back(std::wstring(L"Software\\Classes\\") + f->ext);
+        out.push_back(std::wstring(L"Software\\Classes\\SystemFileAssociations\\")
+                      + f->ext);
+    }
+    return out;
+}
+
 HRESULT CRegistry::RegisterShellExOnBase(const std::wstring& base,
                                          bool withContextMenu)
 {
@@ -1021,6 +1099,61 @@ HRESULT CRegistry::UnregisterCapabilities()
 }
 
 // ─────────────────────────────────────────────────────────
+// The context menu, on its own
+//
+// What the two "Integrate to shell context menu" ticks on the
+// ArchiveFldr page apply, and what regsvr32 /n /i:contextmenu does.
+// Deliberately narrow: the COM registration in this build's view of
+// the registry, and the shellex keys that name it. The namespace
+// extension, the file type junctions and the Default apps entry are
+// the Install buttons' business, and a tick must not install or
+// uninstall any of them.
+// ─────────────────────────────────────────────────────────
+HRESULT CRegistry::RegisterContextMenuOnly(const wchar_t* dllPath)
+{
+    RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrContextMenu,
+        L"ArchiveFldr Context Menu Handler", dllPath));
+    RETURN_IF_FAILED(RegisterApproved(CLSID_ArchiveFldrContextMenu,
+        L"ArchiveFldr Context Menu Handler"));
+
+    FirstFailure keep;
+
+    // Every file and every folder. This is the whole menu as far as a
+    // selection is concerned, and it is all an integration that has no
+    // base install behind it can rely on.
+    for (const wchar_t* base : kAllFilesBases)
+        keep(RegisterContextMenuOnBase(std::wstring(L"Software\\Classes\\") + base));
+
+    // The per-type entries as well, but only where the base install
+    // has already made that key: see KeyExists.
+    for (const std::wstring& base : PerTypeMenuBases())
+        if (KeyExists(base))
+            keep(RegisterContextMenuOnBase(base));
+
+    return keep.hr;
+}
+
+HRESULT CRegistry::UnregisterContextMenuOnly()
+{
+    // This build's own COM registration, in this build's own view.
+    UnregisterApproved(CLSID_ArchiveFldrContextMenu);
+    UnregisterCOMServer(CLSID_ArchiveFldrContextMenu);
+
+    // The keys that name it are shared between the two views, so they
+    // only come out once nobody is behind them.
+    if (OtherViewHasServer(CLSID_ArchiveFldrContextMenu))
+        return S_OK;
+
+    for (const wchar_t* base : kAllFilesBases)
+        UnregisterContextMenuOnBase(std::wstring(L"Software\\Classes\\") + base);
+
+    for (const std::wstring& base : PerTypeMenuBases())
+        UnregisterContextMenuOnBase(base);
+
+    return S_OK;
+}
+
+// ─────────────────────────────────────────────────────────
 // RegisterAll
 // ─────────────────────────────────────────────────────────
 HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
@@ -1044,13 +1177,13 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
     //             Those live under Software\Classes\<type>, which WOW64
     //             shares between both views, so they belong to whichever
     //             bitness still wants them. Removing them while the
-    //             other bitness is integrated would quietly take its
-    //             menu away too. A flag left set for a bitness that is
-    //             not installed only leaves a key naming a CLSID nobody
-    //             answers for, which the shell skips; uninstalling
-    //             clears both flags and the keys with them.
+    //             other build's handler is registered would quietly take
+    //             its menu away too, which is why the other half of that
+    //             answer comes from the registry rather than from a flag
+    //             that may describe a bitness nobody ever installed.
     const bool ctxHere = Settings::Get().CtxMenuHere();
-    const bool ctxAny  = Settings::Get().CtxMenuAnywhere();
+    const bool ctxAny  = ctxHere ||
+                         OtherViewHasServer(CLSID_ArchiveFldrContextMenu);
 
     // 1. COM servers
     RETURN_IF_FAILED(RegisterCOMServer(CLSID_ArchiveFldrFolder,
@@ -1184,17 +1317,66 @@ HRESULT CRegistry::RegisterAll(const wchar_t* dllPath)
 }
 
 // ─────────────────────────────────────────────────────────
-// UnregisterAll
+// UnregisterAll / UnregisterBase
+//
+// Two entry points, one body. The whole extension comes out for
+// regsvr32 /u; the browsing half alone comes out for the Settings
+// page's "Uninstall 32-bit" / "Uninstall 64-bit" buttons, which leave
+// the right-click menu exactly as the ArchiveFldr page's ticks left
+// it.
 // ─────────────────────────────────────────────────────────
 HRESULT CRegistry::UnregisterAll()
 {
+    return UnregisterInternal(false);
+}
+
+HRESULT CRegistry::UnregisterBase()
+{
+    // The menu is this build's own decision, and uninstalling the half
+    // that browses archives is not a change of mind about it.
+    return UnregisterInternal(Settings::Get().CtxMenuHere());
+}
+
+HRESULT CRegistry::UnregisterInternal(bool keepContextMenu)
+{
+    // How far this is allowed to reach.
+    //
+    // Our CLSIDs, the Approved list and the preview handler list are
+    // per registry view, so they are this build's own and always go.
+    // The rest -- ProgIDs, extensions, SystemFileAssociations, "*",
+    // "Directory", the Default apps entry -- is one set of keys that
+    // WOW64 shows to both builds. Sweeping those while the other build
+    // is still registered is exactly how a single Uninstall button
+    // used to break the install it was not asked about.
+    const bool sweepShared = !OtherViewHasServer(CLSID_ArchiveFldrFolder);
+
+    // The menu keys are shared in the same way, and wanted by whoever
+    // still has a handler registered for them.
+    const bool keepMenuKeys = keepContextMenu ||
+                              OtherViewHasServer(CLSID_ArchiveFldrContextMenu);
+
     // Stop advertising in Settings > Default apps first, so the entry does
     // not linger pointing at file types we are about to release.
-    UnregisterCapabilities();
+    if (sweepShared)
+        UnregisterCapabilities();
 
     // The all-files / all-folders context menu.
-    for (const wchar_t* base : kAllFilesBases)
-        UnregisterContextMenuOnBase(std::wstring(L"Software\\Classes\\") + base);
+    if (!keepMenuKeys)
+        for (const wchar_t* base : kAllFilesBases)
+            UnregisterContextMenuOnBase(std::wstring(L"Software\\Classes\\") + base);
+
+    if (!sweepShared)
+    {
+        // The other build still needs the file types. Take out this
+        // build's own registrations below, and nothing else -- except
+        // the menu entries on those types, if the menu is going.
+        if (!keepMenuKeys)
+            for (const std::wstring& base : PerTypeMenuBases())
+                UnregisterContextMenuOnBase(base);
+
+        UnregisterOwnServers(keepContextMenu);
+        return S_OK;
+    }
 
     // The application registrations older builds wrote for the settings
     // program and for the open helper.
@@ -1246,14 +1428,26 @@ HRESULT CRegistry::UnregisterAll()
         }
     }
 
-    // PreviewHandlers list
+    UnregisterOwnServers(keepContextMenu);
+
+    return S_OK;
+}
+
+// Everything of ours that lives in one view of the registry, so all of
+// it this build's own however much of the other build is standing:
+// our COM registrations, their Approved entries, the preview handler
+// list and the overlay entries older builds wrote. The context menu
+// handler is the one that can outlive the rest -- an integration with
+// no browsing half behind it is a state the Settings page can produce
+// on purpose.
+void CRegistry::UnregisterOwnServers(bool keepContextMenu)
+{
     UnregisterPreviewHandlerEntry();
 
     UnregisterOverlay(CLSID_ArchiveFldrIconOverlay, L" ArchiveFldr_Archive");
     UnregisterOverlay(CLSID_ArchiveFldrIconOverlay, L"ArchiveFldr_Archive");
 
     UnregisterApproved(CLSID_ArchiveFldrFolder);
-    UnregisterApproved(CLSID_ArchiveFldrContextMenu);
     UnregisterApproved(CLSID_ArchiveFldrIconOverlay);
     UnregisterApproved(CLSID_ArchiveFldrDropTarget);
     UnregisterApproved(CLSID_ArchiveFldrThumbnail);
@@ -1261,12 +1455,13 @@ HRESULT CRegistry::UnregisterAll()
     UnregisterApproved(CLSID_ArchiveFldrPropSheet);
 
     UnregisterCOMServer(CLSID_ArchiveFldrFolder);
-    UnregisterCOMServer(CLSID_ArchiveFldrContextMenu);
     UnregisterCOMServer(CLSID_ArchiveFldrIconOverlay);
     UnregisterCOMServer(CLSID_ArchiveFldrDropTarget);
     UnregisterCOMServer(CLSID_ArchiveFldrThumbnail);
     UnregisterCOMServer(CLSID_ArchiveFldrPreview);
     UnregisterCOMServer(CLSID_ArchiveFldrPropSheet);
 
-    return S_OK;
+    if (keepContextMenu) return;
+    UnregisterApproved(CLSID_ArchiveFldrContextMenu);
+    UnregisterCOMServer(CLSID_ArchiveFldrContextMenu);
 }

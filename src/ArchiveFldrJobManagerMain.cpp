@@ -101,12 +101,22 @@ static DWORD WINAPI PipeThread(void*)
             type == ArchiveJobProtocol::MessageType::Submit) {
             ArchiveJobProtocol::JobRequest request;
             if (ArchiveJobProtocol::Decode(payload, request)) {
-                std::wstring reply = L"id=" + ArchiveJobProtocol::GuidText(request.id) + L"\nstate=queued\n";
+                std::wstring reply;
                 EnterCriticalSection(&g_queueLock);
+                if (g_queue.size() >= 128) {
+                    reply = L"state=failed\nerror=job queue is full\n";
+                    LeaveCriticalSection(&g_queueLock);
+                    ArchiveJobPipe::Send(server.Handle(), ArchiveJobProtocol::MessageType::State, reply);
+                    continue;
+                }
+                reply = L"id=" + ArchiveJobProtocol::GuidText(request.id) + L"\nstate=queued\n";
                 g_queue.push_back(request);
                 SetEvent(g_queueEvent);
                 LeaveCriticalSection(&g_queueLock);
                 ArchiveJobPipe::Send(server.Handle(), ArchiveJobProtocol::MessageType::State, reply);
+            } else {
+                ArchiveJobPipe::Send(server.Handle(), ArchiveJobProtocol::MessageType::State,
+                                     L"state=failed\nerror=invalid job request\n");
             }
         } else if (type == ArchiveJobProtocol::MessageType::Control) {
             GUID id{}; ArchiveJobProtocol::ParseGuid(ArchiveJobProtocol::Get(payload,L"id"), id);

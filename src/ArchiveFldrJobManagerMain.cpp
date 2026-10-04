@@ -17,21 +17,51 @@ static CRITICAL_SECTION g_eventLock;
 static std::vector<ArchiveJobProtocol::JobRequest> g_queue;
 struct Subscriber
 {
+    struct PendingMessage
+    {
+        ArchiveJobProtocol::MessageType type{};
+        std::wstring payload;
+        bool critical = false;
+    };
     HANDLE pipe = INVALID_HANDLE_VALUE;
     bool connected = true;
+    std::deque<PendingMessage> pending;
+    size_t pendingBytes = 0;
+    static constexpr size_t kMaxPendingMessages = 256;
+    static constexpr size_t kMaxPendingBytes = 4 * 1024 * 1024;
 };
 static std::vector<Subscriber*> g_eventClients;
+
+static bool EnqueueMessage(Subscriber& subscriber, ArchiveJobProtocol::MessageType type, const std::wstring& payload)
+{
+    const bool critical = type != ArchiveJobProtocol::MessageType::Progress;
+    const size_t bytes = payload.size() * sizeof(wchar_t);
+    while ((subscriber.pending.size() >= Subscriber::kMaxPendingMessages ||
+            subscriber.pendingBytes + bytes > Subscriber::kMaxPendingBytes) && !subscriber.pending.empty()) {
+        auto it = std::find_if(subscriber.pending.begin(), subscriber.pending.end(),
+            [](const Subscriber::PendingMessage& m) { return !m.critical; });
+        if (it == subscriber.pending.end()) {
+            if (!critical) return false;
+            return false;
+        }
+        subscriber.pendingBytes -= it->payload.size() * sizeof(wchar_t);
+        subscriber.pending.erase(it);
+    }
+    subscriber.pending.push_back({type, payload, critical});
+    subscriber.pendingBytes += bytes;
+    return true;
+}
 
 static void BroadcastEvent(ArchiveJobProtocol::MessageType type, const std::wstring& payload)
 {
     EnterCriticalSection(&g_eventLock);
     for(auto it=g_eventClients.begin(); it!=g_eventClients.end();) {
         Subscriber* subscriber=*it;
-        if(!subscriber->connected || !ArchiveJobPipe::Send(subscriber->pipe,type,payload)){
+        if(!subscriber->connected || !EnqueueMessage(*subscriber,type,payload) || subscriber->pending.empty() || !ArchiveJobPipe::Send(subscriber->pipe,subscriber->pending.front().type,subscriber->pending.front().payload)){
             subscriber->connected=false;
             DisconnectNamedPipe(subscriber->pipe); CloseHandle(subscriber->pipe);
             delete subscriber; it=g_eventClients.erase(it);
-        } else ++it;
+        } else { subscriber->pendingBytes -= subscriber->pending.front().payload.size()*sizeof(wchar_t); subscriber->pending.pop_front(); ++it; }
     }
     LeaveCriticalSection(&g_eventLock);
 }

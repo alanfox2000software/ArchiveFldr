@@ -24,4 +24,10 @@ bool Submit(const ArchiveJobProtocol::JobRequest& request)
     ArchiveJobPipe::Client client;if(!EnsureManager()||!client.Connect(5000))return false;
     return ArchiveJobPipe::Send(client.Handle(),ArchiveJobProtocol::MessageType::Submit,ArchiveJobProtocol::Encode(request));
 }
+bool Control(const GUID& id, ArchiveJobProtocol::Control command)
+{
+    ArchiveJobPipe::Client client; if(!EnsureManager()||!client.Connect(5000)) return false;
+    std::wstring payload=L"id="+ArchiveJobProtocol::GuidText(id)+L"\ncommand="+std::to_wstring((uint32_t)command)+L"\n";
+    return ArchiveJobPipe::Send(client.Handle(),ArchiveJobProtocol::MessageType::Control,payload);
+}
 }

@@ -4,4 +4,5 @@ namespace ArchiveJobClient
 {
 bool EnsureManager();
 bool Submit(const ArchiveJobProtocol::JobRequest& request);
+bool Control(const GUID& id, ArchiveJobProtocol::Control command);
 }

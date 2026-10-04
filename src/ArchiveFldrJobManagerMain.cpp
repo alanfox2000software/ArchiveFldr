@@ -81,6 +81,10 @@ static DWORD WINAPI PipeThread(void*)
                 LeaveCriticalSection(&g_queueLock);
                 ArchiveJobPipe::Send(server.Handle(), ArchiveJobProtocol::MessageType::State, reply);
             }
+        } else if (type == ArchiveJobProtocol::MessageType::Control) {
+            GUID id{}; ArchiveJobProtocol::ParseGuid(ArchiveJobProtocol::Get(payload,L"id"), id);
+            auto command=(ArchiveJobProtocol::Control)_wtoi(ArchiveJobProtocol::Get(payload,L"command").c_str());
+            if(command==ArchiveJobProtocol::Control::Cancel){EnterCriticalSection(&g_queueLock);for(auto it=g_queue.begin();it!=g_queue.end();)if(IsEqualGUID(it->id,id))it=g_queue.erase(it);else++it;for(auto&a:g_active)if(IsEqualGUID(a.id,id))TerminateProcess(a.process,ERROR_CANCELLED);LeaveCriticalSection(&g_queueLock);}
         }
     }
     return 0;

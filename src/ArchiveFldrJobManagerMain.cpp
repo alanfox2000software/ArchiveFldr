@@ -1,6 +1,30 @@
 #include "stdafx.h"
 #include <shellapi.h>
 #include "../res/resource.h"
+#include "ArchiveJobPipe.h"
+
+static HANDLE g_stop = nullptr;
+static HANDLE g_serverThread = nullptr;
+
+static DWORD WINAPI PipeThread(void*)
+{
+    while (WaitForSingleObject(g_stop, 0) != WAIT_OBJECT_0) {
+        ArchiveJobPipe::Server server;
+        if (!server.Listen()) break;
+        if (!server.Accept()) continue;
+        ArchiveJobProtocol::MessageType type{}; std::wstring payload;
+        if (ArchiveJobPipe::Receive(server.Handle(), type, payload) &&
+            type == ArchiveJobProtocol::MessageType::Submit) {
+            ArchiveJobProtocol::JobRequest request;
+            if (ArchiveJobProtocol::Decode(payload, request)) {
+                std::wstring reply = L"id=" + ArchiveJobProtocol::GuidText(request.id) + L"\nstate=queued\n";
+                ArchiveJobPipe::Send(server.Handle(), ArchiveJobProtocol::MessageType::State, reply);
+                // Dispatching the queued request to a worker is the next job-manager phase.
+            }
+        }
+    }
+    return 0;
+}
 
 static const wchar_t* kClass = L"ArchiveFldrJobManagerWindow";
 static const UINT WM_TRAY = WM_APP + 1;
@@ -16,7 +40,7 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
     if (msg == WM_COMMAND && LOWORD(wp) == ID_TRAY) { ShowWindow(hwnd, SW_SHOW); return 0; }
     if (msg == WM_CLOSE) { ShowWindow(hwnd, SW_HIDE); return 0; }
-    if (msg == WM_DESTROY) { Shell_NotifyIconW(NIM_DELETE, &g_tray); PostQuitMessage(0); return 0; }
+    if (msg == WM_DESTROY) { Shell_NotifyIconW(NIM_DELETE, &g_tray); if (g_stop) { SetEvent(g_stop); HANDLE wake = CreateFileW(ArchiveJobProtocol::kPipeName, GENERIC_READ|GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr); if (wake != INVALID_HANDLE_VALUE) CloseHandle(wake); } if (g_serverThread) { WaitForSingleObject(g_serverThread, 3000); CloseHandle(g_serverThread); g_serverThread = nullptr; } PostQuitMessage(0); return 0; }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
@@ -40,7 +64,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     if (!g_tray.hIcon) g_tray.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     wcscpy_s(g_tray.szTip, L"ArchiveFldr jobs");
     Shell_NotifyIconW(NIM_ADD, &g_tray);
-    ShowWindow(hwnd, show == SW_SHOW ? SW_HIDE : SW_HIDE);
+    g_stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!g_stop) return 1;
+    g_serverThread = CreateThread(nullptr, 0, PipeThread, nullptr, 0, nullptr);
+    ShowWindow(hwnd, SW_HIDE);
     MSG msg{}; while (GetMessageW(&msg, nullptr, 0, 0) > 0) { TranslateMessage(&msg); DispatchMessageW(&msg); }
     CloseHandle(g_mutex); return 0;
 }

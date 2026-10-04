@@ -22,7 +22,13 @@ bool EnsureManager()
 bool Submit(const ArchiveJobProtocol::JobRequest& request)
 {
     ArchiveJobPipe::Client client;if(!EnsureManager()||!client.Connect(5000))return false;
-    return ArchiveJobPipe::Send(client.Handle(),ArchiveJobProtocol::MessageType::Submit,ArchiveJobProtocol::Encode(request));
+    if (!ArchiveJobPipe::Send(client.Handle(), ArchiveJobProtocol::MessageType::Submit,
+                              ArchiveJobProtocol::Encode(request))) return false;
+    ArchiveJobProtocol::MessageType type{}; std::wstring reply;
+    if (!ArchiveJobPipe::Receive(client.Handle(), type, reply) ||
+        type != ArchiveJobProtocol::MessageType::State) return false;
+    return ArchiveJobProtocol::Get(reply, L"id") == ArchiveJobProtocol::GuidText(request.id) &&
+           ArchiveJobProtocol::Get(reply, L"state") == L"queued";
 }
 bool Control(const GUID& id, ArchiveJobProtocol::Control command)
 {

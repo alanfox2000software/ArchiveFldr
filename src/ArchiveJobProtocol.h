@@ -92,6 +92,10 @@ inline bool Decode(const std::wstring& p, Progress& v)
 {
     if (!ParseGuid(Get(p,L"id"),v.id)) return false; v.state=(JobState)_wtoi(Get(p,L"state").c_str()); v.completed=_wtoi64(Get(p,L"completed").c_str()); v.total=_wtoi64(Get(p,L"total").c_str()); v.percent=_wtoi(Get(p,L"percent").c_str()); v.current=Get(p,L"current"); v.error=Get(p,L"error"); return true;
 }
+inline std::wstring EncodeResult(const GUID& id, JobState state, DWORD exitCode, const std::wstring& error = L"")
+{
+    std::wstring p; Put(p,L"id",GuidText(id)); Put(p,L"state",(uint64_t)state); Put(p,L"exitCode",(uint64_t)exitCode); Put(p,L"error",error); return p;
+}
 inline bool Decode(const std::wstring& p, JobRequest& j)
 {
     if (!ParseGuid(Get(p,L"id"),j.id)) return false; j.kind=(JobKind)_wtoi(Get(p,L"kind").c_str()); j.output=Get(p,L"output"); j.archive=Get(p,L"archive"); j.entry=Get(p,L"entry"); j.format=Get(p,L"format"); j.level=_wtoi(Get(p,L"level").c_str()); j.threads=_wtoi(Get(p,L"threads").c_str()); j.solid=_wtoi(Get(p,L"solid").c_str())!=0; j.encryptNames=_wtoi(Get(p,L"encryptNames").c_str())!=0; j.password=Get(p,L"password"); size_t at=0; while((at=p.find(L"source=",at))!=std::wstring::npos){size_t e=p.find(L'\n',at);j.sources.push_back(Unescape(p.substr(at+7,(e==std::wstring::npos?p.size():e)-at-7)));at=e==std::wstring::npos?p.size():e+1;} return !j.output.empty() || !j.archive.empty();

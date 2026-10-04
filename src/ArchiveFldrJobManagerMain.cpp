@@ -18,7 +18,8 @@ static std::wstring QuoteArg(const std::wstring& v)
 }
 struct ActiveJob { GUID id{}; HANDLE process = nullptr; HANDLE output = nullptr; ArchiveJobProtocol::JobKind kind{}; int percent = 0; std::wstring current; ArchiveJobProtocol::JobState state = ArchiveJobProtocol::JobState::Running; std::wstring outputPath; bool outputExisted = false; };
 static std::vector<ActiveJob> g_active;
-static std::map<std::wstring, DWORD> g_finishedResults;
+struct FinishedResult { ArchiveJobProtocol::JobState state; DWORD exitCode; std::wstring error; };
+static std::map<std::wstring, FinishedResult> g_finishedResults;
 static constexpr size_t kMaxCompressJobs = 1;
 static constexpr size_t kMaxExtractJobs = 2;
 static bool HasCapacity(ArchiveJobProtocol::JobKind kind)
@@ -68,7 +69,7 @@ static DWORD WINAPI WorkerMonitor(void* raw)
     DWORD exitCode = 1; GetExitCodeProcess(job->process, &exitCode);
     const std::wstring id = ArchiveJobProtocol::GuidText(job->id);
     EnterCriticalSection(&g_queueLock);
-    g_finishedResults[id] = exitCode;
+    FinishedResult result{}; result.exitCode = exitCode; result.state = exitCode == 0 ? ArchiveJobProtocol::JobState::Completed : (exitCode == ERROR_CANCELLED ? ArchiveJobProtocol::JobState::Cancelled : ArchiveJobProtocol::JobState::Failed); g_finishedResults[id] = result;
     if (exitCode != 0 && exitCode != ERROR_CANCELLED) {
         OutputDebugStringW((L"ArchiveFldr worker failed or crashed: " + id + L" exit=" + std::to_wstring(exitCode) + L"\n").c_str());
     }
@@ -165,7 +166,7 @@ static void RefreshList()
         g_visibleIds.push_back(j.id);
     }
     for (const auto& r : g_finishedResults) {
-        std::wstring row = L"Finished " + r.first + L"  exit=" + std::to_wstring(r.second);
+        std::wstring row = L"Finished " + r.first + L"  exit=" + std::to_wstring(r.second.exitCode);
         SendMessageW(g_list, LB_ADDSTRING, 0, (LPARAM)row.c_str());
     }
     LeaveCriticalSection(&g_queueLock);

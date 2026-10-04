@@ -2378,6 +2378,20 @@ bool C7zArchiveEngine::Open(const std::wstring& path)
                 candidates.push_back(h);
     }
     else candidates = HandlersForExt(ext);
+
+    // Optical images commonly carry both an ISO-9660 compatibility tree and
+    // a UDF tree. Prefer UDF when it is available: it is the authoritative
+    // filesystem on DVD/Blu-ray media and preserves files larger than 4 GiB,
+    // Unicode names and the complete directory layout. A plain ISO simply
+    // makes the UDF handler return S_FALSE and falls through to ISO-9660.
+    if (ext && (_wcsicmp(ext, L".iso") == 0 || _wcsicmp(ext, L".udf") == 0))
+    {
+        auto udf = std::find_if(candidates.begin(), candidates.end(),
+            [](const Handler7z* h) { return _wcsicmp(h->name.c_str(), L"Udf") == 0; });
+        if (udf != candidates.end())
+            std::rotate(candidates.begin(), udf, udf + 1);
+    }
+
     const size_t preferred = candidates.size();
     for (const auto& h : Handlers())
     {

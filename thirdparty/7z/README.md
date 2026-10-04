@@ -52,18 +52,18 @@ thirdparty\brotli\32\libbrotlienc.dll
 thirdparty\brotli\64\libbrotlicommon.dll
 thirdparty\brotli\64\libbrotlidec.dll
 thirdparty\brotli\64\libbrotlienc.dll
-thirdparty\brunsli\liblz4.32.dll
-thirdparty\brunsli\liblz4.64.dll
-thirdparty\brunsli\liblz5.32.dll
-thirdparty\brunsli\liblz5.64.dll
+thirdparty\lz4\liblz4.32.dll
+thirdparty\lz4\liblz4.64.dll
+thirdparty\lz5\liblz5.32.dll
+thirdparty\lz5\liblz5.64.dll
 thirdparty\lizard\liblizard.32.dll
 thirdparty\lizard\liblizard.64.dll
 ```
 
-Only the matching process bitness is loaded. Dedicated `thirdparty\lz4` and
-`thirdparty\lz5` folders remain accepted; `thirdparty\brunsli` is their
-shared fallback location. Lizard creation and extraction support all four
-families: fastLZ4 (levels 10–19), LIZv1 (20–29), fastLZ4 + Huffman (30–39),
+Only the matching process bitness is loaded. LZ4 and LZ5 are loaded from their
+dedicated `thirdparty\lz4` and `thirdparty\lz5` folders, respectively.
+Lizard creation and extraction support all four families: fastLZ4
+(levels 10–19), LIZv1 (20–29), fastLZ4 + Huffman (30–39),
 and LIZv1 + Huffman (40–49). The same choices are available for standalone
 `.liz` streams and Lizard-compressed 7z archives. Official liblizard builds
 that export only the raw block API are supported: ArchiveFldr supplies the

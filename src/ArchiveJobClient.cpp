@@ -26,7 +26,8 @@ bool Submit(const ArchiveJobProtocol::JobRequest& request)
                               ArchiveJobProtocol::Encode(request))) return false;
     if (request.hasPassword) {
         std::wstring secret = L"id=" + ArchiveJobProtocol::GuidText(request.id) + L"\npassword=" + ArchiveJobProtocol::Escape(request.password) + L"\n";
-        if (!ArchiveJobPipe::Send(client.Handle(), ArchiveJobProtocol::MessageType::Password, secret)) return false;
+        if (!ArchiveJobPipe::Send(client.Handle(), ArchiveJobProtocol::MessageType::Password, secret)) { SecureZeroMemory(secret.data(), secret.size()*sizeof(wchar_t)); return false; }
+        SecureZeroMemory(secret.data(), secret.size()*sizeof(wchar_t)); secret.clear();
     }
     ArchiveJobProtocol::MessageType type{}; std::wstring reply;
     if (!ArchiveJobPipe::Receive(client.Handle(), type, reply) ||

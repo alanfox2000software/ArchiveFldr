@@ -143,7 +143,7 @@ static bool HasCapacity(ArchiveJobProtocol::JobKind kind)
     return count < (kind == ArchiveJobProtocol::JobKind::Compress ? kMaxCompressJobs : kMaxExtractJobs);
 }
 
-static HANDLE StartJob(const ArchiveJobProtocol::JobRequest& j, HANDLE* output, HANDLE* cancelEvent)
+static HANDLE StartJob(ArchiveJobProtocol::JobRequest j, HANDLE* output, HANDLE* cancelEvent)
 {
     wchar_t mod[MAX_PATH]={}; if(!GetModuleFileNameW(nullptr,mod,ARRAYSIZE(mod))) return false;
     std::wstring base=mod; size_t slash=base.find_last_of(L"\\/"); base=(slash==std::wstring::npos?L"":base.substr(0,slash+1));
@@ -161,7 +161,7 @@ static HANDLE StartJob(const ArchiveJobProtocol::JobRequest& j, HANDLE* output, 
     if(!j.password.empty()){if(!CreatePipe(&passRead,&passWrite,&sa,0)){CloseHandle(readPipe);CloseHandle(writePipe);return nullptr;}SetHandleInformation(passWrite,HANDLE_FLAG_INHERIT,0);}
     STARTUPINFOW si{};si.cb=sizeof(si);si.dwFlags=STARTF_USESTDHANDLES;si.hStdOutput=writePipe;si.hStdError=writePipe;si.hStdInput=passRead?passRead:GetStdHandle(STD_INPUT_HANDLE);PROCESS_INFORMATION pi{};
     if(!CreateProcessW(exe.c_str(),buf.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,nullptr,&si,&pi)){CloseHandle(readPipe);CloseHandle(writePipe);if(passRead)CloseHandle(passRead);if(passWrite)CloseHandle(passWrite);return nullptr;}
-    CloseHandle(writePipe);if(passRead)CloseHandle(passRead);if(passWrite){DWORD bytes=0;WriteFile(passWrite,j.password.data(),(DWORD)(j.password.size()*sizeof(wchar_t)),&bytes,nullptr);CloseHandle(passWrite);} if(output)*output=readPipe;else CloseHandle(readPipe);if(cancelEvent)*cancelEvent=cancellation;else CloseHandle(cancellation);CloseHandle(pi.hThread);return pi.hProcess;
+    CloseHandle(writePipe);if(passRead)CloseHandle(passRead);if(passWrite){DWORD bytes=0;WriteFile(passWrite,j.password.data(),(DWORD)(j.password.size()*sizeof(wchar_t)),&bytes,nullptr); SecureZeroMemory(j.password.data(), j.password.size()*sizeof(wchar_t)); j.password.clear(); CloseHandle(passWrite);} if(output)*output=readPipe;else CloseHandle(readPipe);if(cancelEvent)*cancelEvent=cancellation;else CloseHandle(cancellation);CloseHandle(pi.hThread);return pi.hProcess;
 }
 static DWORD WINAPI WorkerMonitor(void* raw)
 {

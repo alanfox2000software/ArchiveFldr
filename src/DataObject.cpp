@@ -255,7 +255,9 @@ static bool ExtractInWorker(const std::wstring& archive, const std::wstring& ent
     request.output = dest;
     request.password = password;
     request.hasPassword = !password.empty();
-    if (!ArchiveJobClient::Submit(request)) {
+    const bool submitted = ArchiveJobClient::Submit(request);
+    if (!request.password.empty()) { SecureZeroMemory(request.password.data(), request.password.size()*sizeof(wchar_t)); request.password.clear(); }
+    if (!submitted) {
         if (error) *error = L"Unable to submit extraction job.";
         return false;
     }

@@ -1016,7 +1016,9 @@ static bool StartCompressionWorker(const std::wstring& out, const std::vector<st
     request.encryptNames = o.encryptNames;
     request.password = o.password;
     request.hasPassword = !o.password.empty();
-    return ArchiveJobClient::Submit(request);
+    const bool submitted = ArchiveJobClient::Submit(request);
+    if (!request.password.empty()) { SecureZeroMemory(request.password.data(), request.password.size()*sizeof(wchar_t)); request.password.clear(); }
+    return submitted;
 }
 
 } // namespace

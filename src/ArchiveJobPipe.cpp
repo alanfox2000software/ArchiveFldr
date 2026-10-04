@@ -12,7 +12,22 @@ bool Send(HANDLE pipe, ArchiveJobProtocol::MessageType type, const std::wstring&
 bool Receive(HANDLE pipe, ArchiveJobProtocol::MessageType& type, std::wstring& payload)
 { ArchiveJobProtocol::MessageHeader h{};if(!ReadAll(pipe,&h,sizeof(h))||h.magic!=0x314A4641||h.version!=ArchiveJobProtocol::kProtocolVersion||h.payloadBytes>ArchiveJobProtocol::kMaxPayloadBytes||h.payloadBytes%sizeof(wchar_t))return false;payload.assign(h.payloadBytes/sizeof(wchar_t),L'\0');if(!ReadAll(pipe,payload.data(),h.payloadBytes))return false;type=(ArchiveJobProtocol::MessageType)h.type;return true; }
 Server::~Server(){Close();} void Server::Close(){if(m_pipe!=INVALID_HANDLE_VALUE){DisconnectNamedPipe(m_pipe);CloseHandle(m_pipe);m_pipe=INVALID_HANDLE_VALUE;}}
-bool Server::Listen(){Close();m_pipe=CreateNamedPipeW(ArchiveJobProtocol::kPipeName,PIPE_ACCESS_DUPLEX,PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT,PIPE_UNLIMITED_INSTANCES,ArchiveJobProtocol::kMaxPayloadBytes,ArchiveJobProtocol::kMaxPayloadBytes,0,nullptr);return m_pipe!=INVALID_HANDLE_VALUE;}
+bool Server::Listen(){
+    Close();
+    PSECURITY_DESCRIPTOR descriptor=nullptr;
+    // SYSTEM, administrators, and the creating user (owner) may access the
+    // manager pipe. Authenticated users who are not the owner are excluded.
+    if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)",
+        SDDL_REVISION_1, &descriptor, nullptr)) return false;
+    SECURITY_ATTRIBUTES security{sizeof(security),descriptor,FALSE};
+    m_pipe=CreateNamedPipeW(ArchiveJobProtocol::kPipeName,PIPE_ACCESS_DUPLEX,
+        PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT,PIPE_UNLIMITED_INSTANCES,
+        ArchiveJobProtocol::kMaxPayloadBytes,ArchiveJobProtocol::kMaxPayloadBytes,
+        0,&security);
+    LocalFree(descriptor);
+    return m_pipe!=INVALID_HANDLE_VALUE;
+}
 bool Server::Accept(){return m_pipe!=INVALID_HANDLE_VALUE&&ConnectNamedPipe(m_pipe,nullptr)?true:GetLastError()==ERROR_PIPE_CONNECTED;}
 Client::~Client(){Close();} void Client::Close(){if(m_pipe!=INVALID_HANDLE_VALUE){CloseHandle(m_pipe);m_pipe=INVALID_HANDLE_VALUE;}}
 bool Client::Connect(DWORD timeoutMs){Close();if(!WaitNamedPipeW(ArchiveJobProtocol::kPipeName,timeoutMs))return false;m_pipe=CreateFileW(ArchiveJobProtocol::kPipeName,GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_EXISTING,0,nullptr);return m_pipe!=INVALID_HANDLE_VALUE;}

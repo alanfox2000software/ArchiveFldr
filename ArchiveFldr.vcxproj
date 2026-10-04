@@ -246,7 +246,7 @@
            rather than beside the DLL or loose in the source tree. -->
       <ImportLibrary>$(IntDir)$(TargetName).lib</ImportLibrary>
       <AdditionalDependencies>
-        shlwapi.lib;
+        sddlapi.lib;shlwapi.lib;
         shell32.lib;
         ole32.lib;
         oleaut32.lib;
@@ -322,7 +322,7 @@ exit /b 0</Command>
            rather than beside the DLL or loose in the source tree. -->
       <ImportLibrary>$(IntDir)$(TargetName).lib</ImportLibrary>
       <AdditionalDependencies>
-        shlwapi.lib;
+        sddlapi.lib;shlwapi.lib;
         shell32.lib;
         ole32.lib;
         oleaut32.lib;
@@ -393,7 +393,7 @@ exit /b 0</Command>
            rather than beside the DLL or loose in the source tree. -->
       <ImportLibrary>$(IntDir)$(TargetName).lib</ImportLibrary>
       <AdditionalDependencies>
-        shlwapi.lib;
+        sddlapi.lib;shlwapi.lib;
         shell32.lib;
         ole32.lib;
         oleaut32.lib;
@@ -468,7 +468,7 @@ exit /b 0</Command>
            rather than beside the DLL or loose in the source tree. -->
       <ImportLibrary>$(IntDir)$(TargetName).lib</ImportLibrary>
       <AdditionalDependencies>
-        shlwapi.lib;
+        sddlapi.lib;shlwapi.lib;
         shell32.lib;
         ole32.lib;
         oleaut32.lib;

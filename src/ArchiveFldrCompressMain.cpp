@@ -37,13 +37,14 @@ int wmain(int argc, wchar_t** argv)
     if (out.empty() || sources.empty()) { Usage(); return 2; }
     if (!cancelName.empty()) g_cancelEvent = OpenEventW(SYNCHRONIZE, FALSE, cancelName.c_str());
     opt.format = format;
-    auto items = ArchiveWriter::CollectItems(sources);
+    uint64_t totalBytes = 0;
+    auto items = ArchiveWriter::CollectItems(sources, &totalBytes);
     if (items.empty()) return 3;
     std::wstring error;
     const bool ok = ArchiveWriter::Compress(out, items, opt,
         [](int pct, const std::wstring& name) {
             CheckCancelled();
-            fwprintf(stdout, L"PROGRESS %d %ls\n", pct, name.c_str()); fflush(stdout);
+            fwprintf(stdout, L"PROGRESS %d %llu %llu %ls\n", pct, (unsigned long long)((totalBytes * (uint64_t)pct) / 100), (unsigned long long)totalBytes, name.c_str()); fflush(stdout);
         }, &error);
     if (!ok) { if (!error.empty()) fwprintf(stderr, L"%ls\n", error.c_str()); return 4; }
     SHChangeNotify(SHCNE_CREATE, SHCNF_PATH, out.c_str(), nullptr);

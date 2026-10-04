@@ -71,7 +71,7 @@ int wmain(int argc, wchar_t** argv)
     const bool ok = engine->ExtractFile(entry, dest,
         [](int pct, const std::wstring& name) {
             CheckCancelled();
-            fwprintf(stdout, L"PROGRESS %d %ls\n", pct, name.c_str());
+            fwprintf(stdout, L"PROGRESS %d %llu %llu %ls\n", pct, (unsigned long long)((entry.uncompressedSize * (uint64_t)pct) / 100), (unsigned long long)entry.uncompressedSize, name.c_str());
             fflush(stdout);
         });
     if (!ok) {

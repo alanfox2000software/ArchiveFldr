@@ -41,7 +41,7 @@ static std::wstring QuoteArg(const std::wstring& v)
     for(wchar_t c:v){if(c==L'\\'){++bs;continue;}if(c==L'\"'){s.append(bs*2+1,L'\\');s+=c;bs=0;}else{s.append(bs,L'\\');bs=0;s+=c;}}
     s.append(bs*2,L'\\'); return s+L"\"";
 }
-struct ActiveJob { GUID id{}; HANDLE process = nullptr; HANDLE output = nullptr; HANDLE cancelEvent = nullptr; ArchiveJobProtocol::JobKind kind{}; int percent = 0; std::wstring current; ArchiveJobProtocol::JobState state = ArchiveJobProtocol::JobState::Running; std::wstring outputPath; bool outputExisted = false; };
+struct ActiveJob { GUID id{}; HANDLE process = nullptr; HANDLE output = nullptr; HANDLE cancelEvent = nullptr; ArchiveJobProtocol::JobKind kind{}; int percent = 0; uint64_t completed = 0, total = 0; std::wstring current; ArchiveJobProtocol::JobState state = ArchiveJobProtocol::JobState::Running; std::wstring outputPath; bool outputExisted = false; };
 static std::vector<ActiveJob> g_active;
 struct FinishedResult { ArchiveJobProtocol::JobState state; DWORD exitCode; std::wstring error; };
 static std::map<std::wstring, FinishedResult> g_finishedResults;
@@ -90,14 +90,16 @@ static DWORD WINAPI WorkerMonitor(void* raw)
         while ((end = line.find('\n')) != std::string::npos) {
             std::string one = line.substr(0, end); line.erase(0, end + 1);
             if (one.rfind("PROGRESS ", 0) == 0) {
-                int pct = atoi(one.c_str() + 9); std::wstring current;
-                size_t split = one.find(' ', 9); if (split != std::string::npos) {
-                    std::string name = one.substr(split + 1);
+                int pct=0; unsigned long long completed=0,total=0; char nameBuffer[384]={};
+                sscanf_s(one.c_str(), "PROGRESS %d %llu %llu %383[\\s\\S]", &pct, &completed, &total, nameBuffer, (unsigned)_countof(nameBuffer));
+                std::wstring current;
+                std::string name = nameBuffer;
+                if (!name.empty()) {
                     int n = MultiByteToWideChar(CP_UTF8, 0, name.c_str(), (int)name.size(), nullptr, 0);
                     current.resize(n); if (n) MultiByteToWideChar(CP_UTF8, 0, name.c_str(), (int)name.size(), &current[0], n);
                 }
-                EnterCriticalSection(&g_queueLock); for(auto& a:g_active) if(IsEqualGUID(a.id,job->id)){a.percent=pct;a.current=current;a.state=ArchiveJobProtocol::JobState::Running;} LeaveCriticalSection(&g_queueLock);
-                ArchiveJobProtocol::Progress progress{}; progress.id=job->id; progress.state=ArchiveJobProtocol::JobState::Running; progress.percent=pct; progress.current=current;
+                EnterCriticalSection(&g_queueLock); for(auto& a:g_active) if(IsEqualGUID(a.id,job->id)){a.percent=pct;a.current=current;a.completed=completed;a.total=total;a.state=ArchiveJobProtocol::JobState::Running;} LeaveCriticalSection(&g_queueLock);
+                ArchiveJobProtocol::Progress progress{}; progress.id=job->id; progress.state=ArchiveJobProtocol::JobState::Running; progress.percent=pct; progress.completed=completed; progress.total=total; progress.current=current;
                 BroadcastEvent(ArchiveJobProtocol::MessageType::Progress, ArchiveJobProtocol::Encode(progress));
             }
         }
@@ -260,7 +262,7 @@ static void RefreshList()
     g_visibleIds.clear();
     EnterCriticalSection(&g_queueLock);
     for (const auto& j : g_active) {
-        std::wstring row = std::wstring(StateName(j.state)) + L"  " + ArchiveJobProtocol::GuidText(j.id) + L"  " + std::to_wstring(j.percent) + L"%  " + j.current;
+        std::wstring row = std::wstring(StateName(j.state)) + L"  " + ArchiveJobProtocol::GuidText(j.id) + L"  " + std::to_wstring(j.percent) + L"%  " + std::to_wstring(j.completed) + L"/" + std::to_wstring(j.total) + L" bytes  " + j.current;
         SendMessageW(g_list, LB_ADDSTRING, 0, (LPARAM)row.c_str());
         g_visibleIds.push_back(j.id);
     }

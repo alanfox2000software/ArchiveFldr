@@ -35,6 +35,9 @@ public:
     }
     const wchar_t* Data() const { return m_data ? m_data : L""; }
     size_t Size() const { return m_chars; }
+    // Explicit API-boundary conversion only. The returned copy must be
+    // cleared by the caller with ArchiveSecurity::SecureClear().
+    std::wstring ToWString() const { return m_data ? std::wstring(m_data, m_chars) : std::wstring(); }
     bool Empty() const { return m_chars == 0; }
 private:
     wchar_t* m_data = nullptr;

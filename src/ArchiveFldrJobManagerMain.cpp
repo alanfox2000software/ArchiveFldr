@@ -18,6 +18,13 @@ static std::wstring QuoteArg(const std::wstring& v)
 }
 struct ActiveJob { GUID id{}; HANDLE process = nullptr; HANDLE output = nullptr; ArchiveJobProtocol::JobKind kind{}; int percent = 0; std::wstring current; };
 static std::vector<ActiveJob> g_active;
+static constexpr size_t kMaxCompressJobs = 1;
+static constexpr size_t kMaxExtractJobs = 2;
+static bool HasCapacity(ArchiveJobProtocol::JobKind kind)
+{
+    size_t count = 0; for (const auto& job : g_active) if (job.kind == kind) ++count;
+    return count < (kind == ArchiveJobProtocol::JobKind::Compress ? kMaxCompressJobs : kMaxExtractJobs);
+}
 
 static HANDLE StartJob(const ArchiveJobProtocol::JobRequest& j, HANDLE* output)
 {
@@ -60,7 +67,7 @@ static DWORD WINAPI WorkerMonitor(void* raw)
 
 static DWORD WINAPI QueueThread(void*)
 {
-    while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){WaitForSingleObject(g_queueEvent,500);ArchiveJobProtocol::JobRequest j;bool have=false;EnterCriticalSection(&g_queueLock);if(!g_queue.empty()){j=g_queue.front();g_queue.erase(g_queue.begin());have=true;}if(g_queue.empty())ResetEvent(g_queueEvent);LeaveCriticalSection(&g_queueLock);if(have){HANDLE output=nullptr;HANDLE process=StartJob(j,&output);if(process){auto* active=new ActiveJob;active->id=j.id;active->process=process;active->output=output;active->kind=j.kind;EnterCriticalSection(&g_queueLock);g_active.push_back(*active);LeaveCriticalSection(&g_queueLock);HANDLE monitor=CreateThread(nullptr,0,WorkerMonitor,active,0,nullptr);if(monitor)CloseHandle(monitor);else{EnterCriticalSection(&g_queueLock);if(!g_active.empty())g_active.pop_back();LeaveCriticalSection(&g_queueLock);CloseHandle(process);delete active;}}} }return 0;
+    while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){WaitForSingleObject(g_queueEvent,500);ArchiveJobProtocol::JobRequest j;bool have=false;EnterCriticalSection(&g_queueLock);if(!g_queue.empty()){j=g_queue.front();g_queue.erase(g_queue.begin());have=true;}if(g_queue.empty())ResetEvent(g_queueEvent);LeaveCriticalSection(&g_queueLock);if(have){EnterCriticalSection(&g_queueLock);const bool capacity=HasCapacity(j.kind);if(!capacity){g_queue.insert(g_queue.begin(),j);SetEvent(g_queueEvent);}LeaveCriticalSection(&g_queueLock);if(!capacity){Sleep(250);continue;}HANDLE output=nullptr;HANDLE process=StartJob(j,&output);if(process){auto* active=new ActiveJob;active->id=j.id;active->process=process;active->output=output;active->kind=j.kind;EnterCriticalSection(&g_queueLock);g_active.push_back(*active);LeaveCriticalSection(&g_queueLock);HANDLE monitor=CreateThread(nullptr,0,WorkerMonitor,active,0,nullptr);if(monitor)CloseHandle(monitor);else{EnterCriticalSection(&g_queueLock);if(!g_active.empty())g_active.pop_back();LeaveCriticalSection(&g_queueLock);CloseHandle(process);delete active;}}} }return 0;
 }
 
 static DWORD WINAPI PipeThread(void*)

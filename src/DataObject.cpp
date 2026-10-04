@@ -4,8 +4,6 @@
 #include "SysInfo.h"
 #include "ShellFolder.h"
 #include "ArchiveOps.h"
-#include "ArchiveJobClient.h"
-#include "ArchiveSecurity.h"
 
 // ─────────────────────────────────────────────────────────
 // Clipboard formats (registered once)
@@ -245,51 +243,16 @@ static std::wstring QuoteProcessArg(const std::wstring& value)
     return out;
 }
 
-static bool ExtractInWorker(const std::wstring& archive, const std::wstring& entry,
-                            const std::wstring& dest, const std::wstring& password, std::wstring* error)
+static bool ExtractInWorker(const EnginePtr& engine, const ArchiveEntry& entry,
+                            const std::wstring& dest, HWND owner, std::wstring* error)
 {
-    ArchiveJobProtocol::JobRequest request;
-    CoCreateGuid(&request.id);
-    request.kind = ArchiveJobProtocol::JobKind::Extract;
-    request.archive = archive;
-    request.entry = entry;
-    request.output = dest;
-    request.password = password;
-    request.hasPassword = !password.empty();
-    const bool submitted = ArchiveJobClient::Submit(request);
-    if (!request.password.empty()) ArchiveSecurity::SecureClear(request.password);
-    if (!submitted) {
-        if (error) *error = L"Unable to submit extraction job.";
-        wchar_t detail[256] = {};
-        swprintf_s(detail, L"Unable to submit extraction job.\n\nWin32 error: %lu", GetLastError());
-        MessageBoxW(GetActiveWindow(), detail, L"ArchiveFldr extraction", MB_ICONERROR | MB_OK);
+    if (!engine || !ArchiveOps::EnsureCanRead(owner, engine)) return false;
+    std::wstring produced;
+    if (!ArchiveOps::ExtractEntryPrompting(owner, engine, entry, dest, &produced)) {
+        if (error) *error = engine->GetLastErrorText();
         return false;
     }
-    // Delayed FILECONTENTS rendering needs the completed temporary file.
-    // The extraction itself is owned by the manager/worker process.
-    const std::wstring expected = dest + L"\\" + ArchiveOps::ToWin32(entry);
-    for (int i = 0; i < 3600; ++i) {
-        ArchiveJobProtocol::MessageType type{}; std::wstring status;
-        if (!ArchiveJobClient::Query(request.id, type, status)) {
-            if (error) *error = L"Unable to query extraction job status.";
-            return false;
-        }
-        if (type == ArchiveJobProtocol::MessageType::Result) {
-            const auto state = (ArchiveJobProtocol::JobState)_wtoi(
-                ArchiveJobProtocol::Get(status, L"state").c_str());
-            if (state == ArchiveJobProtocol::JobState::Completed)
-                return GetFileAttributesW(expected.c_str()) != INVALID_FILE_ATTRIBUTES;
-            if (error) {
-                *error = ArchiveJobProtocol::Get(status, L"error");
-                if (error->empty()) *error = L"Extraction failed.";
-                MessageBoxW(GetActiveWindow(), error->c_str(), L"ArchiveFldr extraction", MB_ICONERROR | MB_OK);
-            }
-            return false;
-        }
-        Sleep(100);
-    }
-    if (error) *error = L"Extraction timed out.";
-    return false;
+    return entry.isDirectory || GetFileAttributesW(produced.c_str()) != INVALID_FILE_ATTRIBUTES;
 }
 
 bool CArchiveDataObject::EnsureStaged(Item& it, HWND /*promptOwner*/)
@@ -301,8 +264,7 @@ bool CArchiveDataObject::EnsureStaged(Item& it, HWND /*promptOwner*/)
     std::wstring produced = m_tempRoot + L"\\" + ArchiveOps::ToWin32(it.entry.fullPath);
     SHCreateDirectoryExW(nullptr, m_tempRoot.c_str(), nullptr);
     std::wstring error;
-    if (!ExtractInWorker(m_archivePath, it.entry.fullPath, m_tempRoot,
-                         m_engine ? m_engine->GetPassword() : L"", &error))
+    if (!ExtractInWorker(m_engine, it.entry, m_tempRoot, promptOwner, &error))
         return false;
     if (it.entry.isDirectory) return true;
     if (GetFileAttributesW(produced.c_str()) == INVALID_FILE_ATTRIBUTES) return false;

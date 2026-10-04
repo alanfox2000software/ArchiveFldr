@@ -244,6 +244,7 @@ static DWORD WINAPI PipeThread(void*)
                         continue;
                     }
                     request.password = ArchiveJobProtocol::Unescape(ArchiveJobProtocol::Get(secret,L"password"));
+                    ArchiveSecurity::SecureClear(secret);
                 }
                 std::wstring reply;
                 EnterCriticalSection(&g_queueLock);

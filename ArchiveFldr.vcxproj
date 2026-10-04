@@ -504,6 +504,8 @@ exit /b 0</Command>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
     <!-- Core DLL -->
+    <ClCompile Include="src\ArchiveJobPipe.cpp" />
+    <ClCompile Include="src\ArchiveJobClient.cpp" />
     <ClCompile Include="src\dllmain.cpp" />
     <ClCompile Include="src\ClassFactory.cpp" />
     <ClCompile Include="src\Registry.cpp" />

@@ -126,6 +126,16 @@ static DWORD WINAPI PipeThread(void*)
                 ArchiveJobPipe::Send(server.Handle(), ArchiveJobProtocol::MessageType::State,
                                      L"state=failed\nerror=invalid job request\n");
             }
+        } else if (type == ArchiveJobProtocol::MessageType::List) {
+            GUID id{}; ArchiveJobProtocol::ParseGuid(ArchiveJobProtocol::Get(payload,L"id"), id);
+            const std::wstring key=ArchiveJobProtocol::GuidText(id); bool active=false, queued=false;
+            EnterCriticalSection(&g_queueLock);
+            for(const auto& a:g_active) if(IsEqualGUID(a.id,id)) active=true;
+            for(const auto& q:g_queue) if(IsEqualGUID(q.id,id)) queued=true;
+            auto done=g_finishedResults.find(key);
+            if(done!=g_finishedResults.end()) ArchiveJobPipe::Send(server.Handle(),ArchiveJobProtocol::MessageType::Result,ArchiveJobProtocol::EncodeResult(id,done->second.state,done->second.exitCode,done->second.error));
+            else { std::wstring state=L"state="; state += active?L"running":queued?L"queued":L"unknown"; state += L"\nid="; state += key; state += L"\n"; ArchiveJobPipe::Send(server.Handle(),ArchiveJobProtocol::MessageType::State,state); }
+            LeaveCriticalSection(&g_queueLock);
         } else if (type == ArchiveJobProtocol::MessageType::Control) {
             GUID id{}; ArchiveJobProtocol::ParseGuid(ArchiveJobProtocol::Get(payload,L"id"), id);
             auto command=(ArchiveJobProtocol::Control)_wtoi(ArchiveJobProtocol::Get(payload,L"command").c_str());

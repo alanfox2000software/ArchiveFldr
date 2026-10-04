@@ -36,4 +36,11 @@ bool Control(const GUID& id, ArchiveJobProtocol::Control command)
     std::wstring payload=L"id="+ArchiveJobProtocol::GuidText(id)+L"\ncommand="+std::to_wstring((uint32_t)command)+L"\n";
     return ArchiveJobPipe::Send(client.Handle(),ArchiveJobProtocol::MessageType::Control,payload);
 }
+bool Query(const GUID& id, ArchiveJobProtocol::MessageType& type, std::wstring& payload)
+{
+    ArchiveJobPipe::Client client; if(!EnsureManager()||!client.Connect(5000)) return false;
+    std::wstring request=L"id="+ArchiveJobProtocol::GuidText(id)+L"\n";
+    if(!ArchiveJobPipe::Send(client.Handle(),ArchiveJobProtocol::MessageType::List,request)) return false;
+    return ArchiveJobPipe::Receive(client.Handle(),type,payload);
+}
 }

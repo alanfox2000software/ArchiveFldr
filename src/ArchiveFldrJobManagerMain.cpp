@@ -18,6 +18,7 @@ static std::wstring QuoteArg(const std::wstring& v)
 }
 struct ActiveJob { GUID id{}; HANDLE process = nullptr; HANDLE output = nullptr; ArchiveJobProtocol::JobKind kind{}; int percent = 0; std::wstring current; };
 static std::vector<ActiveJob> g_active;
+static std::map<std::wstring, DWORD> g_finishedResults;
 static constexpr size_t kMaxCompressJobs = 1;
 static constexpr size_t kMaxExtractJobs = 2;
 static bool HasCapacity(ArchiveJobProtocol::JobKind kind)
@@ -56,7 +57,12 @@ static DWORD WINAPI WorkerMonitor(void* raw)
     }
     CloseHandle(job->output); WaitForSingleObject(job->process, INFINITE);
     DWORD exitCode = 1; GetExitCodeProcess(job->process, &exitCode);
+    const std::wstring id = ArchiveJobProtocol::GuidText(job->id);
     EnterCriticalSection(&g_queueLock);
+    g_finishedResults[id] = exitCode;
+    if (exitCode != 0 && exitCode != ERROR_CANCELLED) {
+        OutputDebugStringW((L"ArchiveFldr worker failed or crashed: " + id + L" exit=" + std::to_wstring(exitCode) + L"\n").c_str());
+    }
     for (auto it = g_active.begin(); it != g_active.end(); ++it) {
         if (IsEqualGUID(it->id, job->id)) { CloseHandle(it->process); g_active.erase(it); break; }
     }

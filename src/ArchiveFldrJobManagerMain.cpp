@@ -18,6 +18,8 @@ static HWND g_mainWindow = nullptr;
 static CRITICAL_SECTION g_queueLock;
 static CRITICAL_SECTION g_eventLock;
 static std::vector<ArchiveJobProtocol::JobRequest> g_queue;
+struct FinishedResult { ArchiveJobProtocol::JobState state; DWORD exitCode; std::wstring error; };
+static std::map<std::wstring, FinishedResult> g_finishedResults;
 struct Subscriber
 {
     struct PendingMessage { ArchiveJobProtocol::MessageType type{}; std::wstring payload; bool critical=false; };
@@ -127,8 +129,6 @@ static std::wstring QuoteArg(const std::wstring& v)
 }
 struct ActiveJob { GUID id{}; HANDLE process = nullptr; HANDLE output = nullptr; HANDLE cancelEvent = nullptr; ArchiveJobProtocol::JobKind kind{}; int percent = 0; uint64_t completed = 0, total = 0; std::wstring current; ArchiveJobProtocol::JobState state = ArchiveJobProtocol::JobState::Running; std::wstring outputPath; bool outputExisted = false; };
 static std::vector<ActiveJob> g_active;
-struct FinishedResult { ArchiveJobProtocol::JobState state; DWORD exitCode; std::wstring error; };
-static std::map<std::wstring, FinishedResult> g_finishedResults;
 static void RecordFailure(const GUID& id, const std::wstring& error)
 {
     EnterCriticalSection(&g_queueLock);

@@ -101,6 +101,11 @@ static DWORD WINAPI EventThread(void*)
             subscriber->pipe=client; subscriber->wakeEvent=CreateEventW(nullptr,FALSE,FALSE,nullptr); InitializeCriticalSection(&subscriber->lock);
             if(!subscriber->wakeEvent || !(subscriber->writerThread=CreateThread(nullptr,0,SubscriberWriter,subscriber,0,nullptr))){if(subscriber->wakeEvent)CloseHandle(subscriber->wakeEvent); DeleteCriticalSection(&subscriber->lock); CloseHandle(client); delete subscriber; continue;}
             EnterCriticalSection(&g_eventLock); g_eventClients.push_back(subscriber); LeaveCriticalSection(&g_eventLock);
+            // Replay retained terminal results so a reconnecting subscriber
+            // does not miss completion/failure notifications.
+            EnterCriticalSection(&subscriber->lock);
+            for(const auto& finished:g_finishedResults){ GUID replayId{}; if(ArchiveJobProtocol::ParseGuid(finished.first,replayId)) EnqueueMessage(*subscriber,ArchiveJobProtocol::MessageType::Result,ArchiveJobProtocol::EncodeResult(replayId,finished.second.state,finished.second.exitCode,finished.second.error)); }
+            LeaveCriticalSection(&subscriber->lock); SetEvent(subscriber->wakeEvent);
         }}
     return 0;
 }

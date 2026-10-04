@@ -16,7 +16,7 @@ static std::wstring QuoteArg(const std::wstring& v)
     for(wchar_t c:v){if(c==L'\\'){++bs;continue;}if(c==L'\"'){s.append(bs*2+1,L'\\');s+=c;bs=0;}else{s.append(bs,L'\\');bs=0;s+=c;}}
     s.append(bs*2,L'\\'); return s+L"\"";
 }
-struct ActiveJob { GUID id{}; HANDLE process = nullptr; HANDLE output = nullptr; ArchiveJobProtocol::JobKind kind{}; int percent = 0; std::wstring current; };
+struct ActiveJob { GUID id{}; HANDLE process = nullptr; HANDLE output = nullptr; ArchiveJobProtocol::JobKind kind{}; int percent = 0; std::wstring current; std::wstring outputPath; bool outputExisted = false; };
 static std::vector<ActiveJob> g_active;
 static std::map<std::wstring, DWORD> g_finishedResults;
 static constexpr size_t kMaxCompressJobs = 1;
@@ -64,7 +64,11 @@ static DWORD WINAPI WorkerMonitor(void* raw)
         OutputDebugStringW((L"ArchiveFldr worker failed or crashed: " + id + L" exit=" + std::to_wstring(exitCode) + L"\n").c_str());
     }
     for (auto it = g_active.begin(); it != g_active.end(); ++it) {
-        if (IsEqualGUID(it->id, job->id)) { CloseHandle(it->process); g_active.erase(it); break; }
+        if (IsEqualGUID(it->id, job->id)) {
+            if (exitCode != 0 && !it->outputExisted && !it->outputPath.empty())
+                DeleteFileW(it->outputPath.c_str());
+            CloseHandle(it->process); g_active.erase(it); break;
+        }
     }
     LeaveCriticalSection(&g_queueLock);
     delete job;
@@ -73,7 +77,7 @@ static DWORD WINAPI WorkerMonitor(void* raw)
 
 static DWORD WINAPI QueueThread(void*)
 {
-    while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){WaitForSingleObject(g_queueEvent,500);ArchiveJobProtocol::JobRequest j;bool have=false;EnterCriticalSection(&g_queueLock);if(!g_queue.empty()){j=g_queue.front();g_queue.erase(g_queue.begin());have=true;}if(g_queue.empty())ResetEvent(g_queueEvent);LeaveCriticalSection(&g_queueLock);if(have){EnterCriticalSection(&g_queueLock);const bool capacity=HasCapacity(j.kind);if(!capacity){g_queue.insert(g_queue.begin(),j);SetEvent(g_queueEvent);}LeaveCriticalSection(&g_queueLock);if(!capacity){Sleep(250);continue;}HANDLE output=nullptr;HANDLE process=StartJob(j,&output);if(process){auto* active=new ActiveJob;active->id=j.id;active->process=process;active->output=output;active->kind=j.kind;EnterCriticalSection(&g_queueLock);g_active.push_back(*active);LeaveCriticalSection(&g_queueLock);HANDLE monitor=CreateThread(nullptr,0,WorkerMonitor,active,0,nullptr);if(monitor)CloseHandle(monitor);else{EnterCriticalSection(&g_queueLock);if(!g_active.empty())g_active.pop_back();LeaveCriticalSection(&g_queueLock);CloseHandle(process);delete active;}}} }return 0;
+    while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){WaitForSingleObject(g_queueEvent,500);ArchiveJobProtocol::JobRequest j;bool have=false;EnterCriticalSection(&g_queueLock);if(!g_queue.empty()){j=g_queue.front();g_queue.erase(g_queue.begin());have=true;}if(g_queue.empty())ResetEvent(g_queueEvent);LeaveCriticalSection(&g_queueLock);if(have){EnterCriticalSection(&g_queueLock);const bool capacity=HasCapacity(j.kind);if(!capacity){g_queue.insert(g_queue.begin(),j);SetEvent(g_queueEvent);}LeaveCriticalSection(&g_queueLock);if(!capacity){Sleep(250);continue;}HANDLE output=nullptr;HANDLE process=StartJob(j,&output);if(process){auto* active=new ActiveJob;active->id=j.id;active->process=process;active->output=output;active->kind=j.kind;active->outputPath=j.output;active->outputExisted=GetFileAttributesW(j.output.c_str())!=INVALID_FILE_ATTRIBUTES;EnterCriticalSection(&g_queueLock);g_active.push_back(*active);LeaveCriticalSection(&g_queueLock);HANDLE monitor=CreateThread(nullptr,0,WorkerMonitor,active,0,nullptr);if(monitor)CloseHandle(monitor);else{EnterCriticalSection(&g_queueLock);if(!g_active.empty())g_active.pop_back();LeaveCriticalSection(&g_queueLock);CloseHandle(process);delete active;}}} }return 0;
 }
 
 static DWORD WINAPI PipeThread(void*)

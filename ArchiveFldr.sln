@@ -13,6 +13,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ArchiveFldrExtract", "Archi
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ArchiveFldrCompress", "ArchiveFldrCompress.vcxproj", "{C3D4E5F6-0789-0ABC-DEF1-23456789012A}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ArchiveFldrJobManager", "ArchiveFldrJobManager.vcxproj", "{D4E5F607-890A-BCDE-F123-456789012345}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -37,6 +39,14 @@ Global
 		{C3D4E5F6-0789-0ABC-DEF1-23456789012A}.Release|Win32.Build.0 = Release|Win32
 		{C3D4E5F6-0789-0ABC-DEF1-23456789012A}.Release|x64.ActiveCfg = Release|x64
 		{C3D4E5F6-0789-0ABC-DEF1-23456789012A}.Release|x64.Build.0 = Release|x64
+		{D4E5F607-890A-BCDE-F123-456789012345}.Debug|Win32.ActiveCfg = Debug|Win32
+		{D4E5F607-890A-BCDE-F123-456789012345}.Debug|Win32.Build.0 = Debug|Win32
+		{D4E5F607-890A-BCDE-F123-456789012345}.Debug|x64.ActiveCfg = Debug|x64
+		{D4E5F607-890A-BCDE-F123-456789012345}.Debug|x64.Build.0 = Debug|x64
+		{D4E5F607-890A-BCDE-F123-456789012345}.Release|Win32.ActiveCfg = Release|Win32
+		{D4E5F607-890A-BCDE-F123-456789012345}.Release|Win32.Build.0 = Release|Win32
+		{D4E5F607-890A-BCDE-F123-456789012345}.Release|x64.ActiveCfg = Release|x64
+		{D4E5F607-890A-BCDE-F123-456789012345}.Release|x64.Build.0 = Release|x64
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Win32.ActiveCfg = Debug|Win32
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Win32.Build.0 = Debug|Win32
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567891}.Debug|Win32.ActiveCfg = Debug|Win32

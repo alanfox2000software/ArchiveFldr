@@ -53,6 +53,10 @@ bool SubscribeEvents(HANDLE* eventsPipe)
     ArchiveJobPipe::Client client(ArchiveJobProtocol::kEventsPipeName);
     if(!client.Connect(5000)) return false;
     if(!ArchiveJobPipe::Send(client.Handle(),ArchiveJobProtocol::MessageType::Hello,L"version=1\n")) return false;
+    ArchiveJobProtocol::MessageType ackType{}; std::wstring ack;
+    if(!ArchiveJobPipe::Receive(client.Handle(),ackType,ack) ||
+       ackType != ArchiveJobProtocol::MessageType::State ||
+       ArchiveJobProtocol::Get(ack,L"state") != L"subscribed") return false;
     *eventsPipe=client.Detach(); return true;
 }
 }

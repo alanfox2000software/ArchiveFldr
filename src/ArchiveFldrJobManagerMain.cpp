@@ -23,7 +23,12 @@ static void BroadcastEvent(ArchiveJobProtocol::MessageType type, const std::wstr
 }
 static DWORD WINAPI EventThread(void*)
 {
-    while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){ArchiveJobPipe::Server server(ArchiveJobProtocol::kEventsPipeName);if(!server.Listen()||!server.Accept())continue;ArchiveJobProtocol::MessageType type{};std::wstring payload;if(ArchiveJobPipe::Receive(server.Handle(),type,payload)&&type==ArchiveJobProtocol::MessageType::Hello){HANDLE client=server.Detach();EnterCriticalSection(&g_queueLock);g_eventClients.push_back(client);LeaveCriticalSection(&g_queueLock);}}
+    while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){ArchiveJobPipe::Server server(ArchiveJobProtocol::kEventsPipeName);if(!server.Listen()||!server.Accept())continue;ArchiveJobProtocol::MessageType type{};std::wstring payload;if(ArchiveJobPipe::Receive(server.Handle(),type,payload)&&type==ArchiveJobProtocol::MessageType::Hello){
+            if(ArchiveJobProtocol::Get(payload,L"version") != L"1") continue;
+            if(!ArchiveJobPipe::Send(server.Handle(),ArchiveJobProtocol::MessageType::State,L"state=subscribed\nversion=1\n")) continue;
+            HANDLE client=server.Detach();
+            EnterCriticalSection(&g_queueLock); g_eventClients.push_back(client); LeaveCriticalSection(&g_queueLock);
+        }}
     return 0;
 }
 static std::wstring QuoteArg(const std::wstring& v)

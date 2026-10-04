@@ -1210,7 +1210,7 @@ void CContextMenu::DoCompressEmail()
     sei.nShow  = SW_SHOWNORMAL;
     if (!ShellExecuteExW(&sei))
     {
-        ITEMIDLIST* pidl = ILCreateFromPathW(outPath.c_str());
+        LPITEMIDLIST pidl = ILCreateFromPathW(outPath.c_str());
         if (pidl)
         {
             SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);

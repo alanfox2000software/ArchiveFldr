@@ -522,7 +522,7 @@ exit /b 0</Command>
     <ClCompile Include="src\ThirdParty.cpp" />
     <ClCompile Include="src\LizardFrame.cpp" />
     <ClCompile Include="src\SevenZipEngine.cpp" />
-    <ClCompile Include="src\Sdk7zGuids.cpp" />
+    <ClCompile Include="src\Sdk7zGuids.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><PreprocessorDefinitions>INITGUID;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
     <!-- Settings & GUI -->
     <ClCompile Include="src\CodecEngine.cpp" />
     <ClCompile Include="src\WimEngine.cpp" />

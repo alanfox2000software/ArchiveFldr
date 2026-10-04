@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "ArchiveEngine.h"
+#include "ArchiveSecurity.h"
 
 static HANDLE g_cancelEvent = nullptr;
 static void CheckCancelled() { if (g_cancelEvent && WaitForSingleObject(g_cancelEvent, 0) == WAIT_OBJECT_0) ExitProcess(ERROR_CANCELLED); }
@@ -52,7 +53,10 @@ int wmain(int argc, wchar_t** argv)
         fwprintf(stderr, L"Unable to create archive engine.\n");
         return 3;
     }
-    if (!password.empty()) engine->SetPassword(password);
+    if (!password.empty()) {
+        engine->SetPassword(password);
+        ArchiveSecurity::SecureClear(password);
+    }
     if (!engine->Open(archive)) {
         fwprintf(stderr, L"Unable to open archive: %ls\n", archive.c_str());
         return 3;

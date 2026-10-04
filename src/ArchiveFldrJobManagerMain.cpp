@@ -78,7 +78,7 @@ static void BroadcastEvent(ArchiveJobProtocol::MessageType type, const std::wstr
         EnterCriticalSection(&subscriber->lock);
         bool ok=subscriber->connected && !subscriber->stopping && EnqueueMessage(*subscriber,type,payload);
         LeaveCriticalSection(&subscriber->lock);
-        if(!ok){ subscriber->stopping=true; SetEvent(subscriber->wakeEvent); WaitForSingleObject(subscriber->writerThread,3000); CloseHandle(subscriber->writerThread); CloseHandle(subscriber->wakeEvent); DeleteCriticalSection(&subscriber->lock); delete subscriber; it=g_eventClients.erase(it); }
+        if(!ok){ subscriber->stopping=true; SetEvent(subscriber->wakeEvent); CancelSynchronousIo(subscriber->writerThread); DWORD writerResult=WaitForSingleObject(subscriber->writerThread,3000); if(writerResult!=WAIT_OBJECT_0){ ++it; continue; } CloseHandle(subscriber->writerThread); CloseHandle(subscriber->wakeEvent); DeleteCriticalSection(&subscriber->lock); delete subscriber; it=g_eventClients.erase(it); }
         else { SetEvent(subscriber->wakeEvent); ++it; }
     }
     LeaveCriticalSection(&g_eventLock);
@@ -380,7 +380,7 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         LeaveCriticalSection(&g_queueLock);
         BroadcastEvent(ArchiveJobProtocol::MessageType::State, L"state=shutdown\n");
         EnterCriticalSection(&g_eventLock);
-        for(Subscriber* subscriber:g_eventClients){ EnterCriticalSection(&subscriber->lock); subscriber->stopping=true; subscriber->connected=false; LeaveCriticalSection(&subscriber->lock); SetEvent(subscriber->wakeEvent); WaitForSingleObject(subscriber->writerThread,3000); CloseHandle(subscriber->writerThread); CloseHandle(subscriber->wakeEvent); DeleteCriticalSection(&subscriber->lock); delete subscriber; }
+        for(Subscriber* subscriber:g_eventClients){ EnterCriticalSection(&subscriber->lock); subscriber->stopping=true; subscriber->connected=false; LeaveCriticalSection(&subscriber->lock); SetEvent(subscriber->wakeEvent); CancelSynchronousIo(subscriber->writerThread); DWORD writerResult=WaitForSingleObject(subscriber->writerThread,3000); if(writerResult!=WAIT_OBJECT_0){ ++it; continue; } CloseHandle(subscriber->writerThread); CloseHandle(subscriber->wakeEvent); DeleteCriticalSection(&subscriber->lock); delete subscriber; }
         g_eventClients.clear();
         LeaveCriticalSection(&g_eventLock);
         DeleteCriticalSection(&g_eventLock); DeleteCriticalSection(&g_queueLock); CloseHandle(g_stop); CloseHandle(g_queueEvent); PostQuitMessage(0); return 0; }

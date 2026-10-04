@@ -195,6 +195,11 @@ static void CancelJob(const GUID& id)
     if(process && WaitForSingleObject(process,5000)==WAIT_TIMEOUT) TerminateProcess(process,ERROR_CANCELLED);
 }
 
+static const wchar_t* StateName(ArchiveJobProtocol::JobState state)
+{
+    switch(state){case ArchiveJobProtocol::JobState::Queued:return L"Queued";case ArchiveJobProtocol::JobState::Running:return L"Running";case ArchiveJobProtocol::JobState::Cancelling:return L"Cancelling";case ArchiveJobProtocol::JobState::Cancelled:return L"Cancelled";case ArchiveJobProtocol::JobState::Completed:return L"Completed";case ArchiveJobProtocol::JobState::Failed:return L"Failed";default:return L"Unknown";}
+}
+
 static void RefreshList()
 {
     if (!g_list) return;
@@ -202,7 +207,7 @@ static void RefreshList()
     g_visibleIds.clear();
     EnterCriticalSection(&g_queueLock);
     for (const auto& j : g_active) {
-        std::wstring row = L"Running  " + ArchiveJobProtocol::GuidText(j.id) + L"  " + std::to_wstring(j.percent) + L"%  " + j.current;
+        std::wstring row = std::wstring(StateName(j.state)) + L"  " + ArchiveJobProtocol::GuidText(j.id) + L"  " + std::to_wstring(j.percent) + L"%  " + j.current;
         SendMessageW(g_list, LB_ADDSTRING, 0, (LPARAM)row.c_str());
         g_visibleIds.push_back(j.id);
     }
@@ -212,7 +217,7 @@ static void RefreshList()
         g_visibleIds.push_back(j.id);
     }
     for (const auto& r : g_finishedResults) {
-        std::wstring row = L"Finished " + r.first + L"  exit=" + std::to_wstring(r.second.exitCode);
+        std::wstring row = std::wstring(StateName(r.second.state)) + L"  " + r.first + L"  exit=" + std::to_wstring(r.second.exitCode); if(!r.second.error.empty()) row += L"  " + r.second.error;
         SendMessageW(g_list, LB_ADDSTRING, 0, (LPARAM)row.c_str());
     }
     LeaveCriticalSection(&g_queueLock);

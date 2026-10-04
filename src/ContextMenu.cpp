@@ -993,6 +993,36 @@ ArchiveWriter::Options OptionsFromSettings(const std::wstring& format)
     return opt;
 }
 
+static std::wstring Q(const std::wstring& v)
+{
+    std::wstring s = L"\""; size_t bs = 0;
+    for (wchar_t c : v) { if (c == L'\\') { ++bs; continue; } if (c == L'\"') { s.append(bs * 2 + 1, L'\\'); s += c; bs = 0; } else { s.append(bs, L'\\'); bs = 0; s += c; } }
+    s.append(bs * 2, L'\\'); return s + L"\"";
+}
+
+static bool StartCompressionWorker(const std::wstring& out, const std::vector<std::wstring>& paths,
+                                   const ArchiveWriter::Options& o)
+{
+    HMODULE self = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(&StartCompressionWorker), &self)) return false;
+    wchar_t mod[MAX_PATH] = {}; GetModuleFileNameW(self, mod, ARRAYSIZE(mod));
+    std::wstring exe = mod; const size_t slash = exe.find_last_of(L"\\/");
+    exe = (slash == std::wstring::npos ? L"" : exe.substr(0, slash + 1)) + L"ArchiveFldrCompress.exe";
+    std::wstring cmd = Q(exe) + L" --out " + Q(out) + L" --format " + Q(o.format) +
+        L" --level " + std::to_wstring(o.level) + L" --threads " + std::to_wstring(o.threads);
+    if (o.solid) cmd += L" --solid";
+    if (o.encryptNames) cmd += L" --encrypt-names";
+    if (!o.password.empty()) cmd += L" --password " + Q(o.password);
+    for (const auto& p : paths) cmd += L" " + Q(p);
+    std::vector<wchar_t> mutableCmd(cmd.begin(), cmd.end()); mutableCmd.push_back(L'\0');
+    STARTUPINFOW si{}; si.cb = sizeof(si); PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(exe.c_str(), mutableCmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                        nullptr, nullptr, &si, &pi)) return false;
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    return true;
+}
+
 } // namespace
 
 void CContextMenu::DoCompress(bool here)
@@ -1069,36 +1099,14 @@ void CContextMenu::DoCompress(bool here)
             return;
         }
 
-    std::wstring message;
-    bool ok;
+    if (!StartCompressionWorker(outPath, m_paths, options))
     {
-        WaitCursor wait;
-        ok = ArchiveWriter::Compress(outPath, items, options, nullptr, &message);
+        MessageBoxW(m_hwnd, L"ArchiveFldrCompress.exe could not be started.",
+                    L"ArchiveFldr", MB_ICONERROR | MB_OK);
     }
-
-    if (!ok)
-    {
-        MessageBoxW(m_hwnd,
-            message.empty() ? L"The archive could not be created." : message.c_str(),
-            L"ArchiveFldr", MB_ICONERROR | MB_OK);
-        return;
-    }
-
-    const std::wstring createdPath = options.volumeBytes
-        ? outPath + L".001" : outPath;
-    SHChangeNotify(SHCNE_CREATE, SHCNF_PATH, createdPath.c_str(), nullptr);
-    std::wstring dir = outPath;
-    if (PathRemoveFileSpecW(&dir[0]))
-    {
-        dir.resize(wcslen(dir.c_str()));
-        SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATH, dir.c_str(), nullptr);
-    }
-
-    // Files that could not be read are reported, but the archive that
-    // did get built is still there and still valid.
-    if (!message.empty())
-        MessageBoxW(m_hwnd, message.c_str(), L"ArchiveFldr",
-                    MB_ICONWARNING | MB_OK);
+    // Compression continues in a separate process. Explorer is released
+    // immediately; the worker writes atomically and notifies the shell when
+    // the archive is complete.
 }
 
 void CContextMenu::DoCompressEmail()

@@ -54,6 +54,14 @@ static bool EnqueueMessage(Subscriber& subscriber, ArchiveJobProtocol::MessageTy
 {
     const bool critical = type != ArchiveJobProtocol::MessageType::Progress;
     const size_t bytes = payload.size() * sizeof(wchar_t);
+    // Progress is coalesced: retain the newest update instead of allowing
+    // high-frequency callbacks to crowd out state or result messages.
+    if (!critical) {
+        for (auto it = subscriber.pending.begin(); it != subscriber.pending.end();) {
+            if (!it->critical) { subscriber.pendingBytes -= it->payload.size() * sizeof(wchar_t); it = subscriber.pending.erase(it); }
+            else ++it;
+        }
+    }
     while ((subscriber.pending.size() >= Subscriber::kMaxPendingMessages ||
             subscriber.pendingBytes + bytes > Subscriber::kMaxPendingBytes) && !subscriber.pending.empty()) {
         auto it = std::find_if(subscriber.pending.begin(), subscriber.pending.end(),

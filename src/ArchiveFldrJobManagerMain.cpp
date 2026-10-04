@@ -33,15 +33,16 @@ static HANDLE StartJob(const ArchiveJobProtocol::JobRequest& j, HANDLE* output)
     std::wstring base=mod; size_t slash=base.find_last_of(L"\\/"); base=(slash==std::wstring::npos?L"":base.substr(0,slash+1));
     std::wstring exe=base+(j.kind==ArchiveJobProtocol::JobKind::Compress?L"ArchiveFldrCompress.exe":L"ArchiveFldrExtract.exe");
     std::wstring cmd=QuoteArg(exe);
-    if(j.kind==ArchiveJobProtocol::JobKind::Compress){cmd+=L" --out "+QuoteArg(j.output)+L" --format "+QuoteArg(j.format)+L" --level "+std::to_wstring(j.level)+L" --threads "+std::to_wstring(j.threads);if(j.solid)cmd+=L" --solid";if(j.encryptNames)cmd+=L" --encrypt-names";for(auto&s:j.sources)cmd+=L" "+QuoteArg(s);}
+    if(j.kind==ArchiveJobProtocol::JobKind::Compress){cmd+=L" --out "+QuoteArg(j.output)+L" --format "+QuoteArg(j.format)+L" --level "+std::to_wstring(j.level)+L" --threads "+std::to_wstring(j.threads);if(j.solid)cmd+=L" --solid";if(j.encryptNames)cmd+=L" --encrypt-names";if(!j.password.empty())cmd+=L" --password-stdin";for(auto&s:j.sources)cmd+=L" "+QuoteArg(s);}
     else cmd+=L" --archive "+QuoteArg(j.archive)+L" --entry "+QuoteArg(j.output)+L" --dest "+QuoteArg(j.output);
     std::vector<wchar_t> buf(cmd.begin(),cmd.end());buf.push_back(L'\0');
-    SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE}; HANDLE readPipe=nullptr, writePipe=nullptr;
+    SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE}; HANDLE readPipe=nullptr, writePipe=nullptr, passRead=nullptr, passWrite=nullptr;
     if(!CreatePipe(&readPipe,&writePipe,&sa,0)) return nullptr;
     SetHandleInformation(readPipe,HANDLE_FLAG_INHERIT,0);
-    STARTUPINFOW si{};si.cb=sizeof(si);si.dwFlags=STARTF_USESTDHANDLES;si.hStdOutput=writePipe;si.hStdError=writePipe;PROCESS_INFORMATION pi{};
-    if(!CreateProcessW(exe.c_str(),buf.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,nullptr,&si,&pi)){CloseHandle(readPipe);CloseHandle(writePipe);return nullptr;}
-    CloseHandle(writePipe); if(output)*output=readPipe; else CloseHandle(readPipe); CloseHandle(pi.hThread); return pi.hProcess;
+    if(!j.password.empty()){if(!CreatePipe(&passRead,&passWrite,&sa,0)){CloseHandle(readPipe);CloseHandle(writePipe);return nullptr;}SetHandleInformation(passWrite,HANDLE_FLAG_INHERIT,0);}
+    STARTUPINFOW si{};si.cb=sizeof(si);si.dwFlags=STARTF_USESTDHANDLES;si.hStdOutput=writePipe;si.hStdError=writePipe;si.hStdInput=passRead?passRead:GetStdHandle(STD_INPUT_HANDLE);PROCESS_INFORMATION pi{};
+    if(!CreateProcessW(exe.c_str(),buf.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,nullptr,&si,&pi)){CloseHandle(readPipe);CloseHandle(writePipe);if(passRead)CloseHandle(passRead);if(passWrite)CloseHandle(passWrite);return nullptr;}
+    CloseHandle(writePipe);if(passRead)CloseHandle(passRead);if(passWrite){DWORD bytes=0;WriteFile(passWrite,j.password.data(),(DWORD)(j.password.size()*sizeof(wchar_t)),&bytes,nullptr);CloseHandle(passWrite);} if(output)*output=readPipe;else CloseHandle(readPipe);CloseHandle(pi.hThread);return pi.hProcess;
 }
 static DWORD WINAPI WorkerMonitor(void* raw)
 {

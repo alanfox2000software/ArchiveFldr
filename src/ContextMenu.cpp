@@ -1014,6 +1014,7 @@ static bool StartCompressionWorker(const std::wstring& out, const std::vector<st
     request.threads = o.threads;
     request.solid = o.solid;
     request.encryptNames = o.encryptNames;
+    request.password = o.password;
     return ArchiveJobClient::Submit(request);
 
     HMODULE self = nullptr;

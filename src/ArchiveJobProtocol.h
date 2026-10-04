@@ -76,11 +76,23 @@ inline std::wstring Unescape(const std::wstring& s)
 }
 inline void Put(std::wstring& p, const wchar_t* key, const std::wstring& value) { p += key; p += L"="; p += Escape(value); p += L"\n"; }
 inline void Put(std::wstring& p, const wchar_t* key, uint64_t value) { Put(p, key, std::to_wstring(value)); }
+inline bool GetInto(const std::wstring& p, const std::wstring& key, std::wstring& out)
+{
+    out.clear(); const std::wstring prefix = key + L"="; size_t at = 0;
+    while (at < p.size()) {
+        size_t end = p.find(L'\n', at); if (end == std::wstring::npos) end = p.size();
+        if (p.compare(at, prefix.size(), prefix) == 0) {
+            out.reserve(end - at - prefix.size()); bool escaped = false;
+            for (size_t i = at + prefix.size(); i < end; ++i) { wchar_t c = p[i]; if (escaped) { out += c; escaped = false; } else if (c == L'%') escaped = true; else out += c; }
+            return true;
+        }
+        at = end + 1;
+    }
+    return false;
+}
 inline std::wstring Get(const std::wstring& p, const std::wstring& key)
 {
-    const std::wstring prefix = key + L"="; size_t at = 0;
-    while (at < p.size()) { size_t end = p.find(L'\n', at); if (end == std::wstring::npos) end = p.size(); if (p.compare(at, prefix.size(), prefix) == 0) return Unescape(p.substr(at + prefix.size(), end - at - prefix.size())); at = end + 1; }
-    return L"";
+    std::wstring out; GetInto(p, key, out); return out;
 }
 inline std::wstring Encode(const JobRequest& j)
 {

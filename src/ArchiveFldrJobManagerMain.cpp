@@ -243,7 +243,11 @@ static DWORD WINAPI PipeThread(void*)
                         ArchiveJobPipe::Send(server.Handle(), ArchiveJobProtocol::MessageType::State, L"state=failed\nerror=invalid password channel\n");
                         continue;
                     }
-                    request.password = ArchiveJobProtocol::Unescape(ArchiveJobProtocol::Get(secret,L"password"));
+                    if (!ArchiveJobProtocol::GetInto(secret, L"password", request.password)) {
+                        ArchiveSecurity::SecureClear(secret);
+                        ArchiveJobPipe::Send(server.Handle(), ArchiveJobProtocol::MessageType::State, L"state=failed\nerror=missing password payload\n");
+                        continue;
+                    }
                     ArchiveSecurity::SecureClear(secret);
                 }
                 std::wstring reply;

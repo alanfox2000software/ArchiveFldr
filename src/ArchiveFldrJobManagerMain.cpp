@@ -381,8 +381,8 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     if (msg == WM_TIMER || msg == WM_EVENT_UPDATE) { RefreshList(); return 0; }
     if (msg == WM_SIZE && g_list) {
         const int width = LOWORD(lp), height = HIWORD(lp);
-        MoveWindow(g_list, 8, 8, max(0, width - 16), max(0, height - 52), TRUE);
-        if (g_cancel) MoveWindow(g_cancel, 8, max(8, height - 36), 150, 28, TRUE);
+        MoveWindow(g_list, 8, 8, std::max(0, width - 16), std::max(0, height - 52), TRUE);
+        if (g_cancel) MoveWindow(g_cancel, 8, std::max(8, height - 36), 150, 28, TRUE);
         return 0;
     }
     if (msg == WM_CLOSE) { ShowWindow(hwnd, SW_HIDE); return 0; }

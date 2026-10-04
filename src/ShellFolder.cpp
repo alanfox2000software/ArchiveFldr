@@ -437,6 +437,10 @@ CShellFolder::CShellFolder(CShellFolder* pParent,
 
 CShellFolder::~CShellFolder()
 {
+    if (m_engine) {
+        m_engine->ClearPassword();
+        m_engine.reset();
+    }
     CPidlMgr::Free(m_pidlAbs);
     CPidlMgr::Free(m_pidlRel);
     InterlockedDecrement(&g_cDllRefCount);

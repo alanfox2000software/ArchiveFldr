@@ -75,6 +75,7 @@ class CShellFolder :
 {
 public:
     CShellFolder();
+    ~CShellFolder();
     explicit CShellFolder(CShellFolder* pParent,
                           LPCITEMIDLIST pidlAbs,
                           LPCITEMIDLIST pidlRel,

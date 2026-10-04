@@ -76,7 +76,10 @@ void RememberPassword(const std::wstring& path, const std::wstring& password)
 {
     if (password.empty()) return;
     std::lock_guard<std::mutex> lock(g_passwordMutex);
-    g_passwords[PasswordCacheKey(path)] = password;
+    const std::wstring key = PasswordCacheKey(path);
+    auto it = g_passwords.find(key);
+    if (it != g_passwords.end()) ArchiveSecurity::SecureClear(it->second);
+    g_passwords[key] = password;
 }
 
 void ForgetPassword(const std::wstring& path, const std::wstring& password)
@@ -84,8 +87,10 @@ void ForgetPassword(const std::wstring& path, const std::wstring& password)
     if (password.empty()) return;
     std::lock_guard<std::mutex> lock(g_passwordMutex);
     const auto it = g_passwords.find(PasswordCacheKey(path));
-    if (it != g_passwords.end() && it->second == password)
+    if (it != g_passwords.end() && it->second == password) {
+        ArchiveSecurity::SecureClear(it->second);
         g_passwords.erase(it);
+    }
 }
 
 // ── External 7-Zip codec catalogue ──────────────────────────────────────

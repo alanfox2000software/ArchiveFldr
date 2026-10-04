@@ -16,10 +16,10 @@ static std::wstring QuoteArg(const std::wstring& v)
     for(wchar_t c:v){if(c==L'\\'){++bs;continue;}if(c==L'\"'){s.append(bs*2+1,L'\\');s+=c;bs=0;}else{s.append(bs,L'\\');bs=0;s+=c;}}
     s.append(bs*2,L'\\'); return s+L"\"";
 }
-struct ActiveJob { GUID id{}; HANDLE process = nullptr; ArchiveJobProtocol::JobKind kind{}; };
+struct ActiveJob { GUID id{}; HANDLE process = nullptr; HANDLE output = nullptr; ArchiveJobProtocol::JobKind kind{}; int percent = 0; std::wstring current; };
 static std::vector<ActiveJob> g_active;
 
-static HANDLE StartJob(const ArchiveJobProtocol::JobRequest& j)
+static HANDLE StartJob(const ArchiveJobProtocol::JobRequest& j, HANDLE* output)
 {
     wchar_t mod[MAX_PATH]={}; if(!GetModuleFileNameW(nullptr,mod,ARRAYSIZE(mod))) return false;
     std::wstring base=mod; size_t slash=base.find_last_of(L"\\/"); base=(slash==std::wstring::npos?L"":base.substr(0,slash+1));
@@ -27,13 +27,27 @@ static HANDLE StartJob(const ArchiveJobProtocol::JobRequest& j)
     std::wstring cmd=QuoteArg(exe);
     if(j.kind==ArchiveJobProtocol::JobKind::Compress){cmd+=L" --out "+QuoteArg(j.output)+L" --format "+QuoteArg(j.format)+L" --level "+std::to_wstring(j.level)+L" --threads "+std::to_wstring(j.threads);if(j.solid)cmd+=L" --solid";if(j.encryptNames)cmd+=L" --encrypt-names";for(auto&s:j.sources)cmd+=L" "+QuoteArg(s);}
     else cmd+=L" --archive "+QuoteArg(j.archive)+L" --entry "+QuoteArg(j.output)+L" --dest "+QuoteArg(j.output);
-    std::vector<wchar_t> buf(cmd.begin(),cmd.end());buf.push_back(L'\0');STARTUPINFOW si{};si.cb=sizeof(si);PROCESS_INFORMATION pi{};
-    if(!CreateProcessW(exe.c_str(),buf.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&si,&pi))return nullptr;CloseHandle(pi.hThread);return pi.hProcess;
+    std::vector<wchar_t> buf(cmd.begin(),cmd.end());buf.push_back(L'\0');
+    SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE}; HANDLE readPipe=nullptr, writePipe=nullptr;
+    if(!CreatePipe(&readPipe,&writePipe,&sa,0)) return nullptr;
+    SetHandleInformation(readPipe,HANDLE_FLAG_INHERIT,0);
+    STARTUPINFOW si{};si.cb=sizeof(si);si.dwFlags=STARTF_USESTDHANDLES;si.hStdOutput=writePipe;si.hStdError=writePipe;PROCESS_INFORMATION pi{};
+    if(!CreateProcessW(exe.c_str(),buf.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,nullptr,&si,&pi)){CloseHandle(readPipe);CloseHandle(writePipe);return nullptr;}
+    CloseHandle(writePipe); if(output)*output=readPipe; else CloseHandle(readPipe); CloseHandle(pi.hThread); return pi.hProcess;
 }
 static DWORD WINAPI WorkerMonitor(void* raw)
 {
     auto* job = static_cast<ActiveJob*>(raw);
-    WaitForSingleObject(job->process, INFINITE);
+    char buffer[512] = {}; DWORD got = 0; std::string line;
+    while (ReadFile(job->output, buffer, sizeof(buffer)-1, &got, nullptr) && got) {
+        line.append(buffer, got);
+        size_t end = 0;
+        while ((end = line.find('\n')) != std::string::npos) {
+            std::string one = line.substr(0, end); line.erase(0, end + 1);
+            if (one.rfind("PROGRESS ", 0) == 0) { int pct = atoi(one.c_str() + 9); EnterCriticalSection(&g_queueLock); for(auto& a:g_active) if(IsEqualGUID(a.id,job->id)) a.percent=pct; LeaveCriticalSection(&g_queueLock); }
+        }
+    }
+    CloseHandle(job->output); WaitForSingleObject(job->process, INFINITE);
     DWORD exitCode = 1; GetExitCodeProcess(job->process, &exitCode);
     EnterCriticalSection(&g_queueLock);
     for (auto it = g_active.begin(); it != g_active.end(); ++it) {
@@ -46,7 +60,7 @@ static DWORD WINAPI WorkerMonitor(void* raw)
 
 static DWORD WINAPI QueueThread(void*)
 {
-    while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){WaitForSingleObject(g_queueEvent,500);ArchiveJobProtocol::JobRequest j;bool have=false;EnterCriticalSection(&g_queueLock);if(!g_queue.empty()){j=g_queue.front();g_queue.erase(g_queue.begin());have=true;}if(g_queue.empty())ResetEvent(g_queueEvent);LeaveCriticalSection(&g_queueLock);if(have){HANDLE process=StartJob(j);if(process){auto* active=new ActiveJob;active->id=j.id;active->process=process;active->kind=j.kind;EnterCriticalSection(&g_queueLock);g_active.push_back(*active);LeaveCriticalSection(&g_queueLock);HANDLE monitor=CreateThread(nullptr,0,WorkerMonitor,active,0,nullptr);if(monitor)CloseHandle(monitor);else{EnterCriticalSection(&g_queueLock);if(!g_active.empty())g_active.pop_back();LeaveCriticalSection(&g_queueLock);CloseHandle(process);delete active;}}} }return 0;
+    while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){WaitForSingleObject(g_queueEvent,500);ArchiveJobProtocol::JobRequest j;bool have=false;EnterCriticalSection(&g_queueLock);if(!g_queue.empty()){j=g_queue.front();g_queue.erase(g_queue.begin());have=true;}if(g_queue.empty())ResetEvent(g_queueEvent);LeaveCriticalSection(&g_queueLock);if(have){HANDLE output=nullptr;HANDLE process=StartJob(j,&output);if(process){auto* active=new ActiveJob;active->id=j.id;active->process=process;active->output=output;active->kind=j.kind;EnterCriticalSection(&g_queueLock);g_active.push_back(*active);LeaveCriticalSection(&g_queueLock);HANDLE monitor=CreateThread(nullptr,0,WorkerMonitor,active,0,nullptr);if(monitor)CloseHandle(monitor);else{EnterCriticalSection(&g_queueLock);if(!g_active.empty())g_active.pop_back();LeaveCriticalSection(&g_queueLock);CloseHandle(process);delete active;}}} }return 0;
 }
 
 static DWORD WINAPI PipeThread(void*)

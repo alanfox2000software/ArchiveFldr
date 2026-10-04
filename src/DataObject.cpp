@@ -221,20 +221,84 @@ bool CArchiveDataObject::EnsureTempRoot()
     return !m_tempRoot.empty();
 }
 
+static std::wstring QuoteProcessArg(const std::wstring& value)
+{
+    // CommandLineToArgvW-compatible quoting for paths and archive names.
+    std::wstring out = L"\"";
+    size_t slashes = 0;
+    for (wchar_t ch : value) {
+        if (ch == L'\\') { ++slashes; continue; }
+        if (ch == L'\"') {
+            out.append(slashes * 2 + 1, L'\\');
+            out += L'\"';
+            slashes = 0;
+            continue;
+        }
+        out.append(slashes, L'\\');
+        slashes = 0;
+        out += ch;
+    }
+    out.append(slashes * 2, L'\\');
+    out += L"\"";
+    return out;
+}
+
+static bool ExtractInWorker(const std::wstring& archive,
+                            const std::wstring& entry,
+                            const std::wstring& dest,
+                            std::wstring* error)
+{
+    HMODULE self = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(&ExtractInWorker), &self))
+        return false;
+    wchar_t module[MAX_PATH] = {};
+    if (!GetModuleFileNameW(self, module, ARRAYSIZE(module))) return false;
+    std::wstring exe = module;
+    const size_t slash = exe.find_last_of(L"\\/");
+    exe = (slash == std::wstring::npos ? L"" : exe.substr(0, slash + 1)) + L"ArchiveFldrExtract.exe";
+    if (GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        if (error) *error = L"ArchiveFldrExtract.exe was not found next to the shell extension.";
+        return false;
+    }
+
+    std::wstring command = QuoteProcessArg(exe) + L" --archive " +
+        QuoteProcessArg(archive) + L" --entry " + QuoteProcessArg(entry) +
+        L" --dest " + QuoteProcessArg(dest);
+    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+    mutableCommand.push_back(L'\\0');
+    STARTUPINFOW si{}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(exe.c_str(), mutableCommand.data(), nullptr, nullptr,
+                        FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+        if (error) *error = L"Unable to start ArchiveFldrExtract.exe.";
+        return false;
+    }
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD code = 1;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    if (code != 0) {
+        if (error) *error = L"ArchiveFldrExtract.exe failed to extract the item.";
+        return false;
+    }
+    return true;
+}
+
 bool CArchiveDataObject::EnsureStaged(Item& it, HWND promptOwner)
 {
     if (!it.staged.empty())
         return GetFileAttributesW(it.staged.c_str()) != INVALID_FILE_ATTRIBUTES;
     if (!EnsureTempRoot()) return false;
 
-    std::wstring produced;
-    // Selections are normally staged before OLE starts (see Create).
-    // Keep this path usable for defensive late calls too; use the active
-    // window only when the caller could not provide the source archive view.
-    if (!promptOwner) promptOwner = GetActiveWindow();
-    if (!ArchiveOps::ExtractEntryPrompting(promptOwner, m_engine,
-                                           it.entry, m_tempRoot, &produced))
+    std::wstring produced = m_tempRoot + L"\\" + ArchiveOps::ToWin32(it.entry.fullPath);
+    SHCreateDirectoryExW(nullptr, m_tempRoot.c_str(), nullptr);
+    std::wstring error;
+    if (!ExtractInWorker(m_archivePath, it.entry.fullPath, m_tempRoot, &error))
         return false;
+    if (it.entry.isDirectory) return true;
+    if (GetFileAttributesW(produced.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
     it.staged = produced;
     return true;
 }

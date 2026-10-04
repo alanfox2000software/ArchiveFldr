@@ -585,7 +585,7 @@ exit /b 0</Command>
     <None Include="src\ArchiveFldr.def" />
     <None Include="res\manifest.xml" />
     <None Include="Lang\en.txt" />
-  <ClInclude Include="src\ArchiveJobProtocol.h" /><ClInclude Include="src\ArchiveJobPipe.h" /><ClInclude Include="src\ArchiveJobClient.h" />
+  <ClInclude Include="src\ArchiveJobProtocol.h" /><ClInclude Include="src\ArchiveJobPipe.h" /><ClInclude Include="src\ArchiveSecurity.h" /><ClInclude Include="src\ArchiveJobClient.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 

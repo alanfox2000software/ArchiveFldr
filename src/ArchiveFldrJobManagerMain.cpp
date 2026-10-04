@@ -9,6 +9,9 @@ static HANDLE g_queueThread = nullptr;
 static std::vector<HANDLE> g_monitors;
 static HANDLE g_queueEvent = nullptr;
 static HANDLE g_eventThread = nullptr;
+static HANDLE g_uiEventThread = nullptr;
+static HANDLE g_uiEventPipe = INVALID_HANDLE_VALUE;
+static HWND g_mainWindow = nullptr;
 static CRITICAL_SECTION g_queueLock;
 static CRITICAL_SECTION g_eventLock;
 static std::vector<ArchiveJobProtocol::JobRequest> g_queue;
@@ -204,7 +207,26 @@ static DWORD WINAPI PipeThread(void*)
     return 0;
 }
 
+static const UINT WM_EVENT_UPDATE = WM_APP + 2;
 static const wchar_t* kClass = L"ArchiveFldrJobManagerWindow";
+
+static DWORD WINAPI UiEventThread(void*)
+{
+    while (WaitForSingleObject(g_stop, 0) != WAIT_OBJECT_0) {
+        ArchiveJobPipe::Client client(ArchiveJobProtocol::kEventsPipeName);
+        if (!client.Connect(1000)) { Sleep(250); continue; }
+        if (!ArchiveJobPipe::Send(client.Handle(), ArchiveJobProtocol::MessageType::Hello, L"version=1\n")) { Sleep(250); continue; }
+        ArchiveJobProtocol::MessageType ack{}; std::wstring payload;
+        if (!ArchiveJobPipe::Receive(client.Handle(), ack, payload) || ack != ArchiveJobProtocol::MessageType::State || ArchiveJobProtocol::Get(payload,L"state") != L"subscribed") { Sleep(250); continue; }
+        g_uiEventPipe = client.Handle();
+        while (WaitForSingleObject(g_stop, 0) != WAIT_OBJECT_0 && ArchiveJobPipe::Receive(client.Handle(), ack, payload)) {
+            if (g_mainWindow) PostMessageW(g_mainWindow, WM_EVENT_UPDATE, (WPARAM)ack, 0);
+        }
+        g_uiEventPipe = INVALID_HANDLE_VALUE;
+        client.Close();
+    }
+    return 0;
+}
 static const UINT WM_TRAY = WM_APP + 1;
 static const UINT ID_TRAY = 1001;
 static HANDLE g_mutex = nullptr;
@@ -261,10 +283,10 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
     if (msg == WM_COMMAND && LOWORD(wp) == ID_TRAY) { ShowWindow(hwnd, SW_SHOW); return 0; }
     if (msg == WM_COMMAND && LOWORD(wp) == ID_CANCEL_JOB) { int sel=(int)SendMessageW(g_list,LB_GETCURSEL,0,0); if(sel>=0 && sel<(int)g_visibleIds.size()) CancelJob(g_visibleIds[sel]); return 0; }
-    if (msg == WM_TIMER) { RefreshList(); return 0; }
+    if (msg == WM_TIMER || msg == WM_EVENT_UPDATE) { RefreshList(); return 0; }
     if (msg == WM_SIZE && g_list) { MoveWindow(g_list, 8, 8, LOWORD(lp) - 16, HIWORD(lp) - 16, TRUE); return 0; }
     if (msg == WM_CLOSE) { ShowWindow(hwnd, SW_HIDE); return 0; }
-    if (msg == WM_DESTROY) { Shell_NotifyIconW(NIM_DELETE, &g_tray); if (g_stop) { SetEvent(g_stop); HANDLE wake = CreateFileW(ArchiveJobProtocol::kPipeName, GENERIC_READ|GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr); if (wake != INVALID_HANDLE_VALUE) CloseHandle(wake); } if (g_serverThread) { WaitForSingleObject(g_serverThread, 3000); CloseHandle(g_serverThread); g_serverThread = nullptr; } HANDLE eventWake = CreateFileW(ArchiveJobProtocol::kEventsPipeName, GENERIC_READ|GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr); if(eventWake != INVALID_HANDLE_VALUE) CloseHandle(eventWake); if (g_eventThread) { WaitForSingleObject(g_eventThread, 3000); CloseHandle(g_eventThread); g_eventThread = nullptr; } if (g_queueThread) { WaitForSingleObject(g_queueThread, 3000); CloseHandle(g_queueThread); g_queueThread = nullptr; }
+    if (msg == WM_DESTROY) { Shell_NotifyIconW(NIM_DELETE, &g_tray); if (g_stop) { SetEvent(g_stop); HANDLE wake = CreateFileW(ArchiveJobProtocol::kPipeName, GENERIC_READ|GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr); if (wake != INVALID_HANDLE_VALUE) CloseHandle(wake); } if (g_serverThread) { WaitForSingleObject(g_serverThread, 3000); CloseHandle(g_serverThread); g_serverThread = nullptr; } HANDLE eventWake = CreateFileW(ArchiveJobProtocol::kEventsPipeName, GENERIC_READ|GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr); if(eventWake != INVALID_HANDLE_VALUE) CloseHandle(eventWake); if (g_eventThread) { WaitForSingleObject(g_eventThread, 3000); CloseHandle(g_eventThread); g_eventThread = nullptr; } if (g_uiEventPipe != INVALID_HANDLE_VALUE) { CloseHandle(g_uiEventPipe); g_uiEventPipe = INVALID_HANDLE_VALUE; } if (g_uiEventThread) { WaitForSingleObject(g_uiEventThread, 3000); CloseHandle(g_uiEventThread); g_uiEventThread = nullptr; } if (g_queueThread) { WaitForSingleObject(g_queueThread, 3000); CloseHandle(g_queueThread); g_queueThread = nullptr; }
         // Stop and reap every worker before destroying the queue lock.
         EnterCriticalSection(&g_queueLock);
         std::vector<HANDLE> workers;
@@ -309,6 +331,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     HWND hwnd = CreateWindowExW(0, kClass, L"ArchiveFldr Jobs", WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 640, 420, nullptr, nullptr, instance, nullptr);
     if (!hwnd) return 1;
+    g_mainWindow = hwnd;
     g_list = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
         WS_CHILD | WS_VISIBLE | LBS_NOINTEGRALHEIGHT | WS_VSCROLL,
         8, 8, 608, 380, hwnd, nullptr, instance, nullptr);
@@ -331,6 +354,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     if (!g_stop || !g_queueEvent) return 1;
     g_serverThread = CreateThread(nullptr, 0, PipeThread, nullptr, 0, nullptr);
     g_eventThread = CreateThread(nullptr, 0, EventThread, nullptr, 0, nullptr);
+    g_uiEventThread = CreateThread(nullptr, 0, UiEventThread, nullptr, 0, nullptr);
     g_queueThread = CreateThread(nullptr, 0, QueueThread, nullptr, 0, nullptr);
     ShowWindow(hwnd, SW_HIDE);
     MSG msg{}; while (GetMessageW(&msg, nullptr, 0, 0) > 0) { TranslateMessage(&msg); DispatchMessageW(&msg); }

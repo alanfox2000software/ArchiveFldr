@@ -8,7 +8,6 @@
 #include "ArchiveOps.h"
 #include "SevenZipEngine.h"   // Is7zEngineAvailable() / Get7zEnginePath()
 #include "ArchiveWriter.h"
-#include "ArchiveJobClient.h"
 #include "ArchiveSecurity.h"
 #include "AddToArchiveDialog.h"
 #include "ThirdParty.h"
@@ -1005,21 +1004,24 @@ static std::wstring Q(const std::wstring& v)
 static bool StartCompressionWorker(const std::wstring& out, const std::vector<std::wstring>& paths,
                                    const ArchiveWriter::Options& o)
 {
-    ArchiveJobProtocol::JobRequest request;
-    CoCreateGuid(&request.id);
-    request.kind = ArchiveJobProtocol::JobKind::Compress;
-    request.output = out;
-    request.sources = paths;
-    request.format = o.format;
-    request.level = o.level;
-    request.threads = o.threads;
-    request.solid = o.solid;
-    request.encryptNames = o.encryptNames;
-    request.password = o.password;
-    request.hasPassword = !o.password.empty();
-    const bool submitted = ArchiveJobClient::Submit(request);
-    if (!request.password.empty()) ArchiveSecurity::SecureClear(request.password);
-    return submitted;
+    uint64_t total = 0;
+    const auto items = ArchiveWriter::CollectItems(paths, &total);
+    if (items.empty()) return false;
+    std::wstring error;
+    const bool ok = ArchiveWriter::Compress(out, items, o, nullptr, &error);
+    if (!ok) {
+        MessageBoxW(nullptr, error.empty() ? L"The archive could not be created." : error.c_str(),
+                    L"ArchiveFldr", MB_ICONERROR | MB_OK);
+        return false;
+    }
+    const std::wstring createdPath = o.volumeBytes ? out + L".001" : out;
+    SHChangeNotify(SHCNE_CREATE, SHCNF_PATH, createdPath.c_str(), nullptr);
+    std::wstring dir = out;
+    if (PathRemoveFileSpecW(&dir[0])) {
+        dir.resize(wcslen(dir.c_str()));
+        SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATH, dir.c_str(), nullptr);
+    }
+    return true;
 }
 
 } // namespace

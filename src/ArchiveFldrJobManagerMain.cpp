@@ -108,7 +108,6 @@ static DWORD WINAPI WorkerMonitor(void* raw)
     EnterCriticalSection(&g_queueLock);
     FinishedResult result{}; result.exitCode = exitCode; result.state = exitCode == 0 ? ArchiveJobProtocol::JobState::Completed : (exitCode == ERROR_CANCELLED ? ArchiveJobProtocol::JobState::Cancelled : ArchiveJobProtocol::JobState::Failed); g_finishedResults[id] = result;
     LeaveCriticalSection(&g_queueLock);
-    BroadcastEvent(ArchiveJobProtocol::MessageType::Result, ArchiveJobProtocol::EncodeResult(job->id, result.state, exitCode, result.error));
     EnterCriticalSection(&g_queueLock);
     if (exitCode != 0 && exitCode != ERROR_CANCELLED) {
         OutputDebugStringW((L"ArchiveFldr worker failed or crashed: " + id + L" exit=" + std::to_wstring(exitCode) + L"\n").c_str());
@@ -121,13 +120,15 @@ static DWORD WINAPI WorkerMonitor(void* raw)
                     from.push_back(L'\0'); from.push_back(L'\0');
                     SHFILEOPSTRUCTW op{}; op.wFunc=FO_DELETE; op.pFrom=from.data();
                     op.fFlags=FOF_NOCONFIRMATION|FOF_NOERRORUI|FOF_SILENT|FOF_NOCONFIRMMKDIR;
-                    if(SHFileOperationW(&op)!=0) { FinishedResult r{}; r.state=ArchiveJobProtocol::JobState::Failed; r.exitCode=ERROR_ACCESS_DENIED; r.error=L"Unable to clean the failed extraction staging directory."; g_finishedResults[ArchiveJobProtocol::GuidText(it->id)]=r; }
-                } else if(!DeleteFileW(it->outputPath.c_str()) && GetLastError()!=ERROR_FILE_NOT_FOUND) { FinishedResult r{}; r.state=ArchiveJobProtocol::JobState::Failed; r.exitCode=ERROR_ACCESS_DENIED; r.error=L"Unable to clean the failed archive output."; g_finishedResults[ArchiveJobProtocol::GuidText(it->id)]=r; }
+                    if(SHFileOperationW(&op)!=0) { result.state=ArchiveJobProtocol::JobState::Failed; result.exitCode=ERROR_ACCESS_DENIED; result.error=L"Unable to clean the failed extraction staging directory."; g_finishedResults[ArchiveJobProtocol::GuidText(it->id)]=result; }
+                } else if(!DeleteFileW(it->outputPath.c_str()) && GetLastError()!=ERROR_FILE_NOT_FOUND) { result.state=ArchiveJobProtocol::JobState::Failed; result.exitCode=ERROR_ACCESS_DENIED; result.error=L"Unable to clean the failed archive output."; g_finishedResults[ArchiveJobProtocol::GuidText(it->id)]=result; }
             }
             CloseHandle(it->process); if(it->cancelEvent) CloseHandle(it->cancelEvent); g_active.erase(it); break;
         }
     }
     LeaveCriticalSection(&g_queueLock);
+    BroadcastEvent(ArchiveJobProtocol::MessageType::Result,
+                   ArchiveJobProtocol::EncodeResult(job->id, result.state, result.exitCode, result.error));
     delete job;
     return exitCode;
 }

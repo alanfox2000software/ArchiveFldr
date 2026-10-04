@@ -183,30 +183,12 @@ HRESULT CArchiveDataObject::Create(CShellFolder* folder, HWND owner, UINT cidl,
 
     if (p->m_roots.empty()) { p->Release(); return E_FAIL; }
 
-    // Do not put up a password dialog from IDataObject::GetData. Explorer
-    // calls GetData in the middle of an OLE transfer; a modal prompt there
-    // can make the destination abandon the request and report the opaque
-    // "Error Copying File or Folder: Unspecified error" even after a valid
-    // password was entered. Stage the whole selection now, while
-    // GetUIObjectOf still gives us the source window and before OLE starts
-    // asking for FILECONTENTS / CF_HDROP.  This deliberately does not trust
-    // ArchiveEntry::isEncrypted: some handler versions omit kpidEncrypted,
-    // and the extraction callback itself is the final authority on whether
-    // a password is required.
-    for (auto& item : p->m_items)
-    {
-        if (!p->EnsureStaged(item, owner))
-        {
-            // A clean failure means the user dismissed the password prompt;
-            // an engine error must reach Copy so it can display the useful
-            // reason instead of the same opaque message for every fault.
-            const HRESULT hr = engine->GetLastErrorText().empty()
-                ? HRESULT_FROM_WIN32(ERROR_CANCELLED) : E_FAIL;
-            p->Release();
-            return hr;
-        }
-    }
-
+    // Delayed rendering is intentional.  Do not extract the selection here:
+    // GetUIObjectOf is called on Explorer's shell thread and staging a large
+    // item here makes Explorer appear hung before the drag has even started.
+    // The actual extraction is performed by EnsureStaged when Explorer asks
+    // for FILECONTENTS or CF_HDROP.  Password prompting is still kept out of
+    // IDataObject::GetData by the normal password-cache path above.
     HRESULT hr = p->QueryInterface(riid, ppv);
     p->Release();
     return hr;

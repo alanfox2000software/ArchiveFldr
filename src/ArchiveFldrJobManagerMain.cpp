@@ -32,6 +32,10 @@ struct Subscriber
 };
 static std::vector<Subscriber*> g_eventClients;
 
+// Overflow policy: progress is lossy, state/result are critical. Drop the
+// oldest progress entries first. If a critical message cannot fit after all
+// progress entries are removed, reject the subscriber rather than silently
+// losing a state or result notification.
 static bool EnqueueMessage(Subscriber& subscriber, ArchiveJobProtocol::MessageType type, const std::wstring& payload)
 {
     const bool critical = type != ArchiveJobProtocol::MessageType::Progress;

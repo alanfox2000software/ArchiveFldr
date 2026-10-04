@@ -17,7 +17,7 @@ static void BroadcastEvent(ArchiveJobProtocol::MessageType type, const std::wstr
 {
     EnterCriticalSection(&g_queueLock);
     for(auto it=g_eventClients.begin(); it!=g_eventClients.end();) {
-        if(!ArchiveJobPipe::Send(*it,type,payload)){CloseHandle(*it);it=g_eventClients.erase(it);} else ++it;
+        if(!ArchiveJobPipe::Send(*it,type,payload)){DisconnectNamedPipe(*it);CloseHandle(*it);it=g_eventClients.erase(it);} else ++it;
     }
     LeaveCriticalSection(&g_queueLock);
 }
@@ -291,7 +291,7 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 SHFILEOPSTRUCTW op{}; op.wFunc=FO_DELETE; op.pFrom=from.data(); op.fFlags=FOF_NOCONFIRMATION|FOF_NOERRORUI|FOF_SILENT|FOF_NOCONFIRMMKDIR; SHFileOperationW(&op);
             } else if (GetFileAttributesW(job.outputPath.c_str()) != INVALID_FILE_ATTRIBUTES) DeleteFileW(job.outputPath.c_str()); }
         LeaveCriticalSection(&g_queueLock);
-        EnterCriticalSection(&g_queueLock); for(HANDLE client:g_eventClients) CloseHandle(client); g_eventClients.clear(); LeaveCriticalSection(&g_queueLock);
+        EnterCriticalSection(&g_queueLock); for(HANDLE client:g_eventClients){DisconnectNamedPipe(client);CloseHandle(client);} g_eventClients.clear(); LeaveCriticalSection(&g_queueLock);
         DeleteCriticalSection(&g_queueLock); CloseHandle(g_stop); CloseHandle(g_queueEvent); PostQuitMessage(0); return 0; }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }

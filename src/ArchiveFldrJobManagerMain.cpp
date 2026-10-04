@@ -31,6 +31,8 @@ static DWORD WINAPI EventThread(void*)
             if(ArchiveJobProtocol::Get(payload,L"version") != L"1") continue;
             if(!ArchiveJobPipe::Send(server.Handle(),ArchiveJobProtocol::MessageType::State,L"state=subscribed\nversion=1\n")) continue;
             HANDLE client=server.Detach();
+            DWORD pipeMode=PIPE_READMODE_BYTE|PIPE_NOWAIT;
+            SetNamedPipeHandleState(client,&pipeMode,nullptr,nullptr);
             EnterCriticalSection(&g_eventLock); g_eventClients.push_back(client); LeaveCriticalSection(&g_eventLock);
         }}
     return 0;

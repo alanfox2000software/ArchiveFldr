@@ -1,0 +1,19 @@
+#include "stdafx.h"
+#include "ArchiveJobPipe.h"
+
+namespace ArchiveJobPipe
+{
+static bool WriteAll(HANDLE h, const void* data, DWORD bytes)
+{ const BYTE* p=(const BYTE*)data; while(bytes){DWORD n=0;if(!WriteFile(h,p,bytes,&n,nullptr)||!n)return false;p+=n;bytes-=n;}return true; }
+static bool ReadAll(HANDLE h, void* data, DWORD bytes)
+{ BYTE* p=(BYTE*)data; while(bytes){DWORD n=0;if(!ReadFile(h,p,bytes,&n,nullptr)||!n)return false;p+=n;bytes-=n;}return true; }
+bool Send(HANDLE pipe, ArchiveJobProtocol::MessageType type, const std::wstring& payload)
+{ ArchiveJobProtocol::MessageHeader h;h.type=(uint32_t)type;h.payloadBytes=(uint32_t)(payload.size()*sizeof(wchar_t));if(h.payloadBytes>ArchiveJobProtocol::kMaxPayloadBytes)return false;return WriteAll(pipe,&h,sizeof(h))&&WriteAll(pipe,payload.data(),h.payloadBytes); }
+bool Receive(HANDLE pipe, ArchiveJobProtocol::MessageType& type, std::wstring& payload)
+{ ArchiveJobProtocol::MessageHeader h{};if(!ReadAll(pipe,&h,sizeof(h))||h.magic!=0x314A4641||h.version!=ArchiveJobProtocol::kProtocolVersion||h.payloadBytes>ArchiveJobProtocol::kMaxPayloadBytes||h.payloadBytes%sizeof(wchar_t))return false;payload.assign(h.payloadBytes/sizeof(wchar_t),L'\0');if(!ReadAll(pipe,payload.data(),h.payloadBytes))return false;type=(ArchiveJobProtocol::MessageType)h.type;return true; }
+Server::~Server(){Close();} void Server::Close(){if(m_pipe!=INVALID_HANDLE_VALUE){DisconnectNamedPipe(m_pipe);CloseHandle(m_pipe);m_pipe=INVALID_HANDLE_VALUE;}}
+bool Server::Listen(){Close();m_pipe=CreateNamedPipeW(ArchiveJobProtocol::kPipeName,PIPE_ACCESS_DUPLEX,PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT,PIPE_UNLIMITED_INSTANCES,ArchiveJobProtocol::kMaxPayloadBytes,ArchiveJobProtocol::kMaxPayloadBytes,0,nullptr);return m_pipe!=INVALID_HANDLE_VALUE;}
+bool Server::Accept(){return m_pipe!=INVALID_HANDLE_VALUE&&ConnectNamedPipe(m_pipe,nullptr)?true:GetLastError()==ERROR_PIPE_CONNECTED;}
+Client::~Client(){Close();} void Client::Close(){if(m_pipe!=INVALID_HANDLE_VALUE){CloseHandle(m_pipe);m_pipe=INVALID_HANDLE_VALUE;}}
+bool Client::Connect(DWORD timeoutMs){Close();if(!WaitNamedPipeW(ArchiveJobProtocol::kPipeName,timeoutMs))return false;m_pipe=CreateFileW(ArchiveJobProtocol::kPipeName,GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_EXISTING,0,nullptr);return m_pipe!=INVALID_HANDLE_VALUE;}
+}

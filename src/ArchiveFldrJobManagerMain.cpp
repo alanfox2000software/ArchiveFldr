@@ -35,11 +35,11 @@ static DWORD WINAPI SubscriberWriter(void* context)
         for(;;){
             Subscriber::PendingMessage message;
             EnterCriticalSection(&s->lock);
-            if(s->pending.empty()) { bool stop=s->stopping; LeaveCriticalSection(&s->lock); if(stop)return 0; break; }
+            if(s->pending.empty()) { bool stop=s->stopping; LeaveCriticalSection(&s->lock); if(stop){ DisconnectNamedPipe(s->pipe); CloseHandle(s->pipe); s->pipe=INVALID_HANDLE_VALUE; return 0; } break; }
             message=std::move(s->pending.front()); s->pending.pop_front(); s->pendingBytes-=message.payload.size()*sizeof(wchar_t);
             LeaveCriticalSection(&s->lock);
             if(!ArchiveJobPipe::Send(s->pipe,message.type,message.payload)){
-                EnterCriticalSection(&s->lock); s->connected=false; s->stopping=true; LeaveCriticalSection(&s->lock); return 1;
+                EnterCriticalSection(&s->lock); s->connected=false; s->stopping=true; LeaveCriticalSection(&s->lock); DisconnectNamedPipe(s->pipe); CloseHandle(s->pipe); s->pipe=INVALID_HANDLE_VALUE; return 1;
             }
         }
     }
@@ -78,7 +78,7 @@ static void BroadcastEvent(ArchiveJobProtocol::MessageType type, const std::wstr
         EnterCriticalSection(&subscriber->lock);
         bool ok=subscriber->connected && !subscriber->stopping && EnqueueMessage(*subscriber,type,payload);
         LeaveCriticalSection(&subscriber->lock);
-        if(!ok){ subscriber->stopping=true; SetEvent(subscriber->wakeEvent); WaitForSingleObject(subscriber->writerThread,3000); CloseHandle(subscriber->writerThread); DisconnectNamedPipe(subscriber->pipe); CloseHandle(subscriber->pipe); CloseHandle(subscriber->wakeEvent); DeleteCriticalSection(&subscriber->lock); delete subscriber; it=g_eventClients.erase(it); }
+        if(!ok){ subscriber->stopping=true; SetEvent(subscriber->wakeEvent); WaitForSingleObject(subscriber->writerThread,3000); CloseHandle(subscriber->writerThread); CloseHandle(subscriber->wakeEvent); DeleteCriticalSection(&subscriber->lock); delete subscriber; it=g_eventClients.erase(it); }
         else { SetEvent(subscriber->wakeEvent); ++it; }
     }
     LeaveCriticalSection(&g_eventLock);
@@ -380,7 +380,7 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         LeaveCriticalSection(&g_queueLock);
         BroadcastEvent(ArchiveJobProtocol::MessageType::State, L"state=shutdown\n");
         EnterCriticalSection(&g_eventLock);
-        for(Subscriber* subscriber:g_eventClients){ EnterCriticalSection(&subscriber->lock); subscriber->stopping=true; subscriber->connected=false; LeaveCriticalSection(&subscriber->lock); SetEvent(subscriber->wakeEvent); WaitForSingleObject(subscriber->writerThread,3000); CloseHandle(subscriber->writerThread); DisconnectNamedPipe(subscriber->pipe); CloseHandle(subscriber->pipe); CloseHandle(subscriber->wakeEvent); DeleteCriticalSection(&subscriber->lock); delete subscriber; }
+        for(Subscriber* subscriber:g_eventClients){ EnterCriticalSection(&subscriber->lock); subscriber->stopping=true; subscriber->connected=false; LeaveCriticalSection(&subscriber->lock); SetEvent(subscriber->wakeEvent); WaitForSingleObject(subscriber->writerThread,3000); CloseHandle(subscriber->writerThread); CloseHandle(subscriber->wakeEvent); DeleteCriticalSection(&subscriber->lock); delete subscriber; }
         g_eventClients.clear();
         LeaveCriticalSection(&g_eventLock);
         DeleteCriticalSection(&g_eventLock); DeleteCriticalSection(&g_queueLock); CloseHandle(g_stop); CloseHandle(g_queueEvent); PostQuitMessage(0); return 0; }

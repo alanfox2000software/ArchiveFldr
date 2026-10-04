@@ -110,7 +110,19 @@ static DWORD WINAPI PipeThread(void*)
         } else if (type == ArchiveJobProtocol::MessageType::Control) {
             GUID id{}; ArchiveJobProtocol::ParseGuid(ArchiveJobProtocol::Get(payload,L"id"), id);
             auto command=(ArchiveJobProtocol::Control)_wtoi(ArchiveJobProtocol::Get(payload,L"command").c_str());
-            if(command==ArchiveJobProtocol::Control::Cancel){EnterCriticalSection(&g_queueLock);for(auto it=g_queue.begin();it!=g_queue.end();)if(IsEqualGUID(it->id,id))it=g_queue.erase(it);else++it;for(auto&a:g_active)if(IsEqualGUID(a.id,id))TerminateProcess(a.process,ERROR_CANCELLED);LeaveCriticalSection(&g_queueLock);}
+            if(command==ArchiveJobProtocol::Control::Cancel){
+                HANDLE process=nullptr;
+                EnterCriticalSection(&g_queueLock);
+                for(auto it=g_queue.begin();it!=g_queue.end();) if(IsEqualGUID(it->id,id)) it=g_queue.erase(it); else ++it;
+                for(auto&a:g_active) if(IsEqualGUID(a.id,id)){ process=a.process; a.state=ArchiveJobProtocol::JobState::Cancelling; }
+                LeaveCriticalSection(&g_queueLock);
+                if(process){
+                    // Give a worker that has reached a safe archive boundary a
+                    // chance to finish and close its temporary output first.
+                    if(WaitForSingleObject(process, 5000)==WAIT_TIMEOUT)
+                        TerminateProcess(process, ERROR_CANCELLED);
+                }
+            }
         }
     }
     return 0;

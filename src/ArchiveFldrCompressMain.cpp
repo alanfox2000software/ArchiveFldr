@@ -1,14 +1,18 @@
 #include "stdafx.h"
 #include "ArchiveWriter.h"
 
+static HANDLE g_cancelEvent = nullptr;
+static void CheckCancelled() { if (g_cancelEvent && WaitForSingleObject(g_cancelEvent, 0) == WAIT_OBJECT_0) ExitProcess(ERROR_CANCELLED); }
+
 static void Usage() { fwprintf(stderr, L"Usage: ArchiveFldrCompress.exe --out <file> --format <name> [options] <source>...\n"); }
 static std::wstring Next(int& i, int argc, wchar_t** argv) { return ++i < argc ? argv[i] : L""; }
 int wmain(int argc, wchar_t** argv)
 {
-    std::wstring out, format = L"7z"; std::vector<std::wstring> sources;
+    std::wstring out, format = L"7z", cancelName; std::vector<std::wstring> sources;
     ArchiveWriter::Options opt;
     for (int i = 1; i < argc; ++i) {
         if (!_wcsicmp(argv[i], L"--out")) out = Next(i, argc, argv);
+        else if (!_wcsicmp(argv[i], L"--cancel-event")) cancelName = Next(i, argc, argv);
         else if (!_wcsicmp(argv[i], L"--format")) { format = Next(i, argc, argv); opt.format = format; }
         else if (!_wcsicmp(argv[i], L"--level")) opt.level = _wtoi(Next(i, argc, argv).c_str());
         else if (!_wcsicmp(argv[i], L"--threads")) opt.threads = _wtoi(Next(i, argc, argv).c_str());
@@ -31,12 +35,14 @@ int wmain(int argc, wchar_t** argv)
         else sources.push_back(argv[i]);
     }
     if (out.empty() || sources.empty()) { Usage(); return 2; }
+    if (!cancelName.empty()) g_cancelEvent = OpenEventW(SYNCHRONIZE, FALSE, cancelName.c_str());
     opt.format = format;
     auto items = ArchiveWriter::CollectItems(sources);
     if (items.empty()) return 3;
     std::wstring error;
     const bool ok = ArchiveWriter::Compress(out, items, opt,
         [](int pct, const std::wstring& name) {
+            CheckCancelled();
             fwprintf(stdout, L"PROGRESS %d %ls\n", pct, name.c_str()); fflush(stdout);
         }, &error);
     if (!ok) { if (!error.empty()) fwprintf(stderr, L"%ls\n", error.c_str()); return 4; }

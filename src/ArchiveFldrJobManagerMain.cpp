@@ -17,7 +17,7 @@ static std::wstring QuoteArg(const std::wstring& v)
     for(wchar_t c:v){if(c==L'\\'){++bs;continue;}if(c==L'\"'){s.append(bs*2+1,L'\\');s+=c;bs=0;}else{s.append(bs,L'\\');bs=0;s+=c;}}
     s.append(bs*2,L'\\'); return s+L"\"";
 }
-struct ActiveJob { GUID id{}; HANDLE process = nullptr; HANDLE output = nullptr; ArchiveJobProtocol::JobKind kind{}; int percent = 0; std::wstring current; ArchiveJobProtocol::JobState state = ArchiveJobProtocol::JobState::Running; std::wstring outputPath; bool outputExisted = false; };
+struct ActiveJob { GUID id{}; HANDLE process = nullptr; HANDLE output = nullptr; HANDLE cancelEvent = nullptr; ArchiveJobProtocol::JobKind kind{}; int percent = 0; std::wstring current; ArchiveJobProtocol::JobState state = ArchiveJobProtocol::JobState::Running; std::wstring outputPath; bool outputExisted = false; };
 static std::vector<ActiveJob> g_active;
 struct FinishedResult { ArchiveJobProtocol::JobState state; DWORD exitCode; std::wstring error; };
 static std::map<std::wstring, FinishedResult> g_finishedResults;
@@ -29,22 +29,25 @@ static bool HasCapacity(ArchiveJobProtocol::JobKind kind)
     return count < (kind == ArchiveJobProtocol::JobKind::Compress ? kMaxCompressJobs : kMaxExtractJobs);
 }
 
-static HANDLE StartJob(const ArchiveJobProtocol::JobRequest& j, HANDLE* output)
+static HANDLE StartJob(const ArchiveJobProtocol::JobRequest& j, HANDLE* output, HANDLE* cancelEvent)
 {
     wchar_t mod[MAX_PATH]={}; if(!GetModuleFileNameW(nullptr,mod,ARRAYSIZE(mod))) return false;
     std::wstring base=mod; size_t slash=base.find_last_of(L"\\/"); base=(slash==std::wstring::npos?L"":base.substr(0,slash+1));
     std::wstring exe=base+(j.kind==ArchiveJobProtocol::JobKind::Compress?L"ArchiveFldrCompress.exe":L"ArchiveFldrExtract.exe");
-    std::wstring cmd=QuoteArg(exe);
+    std::wstring cancelName = L"Local\\ArchiveFldrCancel-" + ArchiveJobProtocol::GuidText(j.id);
+    std::wstring cmd=QuoteArg(exe) + L" --cancel-event " + QuoteArg(cancelName);
     if(j.kind==ArchiveJobProtocol::JobKind::Compress){cmd+=L" --out "+QuoteArg(j.output)+L" --format "+QuoteArg(j.format)+L" --level "+std::to_wstring(j.level)+L" --threads "+std::to_wstring(j.threads);if(j.solid)cmd+=L" --solid";if(j.encryptNames)cmd+=L" --encrypt-names";if(!j.password.empty())cmd+=L" --password-stdin";for(auto&s:j.sources)cmd+=L" "+QuoteArg(s);}
     else cmd+=L" --archive "+QuoteArg(j.archive)+L" --entry "+QuoteArg(j.entry)+L" --dest "+QuoteArg(j.output);
     std::vector<wchar_t> buf(cmd.begin(),cmd.end());buf.push_back(L'\0');
+    HANDLE cancellation = CreateEventW(nullptr, TRUE, FALSE, cancelName.c_str());
+    if (!cancellation) return nullptr;
     SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE}; HANDLE readPipe=nullptr, writePipe=nullptr, passRead=nullptr, passWrite=nullptr;
-    if(!CreatePipe(&readPipe,&writePipe,&sa,0)) return nullptr;
+    if(!CreatePipe(&readPipe,&writePipe,&sa,0)){CloseHandle(cancellation);return nullptr;}
     SetHandleInformation(readPipe,HANDLE_FLAG_INHERIT,0);
     if(!j.password.empty()){if(!CreatePipe(&passRead,&passWrite,&sa,0)){CloseHandle(readPipe);CloseHandle(writePipe);return nullptr;}SetHandleInformation(passWrite,HANDLE_FLAG_INHERIT,0);}
     STARTUPINFOW si{};si.cb=sizeof(si);si.dwFlags=STARTF_USESTDHANDLES;si.hStdOutput=writePipe;si.hStdError=writePipe;si.hStdInput=passRead?passRead:GetStdHandle(STD_INPUT_HANDLE);PROCESS_INFORMATION pi{};
     if(!CreateProcessW(exe.c_str(),buf.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,nullptr,&si,&pi)){CloseHandle(readPipe);CloseHandle(writePipe);if(passRead)CloseHandle(passRead);if(passWrite)CloseHandle(passWrite);return nullptr;}
-    CloseHandle(writePipe);if(passRead)CloseHandle(passRead);if(passWrite){DWORD bytes=0;WriteFile(passWrite,j.password.data(),(DWORD)(j.password.size()*sizeof(wchar_t)),&bytes,nullptr);CloseHandle(passWrite);} if(output)*output=readPipe;else CloseHandle(readPipe);CloseHandle(pi.hThread);return pi.hProcess;
+    CloseHandle(writePipe);if(passRead)CloseHandle(passRead);if(passWrite){DWORD bytes=0;WriteFile(passWrite,j.password.data(),(DWORD)(j.password.size()*sizeof(wchar_t)),&bytes,nullptr);CloseHandle(passWrite);} if(output)*output=readPipe;else CloseHandle(readPipe);if(cancelEvent)*cancelEvent=cancellation;else CloseHandle(cancellation);CloseHandle(pi.hThread);return pi.hProcess;
 }
 static DWORD WINAPI WorkerMonitor(void* raw)
 {
@@ -85,7 +88,7 @@ static DWORD WINAPI WorkerMonitor(void* raw)
                     SHFileOperationW(&op);
                 } else DeleteFileW(it->outputPath.c_str());
             }
-            CloseHandle(it->process); g_active.erase(it); break;
+            CloseHandle(it->process); if(it->cancelEvent) CloseHandle(it->cancelEvent); g_active.erase(it); break;
         }
     }
     LeaveCriticalSection(&g_queueLock);
@@ -95,7 +98,7 @@ static DWORD WINAPI WorkerMonitor(void* raw)
 
 static DWORD WINAPI QueueThread(void*)
 {
-    while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){WaitForSingleObject(g_queueEvent,500);ArchiveJobProtocol::JobRequest j;bool have=false;EnterCriticalSection(&g_queueLock);for(auto it=g_queue.begin();it!=g_queue.end();++it){if(HasCapacity(it->kind)){j=*it;g_queue.erase(it);have=true;break;}}if(g_queue.empty())ResetEvent(g_queueEvent);LeaveCriticalSection(&g_queueLock);if(have){HANDLE output=nullptr;HANDLE process=StartJob(j,&output);if(process){auto* active=new ActiveJob;active->id=j.id;active->process=process;active->output=output;active->kind=j.kind;active->outputPath=j.output;active->outputExisted=GetFileAttributesW(j.output.c_str())!=INVALID_FILE_ATTRIBUTES;EnterCriticalSection(&g_queueLock);g_active.push_back(*active);LeaveCriticalSection(&g_queueLock);HANDLE monitor=CreateThread(nullptr,0,WorkerMonitor,active,0,nullptr);if(monitor){EnterCriticalSection(&g_queueLock);g_monitors.push_back(monitor);LeaveCriticalSection(&g_queueLock);}else{EnterCriticalSection(&g_queueLock);if(!g_active.empty())g_active.pop_back();LeaveCriticalSection(&g_queueLock);CloseHandle(process);delete active;}}} }return 0;
+    while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){WaitForSingleObject(g_queueEvent,500);ArchiveJobProtocol::JobRequest j;bool have=false;EnterCriticalSection(&g_queueLock);for(auto it=g_queue.begin();it!=g_queue.end();++it){if(HasCapacity(it->kind)){j=*it;g_queue.erase(it);have=true;break;}}if(g_queue.empty())ResetEvent(g_queueEvent);LeaveCriticalSection(&g_queueLock);if(have){HANDLE output=nullptr;HANDLE cancelEvent=nullptr;HANDLE process=StartJob(j,&output,&cancelEvent);if(process){auto* active=new ActiveJob;active->id=j.id;active->process=process;active->output=output;active->cancelEvent=cancelEvent;active->kind=j.kind;active->outputPath=j.output;active->outputExisted=GetFileAttributesW(j.output.c_str())!=INVALID_FILE_ATTRIBUTES;EnterCriticalSection(&g_queueLock);g_active.push_back(*active);LeaveCriticalSection(&g_queueLock);HANDLE monitor=CreateThread(nullptr,0,WorkerMonitor,active,0,nullptr);if(monitor){EnterCriticalSection(&g_queueLock);g_monitors.push_back(monitor);LeaveCriticalSection(&g_queueLock);}else{EnterCriticalSection(&g_queueLock);if(!g_active.empty())g_active.pop_back();LeaveCriticalSection(&g_queueLock);CloseHandle(process);delete active;}}} }return 0;
 }
 
 static DWORD WINAPI PipeThread(void*)
@@ -172,7 +175,7 @@ static void CancelJob(const GUID& id)
     HANDLE process=nullptr;
     EnterCriticalSection(&g_queueLock);
     for(auto it=g_queue.begin();it!=g_queue.end();) if(IsEqualGUID(it->id,id)) it=g_queue.erase(it); else ++it;
-    for(auto& a:g_active) if(IsEqualGUID(a.id,id)){process=a.process;a.state=ArchiveJobProtocol::JobState::Cancelling;}
+    for(auto& a:g_active) if(IsEqualGUID(a.id,id)){process=a.process;a.state=ArchiveJobProtocol::JobState::Cancelling;if(a.cancelEvent) SetEvent(a.cancelEvent);}
     LeaveCriticalSection(&g_queueLock);
     if(process && WaitForSingleObject(process,5000)==WAIT_TIMEOUT) TerminateProcess(process,ERROR_CANCELLED);
 }

@@ -1,6 +1,9 @@
 #include "stdafx.h"
 #include "ArchiveEngine.h"
 
+static HANDLE g_cancelEvent = nullptr;
+static void CheckCancelled() { if (g_cancelEvent && WaitForSingleObject(g_cancelEvent, 0) == WAIT_OBJECT_0) ExitProcess(ERROR_CANCELLED); }
+
 static void Usage()
 {
     fwprintf(stderr, L"Usage: ArchiveFldrExtract.exe --archive <file> --entry <path> --dest <folder>\n");
@@ -30,9 +33,10 @@ static const wchar_t* Value(int& i, int argc, wchar_t** argv)
 
 int wmain(int argc, wchar_t** argv)
 {
-    std::wstring archive, entryPath, dest, password; bool passwordStdin = false;
+    std::wstring archive, entryPath, dest, password, cancelName; bool passwordStdin = false;
     for (int i = 1; i < argc; ++i) {
-        if (!_wcsicmp(argv[i], L"--archive")) { auto v = Value(i, argc, argv); if (v) archive = v; }
+        if (!_wcsicmp(argv[i], L"--cancel-event")) { auto v = Value(i, argc, argv); if (v) cancelName = v; }
+        else if (!_wcsicmp(argv[i], L"--archive")) { auto v = Value(i, argc, argv); if (v) archive = v; }
         else if (!_wcsicmp(argv[i], L"--entry")) { auto v = Value(i, argc, argv); if (v) entryPath = v; }
         else if (!_wcsicmp(argv[i], L"--dest")) { auto v = Value(i, argc, argv); if (v) dest = v; }
         else if (!_wcsicmp(argv[i], L"--password-stdin")) passwordStdin = true;
@@ -40,6 +44,7 @@ int wmain(int argc, wchar_t** argv)
         else { Usage(); return 2; }
     }
     if (archive.empty() || entryPath.empty() || dest.empty()) { Usage(); return 2; }
+    if (!cancelName.empty()) g_cancelEvent = OpenEventW(SYNCHRONIZE, FALSE, cancelName.c_str());
     if (passwordStdin) { wchar_t buffer[256] = {}; DWORD n = 0; while (ReadFile(GetStdHandle(STD_INPUT_HANDLE), buffer, sizeof(buffer)-sizeof(wchar_t), &n, nullptr) && n) { buffer[n/sizeof(wchar_t)] = L'\0'; password += buffer; } while (!password.empty() && (password.back()==L'\r' || password.back()==L'\n')) password.pop_back(); }
 
     auto engine = CreateArchiveEngine(archive);
@@ -65,6 +70,7 @@ int wmain(int argc, wchar_t** argv)
     SHCreateDirectoryExW(nullptr, dest.c_str(), nullptr);
     const bool ok = engine->ExtractFile(entry, dest,
         [](int pct, const std::wstring& name) {
+            CheckCancelled();
             fwprintf(stdout, L"PROGRESS %d %ls\n", pct, name.c_str());
             fflush(stdout);
         });

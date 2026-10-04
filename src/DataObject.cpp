@@ -245,7 +245,7 @@ static std::wstring QuoteProcessArg(const std::wstring& value)
 }
 
 static bool ExtractInWorker(const std::wstring& archive, const std::wstring& entry,
-                            const std::wstring& dest, std::wstring* error)
+                            const std::wstring& dest, const std::wstring& password, std::wstring* error)
 {
     ArchiveJobProtocol::JobRequest request;
     CoCreateGuid(&request.id);
@@ -253,6 +253,7 @@ static bool ExtractInWorker(const std::wstring& archive, const std::wstring& ent
     request.archive = archive;
     request.entry = entry;
     request.output = dest;
+    request.password = password;
     if (!ArchiveJobClient::Submit(request)) {
         if (error) *error = L"Unable to submit extraction job.";
         return false;
@@ -277,7 +278,8 @@ bool CArchiveDataObject::EnsureStaged(Item& it, HWND /*promptOwner*/)
     std::wstring produced = m_tempRoot + L"\\" + ArchiveOps::ToWin32(it.entry.fullPath);
     SHCreateDirectoryExW(nullptr, m_tempRoot.c_str(), nullptr);
     std::wstring error;
-    if (!ExtractInWorker(m_archivePath, it.entry.fullPath, m_tempRoot, &error))
+    if (!ExtractInWorker(m_archivePath, it.entry.fullPath, m_tempRoot,
+                         m_engine ? m_engine->GetPassword() : L"", &error))
         return false;
     if (it.entry.isDirectory) return true;
     if (GetFileAttributesW(produced.c_str()) == INVALID_FILE_ATTRIBUTES) return false;

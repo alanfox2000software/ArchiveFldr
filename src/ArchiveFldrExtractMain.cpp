@@ -30,18 +30,25 @@ static const wchar_t* Value(int& i, int argc, wchar_t** argv)
 
 int wmain(int argc, wchar_t** argv)
 {
-    std::wstring archive, entryPath, dest;
+    std::wstring archive, entryPath, dest, password; bool passwordStdin = false;
     for (int i = 1; i < argc; ++i) {
         if (!_wcsicmp(argv[i], L"--archive")) { auto v = Value(i, argc, argv); if (v) archive = v; }
         else if (!_wcsicmp(argv[i], L"--entry")) { auto v = Value(i, argc, argv); if (v) entryPath = v; }
         else if (!_wcsicmp(argv[i], L"--dest")) { auto v = Value(i, argc, argv); if (v) dest = v; }
+        else if (!_wcsicmp(argv[i], L"--password-stdin")) passwordStdin = true;
         else if (!_wcsicmp(argv[i], L"--help")) { Usage(); return 0; }
         else { Usage(); return 2; }
     }
     if (archive.empty() || entryPath.empty() || dest.empty()) { Usage(); return 2; }
+    if (passwordStdin) { wchar_t buffer[256] = {}; DWORD n = 0; while (ReadFile(GetStdHandle(STD_INPUT_HANDLE), buffer, sizeof(buffer)-sizeof(wchar_t), &n, nullptr) && n) { buffer[n/sizeof(wchar_t)] = L'\0'; password += buffer; } while (!password.empty() && (password.back()==L'\r' || password.back()==L'\n')) password.pop_back(); }
 
     auto engine = CreateArchiveEngine(archive);
-    if (!engine || !engine->Open(archive)) {
+    if (!engine) {
+        fwprintf(stderr, L"Unable to create archive engine.\n");
+        return 3;
+    }
+    if (!password.empty()) engine->SetPassword(password);
+    if (!engine->Open(archive)) {
         fwprintf(stderr, L"Unable to open archive: %ls\n", archive.c_str());
         return 3;
     }

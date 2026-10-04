@@ -9,6 +9,7 @@
 #include "SevenZipEngine.h"   // Is7zEngineAvailable() / Get7zEnginePath()
 #include "ArchiveWriter.h"
 #include "ArchiveJobClient.h"
+#include "ArchiveSecurity.h"
 #include "AddToArchiveDialog.h"
 #include "ThirdParty.h"
 #include "Settings.h"
@@ -1017,7 +1018,7 @@ static bool StartCompressionWorker(const std::wstring& out, const std::vector<st
     request.password = o.password;
     request.hasPassword = !o.password.empty();
     const bool submitted = ArchiveJobClient::Submit(request);
-    if (!request.password.empty()) { SecureZeroMemory(request.password.data(), request.password.size()*sizeof(wchar_t)); request.password.clear(); }
+    if (!request.password.empty()) ArchiveSecurity::SecureClear(request.password);
     return submitted;
 }
 

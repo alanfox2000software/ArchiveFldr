@@ -5,6 +5,7 @@
 #include "ShellFolder.h"
 #include "ArchiveOps.h"
 #include "ArchiveJobClient.h"
+#include "ArchiveSecurity.h"
 
 // ─────────────────────────────────────────────────────────
 // Clipboard formats (registered once)
@@ -256,7 +257,7 @@ static bool ExtractInWorker(const std::wstring& archive, const std::wstring& ent
     request.password = password;
     request.hasPassword = !password.empty();
     const bool submitted = ArchiveJobClient::Submit(request);
-    if (!request.password.empty()) { SecureZeroMemory(request.password.data(), request.password.size()*sizeof(wchar_t)); request.password.clear(); }
+    if (!request.password.empty()) ArchiveSecurity::SecureClear(request.password);
     if (!submitted) {
         if (error) *error = L"Unable to submit extraction job.";
         return false;

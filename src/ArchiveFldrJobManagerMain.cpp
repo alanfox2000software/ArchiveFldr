@@ -2,6 +2,7 @@
 #include <shellapi.h>
 #include "../res/resource.h"
 #include "ArchiveJobPipe.h"
+#include "ArchiveSecurity.h"
 
 static HANDLE g_stop = nullptr;
 static HANDLE g_serverThread = nullptr;
@@ -161,7 +162,7 @@ static HANDLE StartJob(ArchiveJobProtocol::JobRequest j, HANDLE* output, HANDLE*
     if(!j.password.empty()){if(!CreatePipe(&passRead,&passWrite,&sa,0)){CloseHandle(readPipe);CloseHandle(writePipe);return nullptr;}SetHandleInformation(passWrite,HANDLE_FLAG_INHERIT,0);}
     STARTUPINFOW si{};si.cb=sizeof(si);si.dwFlags=STARTF_USESTDHANDLES;si.hStdOutput=writePipe;si.hStdError=writePipe;si.hStdInput=passRead?passRead:GetStdHandle(STD_INPUT_HANDLE);PROCESS_INFORMATION pi{};
     if(!CreateProcessW(exe.c_str(),buf.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,nullptr,&si,&pi)){CloseHandle(readPipe);CloseHandle(writePipe);if(passRead)CloseHandle(passRead);if(passWrite)CloseHandle(passWrite);return nullptr;}
-    CloseHandle(writePipe);if(passRead)CloseHandle(passRead);if(passWrite){DWORD bytes=0;WriteFile(passWrite,j.password.data(),(DWORD)(j.password.size()*sizeof(wchar_t)),&bytes,nullptr); SecureZeroMemory(j.password.data(), j.password.size()*sizeof(wchar_t)); j.password.clear(); CloseHandle(passWrite);} if(output)*output=readPipe;else CloseHandle(readPipe);if(cancelEvent)*cancelEvent=cancellation;else CloseHandle(cancellation);CloseHandle(pi.hThread);return pi.hProcess;
+    CloseHandle(writePipe);if(passRead)CloseHandle(passRead);if(passWrite){DWORD bytes=0;WriteFile(passWrite,j.password.data(),(DWORD)(j.password.size()*sizeof(wchar_t)),&bytes,nullptr); ArchiveSecurity::SecureClear(j.password); CloseHandle(passWrite);} if(output)*output=readPipe;else CloseHandle(readPipe);if(cancelEvent)*cancelEvent=cancellation;else CloseHandle(cancellation);CloseHandle(pi.hThread);return pi.hProcess;
 }
 static DWORD WINAPI WorkerMonitor(void* raw)
 {

@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "ArchiveJobClient.h"
+#include "ArchiveSecurity.h"
 
 namespace ArchiveJobClient
 {
@@ -26,8 +27,8 @@ bool Submit(const ArchiveJobProtocol::JobRequest& request)
                               ArchiveJobProtocol::Encode(request))) return false;
     if (request.hasPassword) {
         std::wstring secret = L"id=" + ArchiveJobProtocol::GuidText(request.id) + L"\npassword=" + ArchiveJobProtocol::Escape(request.password) + L"\n";
-        if (!ArchiveJobPipe::Send(client.Handle(), ArchiveJobProtocol::MessageType::Password, secret)) { SecureZeroMemory(secret.data(), secret.size()*sizeof(wchar_t)); return false; }
-        SecureZeroMemory(secret.data(), secret.size()*sizeof(wchar_t)); secret.clear();
+        if (!ArchiveJobPipe::Send(client.Handle(), ArchiveJobProtocol::MessageType::Password, secret)) { ArchiveSecurity::SecureClear(secret); return false; }
+        ArchiveSecurity::SecureClear(secret);
     }
     ArchiveJobProtocol::MessageType type{}; std::wstring reply;
     if (!ArchiveJobPipe::Receive(client.Handle(), type, reply) ||

@@ -19,7 +19,7 @@
     <ClCompile Include="src\ArchiveFldrJobManagerMain.cpp" />
   </ItemGroup>
   <ItemGroup><ClInclude Include="src\ArchiveEngine.h" /></ItemGroup>
-  <ItemGroup><ResourceCompile Include="res\resource.rc" /><ClInclude Include="src\ArchiveJobProtocol.h" /><ClInclude Include="src\ArchiveJobPipe.h" /><ClInclude Include="src\ArchiveSecurity.h" />
+  <ItemGroup><ResourceCompile Include="res\resource.rc" /><ClInclude Include="src\ArchiveJobProtocol.h" /><ClInclude Include="src\ArchiveJobPipe.h" /><ClInclude Include="src\ArchiveSecurity.h" /><ClInclude Include="src\ArchiveSecureString.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

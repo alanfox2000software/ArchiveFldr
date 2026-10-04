@@ -18,7 +18,7 @@
   <ItemGroup>
     <ClCompile Include="src\ArchiveFldrExtractMain.cpp" /><ClCompile Include="src\stdafx.cpp" /><ClCompile Include="src\ArchiveJobPipe.cpp" /><ClCompile Include="src\ArchiveEngine.cpp" /><ClCompile Include="src\SevenZipEngine.cpp" /><ClCompile Include="src\Sdk7zGuids.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader><PreprocessorDefinitions>INITGUID;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile><ClCompile Include="src\CodecEngine.cpp" /><ClCompile Include="src\UnrarEngine.cpp" /><ClCompile Include="src\WimEngine.cpp" /><ClCompile Include="src\ThirdParty.cpp" /><ClCompile Include="src\LizardFrame.cpp" /><ClCompile Include="src\SysInfo.cpp" /><ClCompile Include="src\Formats.cpp" />
   </ItemGroup>
-  <ItemGroup><ClInclude Include="src\ArchiveEngine.h" /><ClInclude Include="src\ArchiveJobProtocol.h" /><ClInclude Include="src\ArchiveJobPipe.h" /><ClInclude Include="src\ArchiveSecurity.h" />
+  <ItemGroup><ClInclude Include="src\ArchiveEngine.h" /><ClInclude Include="src\ArchiveJobProtocol.h" /><ClInclude Include="src\ArchiveJobPipe.h" /><ClInclude Include="src\ArchiveSecurity.h" /><ClInclude Include="src\ArchiveSecureString.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

@@ -21,6 +21,13 @@ struct ActiveJob { GUID id{}; HANDLE process = nullptr; HANDLE output = nullptr;
 static std::vector<ActiveJob> g_active;
 struct FinishedResult { ArchiveJobProtocol::JobState state; DWORD exitCode; std::wstring error; };
 static std::map<std::wstring, FinishedResult> g_finishedResults;
+static void RecordFailure(const GUID& id, const std::wstring& error)
+{
+    EnterCriticalSection(&g_queueLock);
+    FinishedResult result{}; result.state=ArchiveJobProtocol::JobState::Failed; result.exitCode=ERROR_PROCESS_ABORTED; result.error=error;
+    g_finishedResults[ArchiveJobProtocol::GuidText(id)] = result;
+    LeaveCriticalSection(&g_queueLock);
+}
 static constexpr size_t kMaxCompressJobs = 1;
 static constexpr size_t kMaxExtractJobs = 2;
 static bool HasCapacity(ArchiveJobProtocol::JobKind kind)
@@ -85,8 +92,8 @@ static DWORD WINAPI WorkerMonitor(void* raw)
                     from.push_back(L'\0'); from.push_back(L'\0');
                     SHFILEOPSTRUCTW op{}; op.wFunc=FO_DELETE; op.pFrom=from.data();
                     op.fFlags=FOF_NOCONFIRMATION|FOF_NOERRORUI|FOF_SILENT|FOF_NOCONFIRMMKDIR;
-                    SHFileOperationW(&op);
-                } else DeleteFileW(it->outputPath.c_str());
+                    if(SHFileOperationW(&op)!=0) { FinishedResult r{}; r.state=ArchiveJobProtocol::JobState::Failed; r.exitCode=ERROR_ACCESS_DENIED; r.error=L"Unable to clean the failed extraction staging directory."; g_finishedResults[ArchiveJobProtocol::GuidText(it->id)]=r; }
+                } else if(!DeleteFileW(it->outputPath.c_str()) && GetLastError()!=ERROR_FILE_NOT_FOUND) { FinishedResult r{}; r.state=ArchiveJobProtocol::JobState::Failed; r.exitCode=ERROR_ACCESS_DENIED; r.error=L"Unable to clean the failed archive output."; g_finishedResults[ArchiveJobProtocol::GuidText(it->id)]=r; }
             }
             CloseHandle(it->process); if(it->cancelEvent) CloseHandle(it->cancelEvent); g_active.erase(it); break;
         }
@@ -98,7 +105,7 @@ static DWORD WINAPI WorkerMonitor(void* raw)
 
 static DWORD WINAPI QueueThread(void*)
 {
-    while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){WaitForSingleObject(g_queueEvent,500);ArchiveJobProtocol::JobRequest j;bool have=false;EnterCriticalSection(&g_queueLock);for(auto it=g_queue.begin();it!=g_queue.end();++it){if(HasCapacity(it->kind)){j=*it;g_queue.erase(it);have=true;break;}}if(g_queue.empty())ResetEvent(g_queueEvent);LeaveCriticalSection(&g_queueLock);if(have){HANDLE output=nullptr;HANDLE cancelEvent=nullptr;HANDLE process=StartJob(j,&output,&cancelEvent);if(process){auto* active=new ActiveJob;active->id=j.id;active->process=process;active->output=output;active->cancelEvent=cancelEvent;active->kind=j.kind;active->outputPath=j.output;active->outputExisted=GetFileAttributesW(j.output.c_str())!=INVALID_FILE_ATTRIBUTES;EnterCriticalSection(&g_queueLock);g_active.push_back(*active);LeaveCriticalSection(&g_queueLock);HANDLE monitor=CreateThread(nullptr,0,WorkerMonitor,active,0,nullptr);if(monitor){EnterCriticalSection(&g_queueLock);g_monitors.push_back(monitor);LeaveCriticalSection(&g_queueLock);}else{EnterCriticalSection(&g_queueLock);if(!g_active.empty())g_active.pop_back();LeaveCriticalSection(&g_queueLock);CloseHandle(process);delete active;}}} }return 0;
+    while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){WaitForSingleObject(g_queueEvent,500);ArchiveJobProtocol::JobRequest j;bool have=false;EnterCriticalSection(&g_queueLock);for(auto it=g_queue.begin();it!=g_queue.end();++it){if(HasCapacity(it->kind)){j=*it;g_queue.erase(it);have=true;break;}}if(g_queue.empty())ResetEvent(g_queueEvent);LeaveCriticalSection(&g_queueLock);if(have){HANDLE output=nullptr;HANDLE cancelEvent=nullptr;HANDLE process=StartJob(j,&output,&cancelEvent);if(process){auto* active=new ActiveJob;active->id=j.id;active->process=process;active->output=output;active->cancelEvent=cancelEvent;active->kind=j.kind;active->outputPath=j.output;active->outputExisted=GetFileAttributesW(j.output.c_str())!=INVALID_FILE_ATTRIBUTES;EnterCriticalSection(&g_queueLock);g_active.push_back(*active);LeaveCriticalSection(&g_queueLock);HANDLE monitor=CreateThread(nullptr,0,WorkerMonitor,active,0,nullptr);if(monitor){EnterCriticalSection(&g_queueLock);g_monitors.push_back(monitor);LeaveCriticalSection(&g_queueLock);}else{EnterCriticalSection(&g_queueLock);if(!g_active.empty())g_active.pop_back();LeaveCriticalSection(&g_queueLock);CloseHandle(process);if(cancelEvent)CloseHandle(cancelEvent);delete active;}}else{RecordFailure(j.id,L"Unable to start the archive worker process.");} }return 0;
 }
 
 static DWORD WINAPI PipeThread(void*)

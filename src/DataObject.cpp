@@ -267,7 +267,7 @@ static bool ExtractInWorker(const std::wstring& archive,
         QuoteProcessArg(archive) + L" --entry " + QuoteProcessArg(entry) +
         L" --dest " + QuoteProcessArg(dest);
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
-    mutableCommand.push_back(L'\\0');
+    mutableCommand.push_back(L'\0');
     STARTUPINFOW si{}; si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(exe.c_str(), mutableCommand.data(), nullptr, nullptr,
@@ -286,7 +286,7 @@ static bool ExtractInWorker(const std::wstring& archive,
     return true;
 }
 
-bool CArchiveDataObject::EnsureStaged(Item& it, HWND promptOwner)
+bool CArchiveDataObject::EnsureStaged(Item& it, HWND /*promptOwner*/)
 {
     if (!it.staged.empty())
         return GetFileAttributesW(it.staged.c_str()) != INVALID_FILE_ATTRIBUTES;

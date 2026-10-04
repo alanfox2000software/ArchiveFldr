@@ -16,6 +16,7 @@
 // LastErrorWasWrongPassword and prompt, then retry.
 #include "stdafx.h"
 #include "SevenZipEngine.h"
+#include "ArchiveSecurity.h"
 #include "Formats.h"
 #include "Sdk7z.h"
 #include "ThirdParty.h"
@@ -2333,6 +2334,11 @@ std::wstring Get7zEnginePath()
 C7zArchiveEngine::C7zArchiveEngine()  = default;
 C7zArchiveEngine::~C7zArchiveEngine() { Close(); }
 
+void C7zArchiveEngine::ClearPassword()
+{
+    ArchiveSecurity::SecureClear(m_password);
+}
+
 bool C7zArchiveEngine::Open(const std::wstring& path)
 {
     Close();
@@ -2579,6 +2585,7 @@ void C7zArchiveEngine::Close()
     m_allEntries.clear();
     m_innerName.clear();
     m_handlerName.clear();
+    ClearPassword();
     m_open = false;
 }
 

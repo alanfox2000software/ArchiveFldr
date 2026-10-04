@@ -134,19 +134,35 @@ static const UINT ID_TRAY = 1001;
 static HANDLE g_mutex = nullptr;
 static NOTIFYICONDATAW g_tray{};
 static HWND g_list = nullptr;
+static HWND g_cancel = nullptr;
+static std::vector<GUID> g_visibleIds;
+static constexpr int ID_CANCEL_JOB = 2001;
+
+static void CancelJob(const GUID& id)
+{
+    HANDLE process=nullptr;
+    EnterCriticalSection(&g_queueLock);
+    for(auto it=g_queue.begin();it!=g_queue.end();) if(IsEqualGUID(it->id,id)) it=g_queue.erase(it); else ++it;
+    for(auto& a:g_active) if(IsEqualGUID(a.id,id)){process=a.process;a.state=ArchiveJobProtocol::JobState::Cancelling;}
+    LeaveCriticalSection(&g_queueLock);
+    if(process && WaitForSingleObject(process,5000)==WAIT_TIMEOUT) TerminateProcess(process,ERROR_CANCELLED);
+}
 
 static void RefreshList()
 {
     if (!g_list) return;
     SendMessageW(g_list, LB_RESETCONTENT, 0, 0);
+    g_visibleIds.clear();
     EnterCriticalSection(&g_queueLock);
     for (const auto& j : g_active) {
         std::wstring row = L"Running  " + ArchiveJobProtocol::GuidText(j.id) + L"  " + std::to_wstring(j.percent) + L"%  " + j.current;
         SendMessageW(g_list, LB_ADDSTRING, 0, (LPARAM)row.c_str());
+        g_visibleIds.push_back(j.id);
     }
     for (const auto& j : g_queue) {
         std::wstring row = L"Queued   " + ArchiveJobProtocol::GuidText(j.id);
         SendMessageW(g_list, LB_ADDSTRING, 0, (LPARAM)row.c_str());
+        g_visibleIds.push_back(j.id);
     }
     for (const auto& r : g_finishedResults) {
         std::wstring row = L"Finished " + r.first + L"  exit=" + std::to_wstring(r.second);
@@ -162,6 +178,7 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
     if (msg == WM_COMMAND && LOWORD(wp) == ID_TRAY) { ShowWindow(hwnd, SW_SHOW); return 0; }
+    if (msg == WM_COMMAND && LOWORD(wp) == ID_CANCEL_JOB) { int sel=(int)SendMessageW(g_list,LB_GETCURSEL,0,0); if(sel>=0 && sel<(int)g_visibleIds.size()) CancelJob(g_visibleIds[sel]); return 0; }
     if (msg == WM_TIMER) { RefreshList(); return 0; }
     if (msg == WM_SIZE && g_list) { MoveWindow(g_list, 8, 8, LOWORD(lp) - 16, HIWORD(lp) - 16, TRUE); return 0; }
     if (msg == WM_CLOSE) { ShowWindow(hwnd, SW_HIDE); return 0; }
@@ -183,6 +200,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     g_list = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
         WS_CHILD | WS_VISIBLE | LBS_NOINTEGRALHEIGHT | WS_VSCROLL,
         8, 8, 608, 380, hwnd, nullptr, instance, nullptr);
+    g_cancel = CreateWindowW(L"BUTTON", L"Cancel selected job", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        8, 390, 150, 28, hwnd, (HMENU)ID_CANCEL_JOB, instance, nullptr);
     SetTimer(hwnd, 1, 500, nullptr);
     // The manager is intentionally hidden after startup; double-click the tray
     // icon to show this window. A real job list/protocol is added independently

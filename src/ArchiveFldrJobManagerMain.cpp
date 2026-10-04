@@ -16,7 +16,7 @@ static std::wstring QuoteArg(const std::wstring& v)
     for(wchar_t c:v){if(c==L'\\'){++bs;continue;}if(c==L'\"'){s.append(bs*2+1,L'\\');s+=c;bs=0;}else{s.append(bs,L'\\');bs=0;s+=c;}}
     s.append(bs*2,L'\\'); return s+L"\"";
 }
-struct ActiveJob { GUID id{}; HANDLE process = nullptr; HANDLE output = nullptr; ArchiveJobProtocol::JobKind kind{}; int percent = 0; std::wstring current; std::wstring outputPath; bool outputExisted = false; };
+struct ActiveJob { GUID id{}; HANDLE process = nullptr; HANDLE output = nullptr; ArchiveJobProtocol::JobKind kind{}; int percent = 0; std::wstring current; ArchiveJobProtocol::JobState state = ArchiveJobProtocol::JobState::Running; std::wstring outputPath; bool outputExisted = false; };
 static std::vector<ActiveJob> g_active;
 static std::map<std::wstring, DWORD> g_finishedResults;
 static constexpr size_t kMaxCompressJobs = 1;
@@ -53,7 +53,15 @@ static DWORD WINAPI WorkerMonitor(void* raw)
         size_t end = 0;
         while ((end = line.find('\n')) != std::string::npos) {
             std::string one = line.substr(0, end); line.erase(0, end + 1);
-            if (one.rfind("PROGRESS ", 0) == 0) { int pct = atoi(one.c_str() + 9); EnterCriticalSection(&g_queueLock); for(auto& a:g_active) if(IsEqualGUID(a.id,job->id)) a.percent=pct; LeaveCriticalSection(&g_queueLock); }
+            if (one.rfind("PROGRESS ", 0) == 0) {
+                int pct = atoi(one.c_str() + 9); std::wstring current;
+                size_t split = one.find(' ', 9); if (split != std::string::npos) {
+                    std::string name = one.substr(split + 1);
+                    int n = MultiByteToWideChar(CP_UTF8, 0, name.c_str(), (int)name.size(), nullptr, 0);
+                    current.resize(n); if (n) MultiByteToWideChar(CP_UTF8, 0, name.c_str(), (int)name.size(), &current[0], n);
+                }
+                EnterCriticalSection(&g_queueLock); for(auto& a:g_active) if(IsEqualGUID(a.id,job->id)){a.percent=pct;a.current=current;a.state=ArchiveJobProtocol::JobState::Running;} LeaveCriticalSection(&g_queueLock);
+            }
         }
     }
     CloseHandle(job->output); WaitForSingleObject(job->process, INFINITE);
@@ -121,7 +129,7 @@ static void RefreshList()
     SendMessageW(g_list, LB_RESETCONTENT, 0, 0);
     EnterCriticalSection(&g_queueLock);
     for (const auto& j : g_active) {
-        std::wstring row = L"Running  " + ArchiveJobProtocol::GuidText(j.id) + L"  " + std::to_wstring(j.percent) + L"%";
+        std::wstring row = L"Running  " + ArchiveJobProtocol::GuidText(j.id) + L"  " + std::to_wstring(j.percent) + L"%  " + j.current;
         SendMessageW(g_list, LB_ADDSTRING, 0, (LPARAM)row.c_str());
     }
     for (const auto& j : g_queue) {

@@ -59,4 +59,8 @@ bool SubscribeEvents(HANDLE* eventsPipe)
        ArchiveJobProtocol::Get(ack,L"state") != L"subscribed") return false;
     *eventsPipe=client.Detach(); return true;
 }
+void UnsubscribeEvents(HANDLE* eventsPipe)
+{
+    if(eventsPipe && *eventsPipe && *eventsPipe != INVALID_HANDLE_VALUE){FlushFileBuffers(*eventsPipe);CloseHandle(*eventsPipe);*eventsPipe=nullptr;}
+}
 }

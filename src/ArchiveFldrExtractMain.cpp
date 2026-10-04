@@ -73,11 +73,13 @@ int wmain(int argc, wchar_t** argv)
     }
     SHCreateDirectoryExW(nullptr, dest.c_str(), nullptr);
     const bool ok = engine->ExtractFile(entry, dest,
-        [](int pct, const std::wstring& name) {
+        [&](int pct, const std::wstring& name) {
             CheckCancelled();
             fwprintf(stdout, L"PROGRESS %d %llu %llu %ls\n", pct, (unsigned long long)((entry.uncompressedSize * (uint64_t)pct) / 100), (unsigned long long)entry.uncompressedSize, name.c_str());
             fflush(stdout);
         });
+    engine->ClearPassword();
+    ArchiveSecurity::SecureClear(password);
     if (!ok) {
         fwprintf(stderr, L"Extraction failed.\n");
         return 6;

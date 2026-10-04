@@ -24,6 +24,10 @@ bool Submit(const ArchiveJobProtocol::JobRequest& request)
     ArchiveJobPipe::Client client;if(!EnsureManager()||!client.Connect(5000))return false;
     if (!ArchiveJobPipe::Send(client.Handle(), ArchiveJobProtocol::MessageType::Submit,
                               ArchiveJobProtocol::Encode(request))) return false;
+    if (request.hasPassword) {
+        std::wstring secret = L"id=" + ArchiveJobProtocol::GuidText(request.id) + L"\npassword=" + ArchiveJobProtocol::Escape(request.password) + L"\n";
+        if (!ArchiveJobPipe::Send(client.Handle(), ArchiveJobProtocol::MessageType::Password, secret)) return false;
+    }
     ArchiveJobProtocol::MessageType type{}; std::wstring reply;
     if (!ArchiveJobPipe::Receive(client.Handle(), type, reply) ||
         type != ArchiveJobProtocol::MessageType::State) return false;

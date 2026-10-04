@@ -1015,6 +1015,7 @@ static bool StartCompressionWorker(const std::wstring& out, const std::vector<st
     request.solid = o.solid;
     request.encryptNames = o.encryptNames;
     request.password = o.password;
+    request.hasPassword = !o.password.empty();
     return ArchiveJobClient::Submit(request);
 }
 

@@ -119,6 +119,14 @@ static DWORD WINAPI PipeThread(void*)
             type == ArchiveJobProtocol::MessageType::Submit) {
             ArchiveJobProtocol::JobRequest request;
             if (ArchiveJobProtocol::Decode(payload, request)) {
+                if (request.hasPassword) {
+                    ArchiveJobProtocol::MessageType secretType{}; std::wstring secret;
+                    if (!ArchiveJobPipe::Receive(server.Handle(), secretType, secret) || secretType != ArchiveJobProtocol::MessageType::Password || ArchiveJobProtocol::Get(secret,L"id") != ArchiveJobProtocol::GuidText(request.id)) {
+                        ArchiveJobPipe::Send(server.Handle(), ArchiveJobProtocol::MessageType::State, L"state=failed\nerror=invalid password channel\n");
+                        continue;
+                    }
+                    request.password = ArchiveJobProtocol::Unescape(ArchiveJobProtocol::Get(secret,L"password"));
+                }
                 std::wstring reply;
                 EnterCriticalSection(&g_queueLock);
                 if (g_queue.size() >= 128) {

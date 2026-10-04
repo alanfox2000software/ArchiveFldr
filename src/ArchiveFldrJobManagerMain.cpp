@@ -75,8 +75,15 @@ static DWORD WINAPI WorkerMonitor(void* raw)
     }
     for (auto it = g_active.begin(); it != g_active.end(); ++it) {
         if (IsEqualGUID(it->id, job->id)) {
-            if (exitCode != 0 && !it->outputExisted && !it->outputPath.empty())
-                DeleteFileW(it->outputPath.c_str());
+            if (exitCode != 0 && !it->outputExisted && !it->outputPath.empty()) {
+                if (it->kind == ArchiveJobProtocol::JobKind::Extract) {
+                    std::vector<wchar_t> from(it->outputPath.begin(), it->outputPath.end());
+                    from.push_back(L'\0'); from.push_back(L'\0');
+                    SHFILEOPSTRUCTW op{}; op.wFunc=FO_DELETE; op.pFrom=from.data();
+                    op.fFlags=FOF_NOCONFIRMATION|FOF_NOERRORUI|FOF_SILENT|FOF_NOCONFIRMMKDIR;
+                    SHFileOperationW(&op);
+                } else DeleteFileW(it->outputPath.c_str());
+            }
             CloseHandle(it->process); g_active.erase(it); break;
         }
     }
@@ -200,7 +207,11 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         LeaveCriticalSection(&g_queueLock);
         for (HANDLE process : workers) { if (WaitForSingleObject(process, 2000) == WAIT_TIMEOUT) TerminateProcess(process, ERROR_CANCELLED); WaitForSingleObject(process, 2000); }
         EnterCriticalSection(&g_queueLock);
-        for (auto& job : g_active) { if (job.outputPath.empty() || job.outputExisted) continue; if (GetFileAttributesW(job.outputPath.c_str()) != INVALID_FILE_ATTRIBUTES) DeleteFileW(job.outputPath.c_str()); }
+        for (auto& job : g_active) { if (job.outputPath.empty() || job.outputExisted) continue;
+            if (job.kind == ArchiveJobProtocol::JobKind::Extract) {
+                std::vector<wchar_t> from(job.outputPath.begin(), job.outputPath.end()); from.push_back(L'\0'); from.push_back(L'\0');
+                SHFILEOPSTRUCTW op{}; op.wFunc=FO_DELETE; op.pFrom=from.data(); op.fFlags=FOF_NOCONFIRMATION|FOF_NOERRORUI|FOF_SILENT|FOF_NOCONFIRMMKDIR; SHFileOperationW(&op);
+            } else if (GetFileAttributesW(job.outputPath.c_str()) != INVALID_FILE_ATTRIBUTES) DeleteFileW(job.outputPath.c_str()); }
         LeaveCriticalSection(&g_queueLock);
         DeleteCriticalSection(&g_queueLock); CloseHandle(g_stop); CloseHandle(g_queueEvent); PostQuitMessage(0); return 0; }
     return DefWindowProcW(hwnd, msg, wp, lp);

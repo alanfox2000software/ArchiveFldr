@@ -94,6 +94,8 @@ inline bool Decode(const std::wstring& p, Progress& v)
 {
     if (!ParseGuid(Get(p,L"id"),v.id)) return false; v.state=(JobState)_wtoi(Get(p,L"state").c_str()); v.completed=_wtoi64(Get(p,L"completed").c_str()); v.total=_wtoi64(Get(p,L"total").c_str()); v.percent=_wtoi(Get(p,L"percent").c_str()); v.current=Get(p,L"current"); v.error=Get(p,L"error"); return true;
 }
+// Result payloads intentionally contain no JobRequest fields and can never
+// serialize passwords, source secrets, or worker command-line credentials.
 inline std::wstring EncodeResult(const GUID& id, JobState state, DWORD exitCode, const std::wstring& error = L"")
 {
     std::wstring p; Put(p,L"id",GuidText(id)); Put(p,L"state",(uint64_t)state); Put(p,L"exitCode",(uint64_t)exitCode); Put(p,L"error",error); return p;

@@ -10,16 +10,17 @@ static std::vector<HANDLE> g_monitors;
 static HANDLE g_queueEvent = nullptr;
 static HANDLE g_eventThread = nullptr;
 static CRITICAL_SECTION g_queueLock;
+static CRITICAL_SECTION g_eventLock;
 static std::vector<ArchiveJobProtocol::JobRequest> g_queue;
 static std::vector<HANDLE> g_eventClients;
 
 static void BroadcastEvent(ArchiveJobProtocol::MessageType type, const std::wstring& payload)
 {
-    EnterCriticalSection(&g_queueLock);
+    EnterCriticalSection(&g_eventLock);
     for(auto it=g_eventClients.begin(); it!=g_eventClients.end();) {
         if(!ArchiveJobPipe::Send(*it,type,payload)){DisconnectNamedPipe(*it);CloseHandle(*it);it=g_eventClients.erase(it);} else ++it;
     }
-    LeaveCriticalSection(&g_queueLock);
+    LeaveCriticalSection(&g_eventLock);
 }
 static DWORD WINAPI EventThread(void*)
 {
@@ -27,7 +28,7 @@ static DWORD WINAPI EventThread(void*)
             if(ArchiveJobProtocol::Get(payload,L"version") != L"1") continue;
             if(!ArchiveJobPipe::Send(server.Handle(),ArchiveJobProtocol::MessageType::State,L"state=subscribed\nversion=1\n")) continue;
             HANDLE client=server.Detach();
-            EnterCriticalSection(&g_queueLock); g_eventClients.push_back(client); LeaveCriticalSection(&g_queueLock);
+            EnterCriticalSection(&g_eventLock); g_eventClients.push_back(client); LeaveCriticalSection(&g_eventLock);
         }}
     return 0;
 }
@@ -291,8 +292,8 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 SHFILEOPSTRUCTW op{}; op.wFunc=FO_DELETE; op.pFrom=from.data(); op.fFlags=FOF_NOCONFIRMATION|FOF_NOERRORUI|FOF_SILENT|FOF_NOCONFIRMMKDIR; SHFileOperationW(&op);
             } else if (GetFileAttributesW(job.outputPath.c_str()) != INVALID_FILE_ATTRIBUTES) DeleteFileW(job.outputPath.c_str()); }
         LeaveCriticalSection(&g_queueLock);
-        EnterCriticalSection(&g_queueLock); for(HANDLE client:g_eventClients){DisconnectNamedPipe(client);CloseHandle(client);} g_eventClients.clear(); LeaveCriticalSection(&g_queueLock);
-        DeleteCriticalSection(&g_queueLock); CloseHandle(g_stop); CloseHandle(g_queueEvent); PostQuitMessage(0); return 0; }
+        EnterCriticalSection(&g_eventLock); for(HANDLE client:g_eventClients){DisconnectNamedPipe(client);CloseHandle(client);} g_eventClients.clear(); LeaveCriticalSection(&g_eventLock);
+        DeleteCriticalSection(&g_eventLock); DeleteCriticalSection(&g_queueLock); CloseHandle(g_stop); CloseHandle(g_queueEvent); PostQuitMessage(0); return 0; }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
@@ -325,6 +326,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     g_stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_queueEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     InitializeCriticalSection(&g_queueLock);
+    InitializeCriticalSection(&g_eventLock);
     if (!g_stop || !g_queueEvent) return 1;
     g_serverThread = CreateThread(nullptr, 0, PipeThread, nullptr, 0, nullptr);
     g_eventThread = CreateThread(nullptr, 0, EventThread, nullptr, 0, nullptr);

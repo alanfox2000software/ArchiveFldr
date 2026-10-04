@@ -46,7 +46,7 @@ int wmain(int argc, wchar_t** argv)
     }
     if (archive.empty() || entryPath.empty() || dest.empty()) { Usage(); return 2; }
     if (!cancelName.empty()) g_cancelEvent = OpenEventW(SYNCHRONIZE, FALSE, cancelName.c_str());
-    if (passwordStdin) { wchar_t buffer[256] = {}; DWORD n = 0; while (ReadFile(GetStdHandle(STD_INPUT_HANDLE), buffer, sizeof(buffer)-sizeof(wchar_t), &n, nullptr) && n) { buffer[n/sizeof(wchar_t)] = L'\0'; password += buffer; } while (!password.empty() && (password.back()==L'\r' || password.back()==L'\n')) password.pop_back(); }
+    if (passwordStdin) { wchar_t buffer[256] = {}; DWORD n = 0; while (ReadFile(GetStdHandle(STD_INPUT_HANDLE), buffer, sizeof(buffer)-sizeof(wchar_t), &n, nullptr) && n) { buffer[n/sizeof(wchar_t)] = L'\0'; password += buffer; } SecureZeroMemory(buffer, sizeof(buffer)); while (!password.empty() && (password.back()==L'\r' || password.back()==L'\n')) password.pop_back(); }
 
     auto engine = CreateArchiveEngine(archive);
     if (!engine) {

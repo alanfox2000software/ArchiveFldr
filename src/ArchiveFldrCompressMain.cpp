@@ -28,6 +28,7 @@ int wmain(int argc, wchar_t** argv)
                 buffer[n / sizeof(wchar_t)] = L'\0';
                 value += buffer;
             }
+            SecureZeroMemory(buffer, sizeof(buffer));
             while (!value.empty() && (value.back() == L'\r' || value.back() == L'\n')) value.pop_back();
             opt.password = value;
         }

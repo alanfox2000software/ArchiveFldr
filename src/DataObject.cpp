@@ -260,7 +260,9 @@ static bool ExtractInWorker(const std::wstring& archive, const std::wstring& ent
     if (!request.password.empty()) ArchiveSecurity::SecureClear(request.password);
     if (!submitted) {
         if (error) *error = L"Unable to submit extraction job.";
-        MessageBoxW(GetActiveWindow(), L"Unable to submit extraction job.", L"ArchiveFldr extraction", MB_ICONERROR | MB_OK);
+        wchar_t detail[256] = {};
+        swprintf_s(detail, L"Unable to submit extraction job.\n\nWin32 error: %lu", GetLastError());
+        MessageBoxW(GetActiveWindow(), detail, L"ArchiveFldr extraction", MB_ICONERROR | MB_OK);
         return false;
     }
     // Delayed FILECONTENTS rendering needs the completed temporary file.

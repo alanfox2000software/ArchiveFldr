@@ -11,6 +11,10 @@ inline void SecureClear(std::wstring& value)
         SecureZeroMemory(&value[0], value.size() * sizeof(wchar_t));
         value.clear();
     }
-    value.shrink_to_fit();
+    // Swap with an empty string so the old allocation is released by its
+    // destructor. The bytes were already wiped above; this avoids relying
+    // on shrink_to_fit(), which is only a non-binding request.
+    std::wstring empty;
+    value.swap(empty);
 }
 }

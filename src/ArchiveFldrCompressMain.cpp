@@ -14,7 +14,18 @@ int wmain(int argc, wchar_t** argv)
         else if (!_wcsicmp(argv[i], L"--threads")) opt.threads = _wtoi(Next(i, argc, argv).c_str());
         else if (!_wcsicmp(argv[i], L"--solid")) opt.solid = true;
         else if (!_wcsicmp(argv[i], L"--encrypt-names")) opt.encryptNames = true;
-        else if (!_wcsicmp(argv[i], L"--password")) opt.password = Next(i, argc, argv);
+        else if (!_wcsicmp(argv[i], L"--password-stdin")) {
+            std::wstring value;
+            wchar_t buffer[256] = {};
+            DWORD n = 0;
+            while (ReadFile(GetStdHandle(STD_INPUT_HANDLE), buffer,
+                            sizeof(buffer) - sizeof(wchar_t), &n, nullptr) && n) {
+                buffer[n / sizeof(wchar_t)] = L'\0';
+                value += buffer;
+            }
+            while (!value.empty() && (value.back() == L'\r' || value.back() == L'\n')) value.pop_back();
+            opt.password = value;
+        }
         else if (!_wcsicmp(argv[i], L"--help")) { Usage(); return 0; }
         else if (argv[i][0] == L'-') { Usage(); return 2; }
         else sources.push_back(argv[i]);

@@ -1013,12 +1013,29 @@ static bool StartCompressionWorker(const std::wstring& out, const std::vector<st
         L" --level " + std::to_wstring(o.level) + L" --threads " + std::to_wstring(o.threads);
     if (o.solid) cmd += L" --solid";
     if (o.encryptNames) cmd += L" --encrypt-names";
-    if (!o.password.empty()) cmd += L" --password " + Q(o.password);
+    const bool hasPassword = !o.password.empty();
+    if (hasPassword) cmd += L" --password-stdin";
     for (const auto& p : paths) cmd += L" " + Q(p);
     std::vector<wchar_t> mutableCmd(cmd.begin(), cmd.end()); mutableCmd.push_back(L'\0');
-    STARTUPINFOW si{}; si.cb = sizeof(si); PROCESS_INFORMATION pi{};
-    if (!CreateProcessW(exe.c_str(), mutableCmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
-                        nullptr, nullptr, &si, &pi)) return false;
+
+    SECURITY_ATTRIBUTES sa{ sizeof(sa), nullptr, TRUE };
+    HANDLE passwordRead = nullptr, passwordWrite = nullptr;
+    if (hasPassword && !CreatePipe(&passwordRead, &passwordWrite, &sa, 0)) return false;
+    if (passwordWrite) SetHandleInformation(passwordWrite, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOW si{}; si.cb = sizeof(si);
+    if (hasPassword) { si.dwFlags |= STARTF_USESTDHANDLES; si.hStdInput = passwordRead; }
+    PROCESS_INFORMATION pi{};
+    const BOOL started = CreateProcessW(exe.c_str(), mutableCmd.data(), nullptr, nullptr,
+        hasPassword ? TRUE : FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    if (passwordRead) CloseHandle(passwordRead);
+    if (!started) { if (passwordWrite) CloseHandle(passwordWrite); return false; }
+    if (passwordWrite) {
+        DWORD bytes = 0;
+        const DWORD count = (DWORD)(o.password.size() * sizeof(wchar_t));
+        WriteFile(passwordWrite, o.password.data(), count, &bytes, nullptr);
+        CloseHandle(passwordWrite);
+    }
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
     return true;
 }

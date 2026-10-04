@@ -249,6 +249,7 @@ static DWORD WINAPI PipeThread(void*)
                 std::wstring reply;
                 EnterCriticalSection(&g_queueLock);
                 if (g_queue.size() >= 128) {
+                    ArchiveSecurity::SecureClear(request.password);
                     reply = L"state=failed\nerror=job queue is full\n";
                     LeaveCriticalSection(&g_queueLock);
                     ArchiveJobPipe::Send(server.Handle(), ArchiveJobProtocol::MessageType::State, reply);

@@ -8,6 +8,7 @@
 #include "ArchiveOps.h"
 #include "SevenZipEngine.h"   // Is7zEngineAvailable() / Get7zEnginePath()
 #include "ArchiveWriter.h"
+#include "ArchiveJobClient.h"
 #include "AddToArchiveDialog.h"
 #include "ThirdParty.h"
 #include "Settings.h"
@@ -1003,6 +1004,18 @@ static std::wstring Q(const std::wstring& v)
 static bool StartCompressionWorker(const std::wstring& out, const std::vector<std::wstring>& paths,
                                    const ArchiveWriter::Options& o)
 {
+    ArchiveJobProtocol::JobRequest request;
+    CoCreateGuid(&request.id);
+    request.kind = ArchiveJobProtocol::JobKind::Compress;
+    request.output = out;
+    request.sources = paths;
+    request.format = o.format;
+    request.level = o.level;
+    request.threads = o.threads;
+    request.solid = o.solid;
+    request.encryptNames = o.encryptNames;
+    return ArchiveJobClient::Submit(request);
+
     HMODULE self = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                             reinterpret_cast<LPCWSTR>(&StartCompressionWorker), &self)) return false;

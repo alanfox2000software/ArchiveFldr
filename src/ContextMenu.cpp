@@ -1016,42 +1016,6 @@ static bool StartCompressionWorker(const std::wstring& out, const std::vector<st
     request.encryptNames = o.encryptNames;
     request.password = o.password;
     return ArchiveJobClient::Submit(request);
-
-    HMODULE self = nullptr;
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            reinterpret_cast<LPCWSTR>(&StartCompressionWorker), &self)) return false;
-    wchar_t mod[MAX_PATH] = {}; GetModuleFileNameW(self, mod, ARRAYSIZE(mod));
-    std::wstring exe = mod; const size_t slash = exe.find_last_of(L"\\/");
-    exe = (slash == std::wstring::npos ? L"" : exe.substr(0, slash + 1)) + L"ArchiveFldrCompress.exe";
-    std::wstring cmd = Q(exe) + L" --out " + Q(out) + L" --format " + Q(o.format) +
-        L" --level " + std::to_wstring(o.level) + L" --threads " + std::to_wstring(o.threads);
-    if (o.solid) cmd += L" --solid";
-    if (o.encryptNames) cmd += L" --encrypt-names";
-    const bool hasPassword = !o.password.empty();
-    if (hasPassword) cmd += L" --password-stdin";
-    for (const auto& p : paths) cmd += L" " + Q(p);
-    std::vector<wchar_t> mutableCmd(cmd.begin(), cmd.end()); mutableCmd.push_back(L'\0');
-
-    SECURITY_ATTRIBUTES sa{ sizeof(sa), nullptr, TRUE };
-    HANDLE passwordRead = nullptr, passwordWrite = nullptr;
-    if (hasPassword && !CreatePipe(&passwordRead, &passwordWrite, &sa, 0)) return false;
-    if (passwordWrite) SetHandleInformation(passwordWrite, HANDLE_FLAG_INHERIT, 0);
-
-    STARTUPINFOW si{}; si.cb = sizeof(si);
-    if (hasPassword) { si.dwFlags |= STARTF_USESTDHANDLES; si.hStdInput = passwordRead; }
-    PROCESS_INFORMATION pi{};
-    const BOOL started = CreateProcessW(exe.c_str(), mutableCmd.data(), nullptr, nullptr,
-        hasPassword ? TRUE : FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
-    if (passwordRead) CloseHandle(passwordRead);
-    if (!started) { if (passwordWrite) CloseHandle(passwordWrite); return false; }
-    if (passwordWrite) {
-        DWORD bytes = 0;
-        const DWORD count = (DWORD)(o.password.size() * sizeof(wchar_t));
-        WriteFile(passwordWrite, o.password.data(), count, &bytes, nullptr);
-        CloseHandle(passwordWrite);
-    }
-    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
-    return true;
 }
 
 } // namespace

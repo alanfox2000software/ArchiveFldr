@@ -4,6 +4,7 @@
 #include "SysInfo.h"
 #include "ShellFolder.h"
 #include "ArchiveOps.h"
+#include "ArchiveJobClient.h"
 
 // ─────────────────────────────────────────────────────────
 // Clipboard formats (registered once)
@@ -243,47 +244,28 @@ static std::wstring QuoteProcessArg(const std::wstring& value)
     return out;
 }
 
-static bool ExtractInWorker(const std::wstring& archive,
-                            const std::wstring& entry,
-                            const std::wstring& dest,
-                            std::wstring* error)
+static bool ExtractInWorker(const std::wstring& archive, const std::wstring& entry,
+                            const std::wstring& dest, std::wstring* error)
 {
-    HMODULE self = nullptr;
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            reinterpret_cast<LPCWSTR>(&ExtractInWorker), &self))
-        return false;
-    wchar_t module[MAX_PATH] = {};
-    if (!GetModuleFileNameW(self, module, ARRAYSIZE(module))) return false;
-    std::wstring exe = module;
-    const size_t slash = exe.find_last_of(L"\\/");
-    exe = (slash == std::wstring::npos ? L"" : exe.substr(0, slash + 1)) + L"ArchiveFldrExtract.exe";
-    if (GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        if (error) *error = L"ArchiveFldrExtract.exe was not found next to the shell extension.";
+    ArchiveJobProtocol::JobRequest request;
+    CoCreateGuid(&request.id);
+    request.kind = ArchiveJobProtocol::JobKind::Extract;
+    request.archive = archive;
+    request.entry = entry;
+    request.output = dest;
+    if (!ArchiveJobClient::Submit(request)) {
+        if (error) *error = L"Unable to submit extraction job.";
         return false;
     }
-
-    std::wstring command = QuoteProcessArg(exe) + L" --archive " +
-        QuoteProcessArg(archive) + L" --entry " + QuoteProcessArg(entry) +
-        L" --dest " + QuoteProcessArg(dest);
-    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
-    mutableCommand.push_back(L'\0');
-    STARTUPINFOW si{}; si.cb = sizeof(si);
-    PROCESS_INFORMATION pi{};
-    if (!CreateProcessW(exe.c_str(), mutableCommand.data(), nullptr, nullptr,
-                        FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
-        if (error) *error = L"Unable to start ArchiveFldrExtract.exe.";
-        return false;
+    // Delayed FILECONTENTS rendering needs the completed temporary file.
+    // The extraction itself is owned by the manager/worker process.
+    const std::wstring expected = dest + L"\\" + ArchiveOps::ToWin32(entry);
+    for (int i = 0; i < 3600; ++i) {
+        if (GetFileAttributesW(expected.c_str()) != INVALID_FILE_ATTRIBUTES) return true;
+        Sleep(100);
     }
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    DWORD code = 1;
-    GetExitCodeProcess(pi.hProcess, &code);
-    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
-    if (code != 0) {
-        if (error) *error = L"ArchiveFldrExtract.exe failed to extract the item.";
-        return false;
-    }
-    return true;
+    if (error) *error = L"Extraction timed out.";
+    return false;
 }
 
 bool CArchiveDataObject::EnsureStaged(Item& it, HWND /*promptOwner*/)

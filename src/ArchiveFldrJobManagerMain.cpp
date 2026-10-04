@@ -34,7 +34,7 @@ static HANDLE StartJob(const ArchiveJobProtocol::JobRequest& j, HANDLE* output)
     std::wstring exe=base+(j.kind==ArchiveJobProtocol::JobKind::Compress?L"ArchiveFldrCompress.exe":L"ArchiveFldrExtract.exe");
     std::wstring cmd=QuoteArg(exe);
     if(j.kind==ArchiveJobProtocol::JobKind::Compress){cmd+=L" --out "+QuoteArg(j.output)+L" --format "+QuoteArg(j.format)+L" --level "+std::to_wstring(j.level)+L" --threads "+std::to_wstring(j.threads);if(j.solid)cmd+=L" --solid";if(j.encryptNames)cmd+=L" --encrypt-names";if(!j.password.empty())cmd+=L" --password-stdin";for(auto&s:j.sources)cmd+=L" "+QuoteArg(s);}
-    else cmd+=L" --archive "+QuoteArg(j.archive)+L" --entry "+QuoteArg(j.output)+L" --dest "+QuoteArg(j.output);
+    else cmd+=L" --archive "+QuoteArg(j.archive)+L" --entry "+QuoteArg(j.entry)+L" --dest "+QuoteArg(j.output);
     std::vector<wchar_t> buf(cmd.begin(),cmd.end());buf.push_back(L'\0');
     SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE}; HANDLE readPipe=nullptr, writePipe=nullptr, passRead=nullptr, passWrite=nullptr;
     if(!CreatePipe(&readPipe,&writePipe,&sa,0)) return nullptr;

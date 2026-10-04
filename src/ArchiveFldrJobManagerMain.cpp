@@ -98,7 +98,7 @@ static void BroadcastEvent(ArchiveJobProtocol::MessageType type, const std::wstr
         EnterCriticalSection(&subscriber->lock);
         bool ok=subscriber->connected && !subscriber->stopping && EnqueueMessage(*subscriber,type,payload);
         LeaveCriticalSection(&subscriber->lock);
-        if(!ok){ subscriber->stopping=true; SetEvent(subscriber->wakeEvent); CancelSynchronousIo(subscriber->writerThread); DWORD writerResult=WaitForSingleObject(subscriber->writerThread,3000); if(writerResult!=WAIT_OBJECT_0){ ++it; continue; } CloseHandle(subscriber->writerThread); CloseHandle(subscriber->wakeEvent); DeleteCriticalSection(&subscriber->lock); delete subscriber; it=g_eventClients.erase(it); }
+        if(!ok){ subscriber->stopping=true; SetEvent(subscriber->wakeEvent); CancelSynchronousIo(subscriber->writerThread); DWORD writerResult=WaitForSingleObject(subscriber->writerThread,3000); if(writerResult!=WAIT_OBJECT_0){ continue; } CloseHandle(subscriber->writerThread); CloseHandle(subscriber->wakeEvent); DeleteCriticalSection(&subscriber->lock); delete subscriber; it=g_eventClients.erase(it); }
         else { SetEvent(subscriber->wakeEvent); ++it; }
     }
     LeaveCriticalSection(&g_eventLock);
@@ -148,7 +148,7 @@ static bool HasCapacity(ArchiveJobProtocol::JobKind kind)
 
 static HANDLE StartJob(ArchiveJobProtocol::JobRequest j, HANDLE* output, HANDLE* cancelEvent)
 {
-    wchar_t mod[MAX_PATH]={}; if(!GetModuleFileNameW(nullptr,mod,ARRAYSIZE(mod))) return false;
+    wchar_t mod[MAX_PATH]={}; if(!GetModuleFileNameW(nullptr,mod,ARRAYSIZE(mod))) return nullptr;
     std::wstring base=mod; size_t slash=base.find_last_of(L"\\/"); base=(slash==std::wstring::npos?L"":base.substr(0,slash+1));
     std::wstring exe=base+(j.kind==ArchiveJobProtocol::JobKind::Compress?L"ArchiveFldrCompress.exe":L"ArchiveFldrExtract.exe");
     std::wstring cancelName = L"Local\\ArchiveFldrCancel-" + ArchiveJobProtocol::GuidText(j.id);
@@ -411,7 +411,7 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         LeaveCriticalSection(&g_queueLock);
         BroadcastEvent(ArchiveJobProtocol::MessageType::State, L"state=shutdown\n");
         EnterCriticalSection(&g_eventLock);
-        for(Subscriber* subscriber:g_eventClients){ EnterCriticalSection(&subscriber->lock); subscriber->stopping=true; subscriber->connected=false; LeaveCriticalSection(&subscriber->lock); SetEvent(subscriber->wakeEvent); CancelSynchronousIo(subscriber->writerThread); DWORD writerResult=WaitForSingleObject(subscriber->writerThread,3000); if(writerResult!=WAIT_OBJECT_0){ ++it; continue; } CloseHandle(subscriber->writerThread); CloseHandle(subscriber->wakeEvent); DeleteCriticalSection(&subscriber->lock); delete subscriber; }
+        for(Subscriber* subscriber:g_eventClients){ EnterCriticalSection(&subscriber->lock); subscriber->stopping=true; subscriber->connected=false; LeaveCriticalSection(&subscriber->lock); SetEvent(subscriber->wakeEvent); CancelSynchronousIo(subscriber->writerThread); DWORD writerResult=WaitForSingleObject(subscriber->writerThread,3000); if(writerResult!=WAIT_OBJECT_0){ continue; } CloseHandle(subscriber->writerThread); CloseHandle(subscriber->wakeEvent); DeleteCriticalSection(&subscriber->lock); delete subscriber; }
         g_eventClients.clear();
         LeaveCriticalSection(&g_eventLock);
         EnterCriticalSection(&g_queueLock); for(auto& queued:g_queue) ArchiveSecurity::SecureClear(queued.password); g_queue.clear(); LeaveCriticalSection(&g_queueLock);
@@ -435,7 +435,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
         WS_CHILD | WS_VISIBLE | LBS_NOINTEGRALHEIGHT | WS_VSCROLL,
         8, 8, 608, 380, hwnd, nullptr, instance, nullptr);
     g_cancel = CreateWindowW(L"BUTTON", L"Cancel selected job", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        8, 390, 150, 28, hwnd, (HMENU)ID_CANCEL_JOB, instance, nullptr);
+        8, 390, 150, 28, hwnd, (HMENU)(INT_PTR)ID_CANCEL_JOB, instance, nullptr);
     SetTimer(hwnd, 1, 500, nullptr);
     // The manager is intentionally hidden after startup; double-click the tray
     // icon to show this window. A real job list/protocol is added independently

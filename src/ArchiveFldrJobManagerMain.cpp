@@ -130,7 +130,9 @@ static DWORD WINAPI WorkerMonitor(void* raw)
 
 static DWORD WINAPI QueueThread(void*)
 {
-    while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){WaitForSingleObject(g_queueEvent,500);ArchiveJobProtocol::JobRequest j;bool have=false;EnterCriticalSection(&g_queueLock);for(auto it=g_queue.begin();it!=g_queue.end();++it){if(HasCapacity(it->kind)){j=*it;g_queue.erase(it);have=true;break;}}if(g_queue.empty())ResetEvent(g_queueEvent);LeaveCriticalSection(&g_queueLock);if(have){HANDLE output=nullptr;HANDLE cancelEvent=nullptr;HANDLE process=StartJob(j,&output,&cancelEvent);if(process){auto* active=new ActiveJob;active->id=j.id;active->process=process;active->output=output;active->cancelEvent=cancelEvent;active->kind=j.kind;active->outputPath=j.output;active->outputExisted=GetFileAttributesW(j.output.c_str())!=INVALID_FILE_ATTRIBUTES;EnterCriticalSection(&g_queueLock);g_active.push_back(*active);LeaveCriticalSection(&g_queueLock);HANDLE monitor=CreateThread(nullptr,0,WorkerMonitor,active,0,nullptr);if(monitor){EnterCriticalSection(&g_queueLock);g_monitors.push_back(monitor);LeaveCriticalSection(&g_queueLock);}else{EnterCriticalSection(&g_queueLock);if(!g_active.empty())g_active.pop_back();LeaveCriticalSection(&g_queueLock);CloseHandle(process);if(cancelEvent)CloseHandle(cancelEvent);delete active;}}else{RecordFailure(j.id,L"Unable to start the archive worker process.");} }return 0;
+    while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){WaitForSingleObject(g_queueEvent,500);ArchiveJobProtocol::JobRequest j;bool have=false;EnterCriticalSection(&g_queueLock);for(auto it=g_queue.begin();it!=g_queue.end();++it){if(HasCapacity(it->kind)){j=*it;g_queue.erase(it);have=true;break;}}if(g_queue.empty())ResetEvent(g_queueEvent);LeaveCriticalSection(&g_queueLock);if(have){HANDLE output=nullptr;HANDLE cancelEvent=nullptr;HANDLE process=StartJob(j,&output,&cancelEvent);if(process){auto* active=new ActiveJob;active->id=j.id;active->process=process;active->output=output;active->cancelEvent=cancelEvent;active->kind=j.kind;active->outputPath=j.output;active->outputExisted=GetFileAttributesW(j.output.c_str())!=INVALID_FILE_ATTRIBUTES;EnterCriticalSection(&g_queueLock);g_active.push_back(*active);LeaveCriticalSection(&g_queueLock);
+                std::wstring running=L"id="+ArchiveJobProtocol::GuidText(j.id)+L"\nstate=running\n"; BroadcastEvent(ArchiveJobProtocol::MessageType::State,running);
+                HANDLE monitor=CreateThread(nullptr,0,WorkerMonitor,active,0,nullptr);if(monitor){EnterCriticalSection(&g_queueLock);g_monitors.push_back(monitor);LeaveCriticalSection(&g_queueLock);}else{EnterCriticalSection(&g_queueLock);if(!g_active.empty())g_active.pop_back();LeaveCriticalSection(&g_queueLock);CloseHandle(process);if(cancelEvent)CloseHandle(cancelEvent);delete active;}}else{RecordFailure(j.id,L"Unable to start the archive worker process.");} }return 0;
 }
 
 static DWORD WINAPI PipeThread(void*)
@@ -165,6 +167,7 @@ static DWORD WINAPI PipeThread(void*)
                 SetEvent(g_queueEvent);
                 LeaveCriticalSection(&g_queueLock);
                 ArchiveJobPipe::Send(server.Handle(), ArchiveJobProtocol::MessageType::State, reply);
+                BroadcastEvent(ArchiveJobProtocol::MessageType::State, reply);
             } else {
                 ArchiveJobPipe::Send(server.Handle(), ArchiveJobProtocol::MessageType::State,
                                      L"state=failed\nerror=invalid job request\n");
@@ -217,6 +220,7 @@ static void CancelJob(const GUID& id)
     for(auto it=g_queue.begin();it!=g_queue.end();) if(IsEqualGUID(it->id,id)) it=g_queue.erase(it); else ++it;
     for(auto& a:g_active) if(IsEqualGUID(a.id,id)){process=a.process;a.state=ArchiveJobProtocol::JobState::Cancelling;if(a.cancelEvent) SetEvent(a.cancelEvent);}
     LeaveCriticalSection(&g_queueLock);
+    std::wstring cancelling=L"id="+ArchiveJobProtocol::GuidText(id)+L"\nstate=cancelling\n"; BroadcastEvent(ArchiveJobProtocol::MessageType::State,cancelling);
     if(process && WaitForSingleObject(process,5000)==WAIT_TIMEOUT) TerminateProcess(process,ERROR_CANCELLED);
 }
 

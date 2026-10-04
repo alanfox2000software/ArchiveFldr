@@ -1,5 +1,7 @@
 #include "stdafx.h"
 #include <shellapi.h>
+#include <deque>
+#include <algorithm>
 #include "../res/resource.h"
 #include "ArchiveJobPipe.h"
 #include "ArchiveSecurity.h"
@@ -223,7 +225,7 @@ static DWORD WINAPI QueueThread(void*)
 {
     while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){WaitForSingleObject(g_queueEvent,500);ArchiveJobProtocol::JobRequest j;bool have=false;EnterCriticalSection(&g_queueLock);for(auto it=g_queue.begin();it!=g_queue.end();++it){if(HasCapacity(it->kind)){j=*it;g_queue.erase(it);have=true;break;}}if(g_queue.empty())ResetEvent(g_queueEvent);LeaveCriticalSection(&g_queueLock);if(have){HANDLE output=nullptr;HANDLE cancelEvent=nullptr;HANDLE process=StartJob(j,&output,&cancelEvent);if(process){auto* active=new ActiveJob;active->id=j.id;active->process=process;active->output=output;active->cancelEvent=cancelEvent;active->kind=j.kind;active->outputPath=j.output;active->outputExisted=GetFileAttributesW(j.output.c_str())!=INVALID_FILE_ATTRIBUTES;EnterCriticalSection(&g_queueLock);g_active.push_back(*active);LeaveCriticalSection(&g_queueLock);
                 std::wstring running=L"id="+ArchiveJobProtocol::GuidText(j.id)+L"\nstate=running\n"; BroadcastEvent(ArchiveJobProtocol::MessageType::State,running);
-                HANDLE monitor=CreateThread(nullptr,0,WorkerMonitor,active,0,nullptr);if(monitor){EnterCriticalSection(&g_queueLock);g_monitors.push_back(monitor);LeaveCriticalSection(&g_queueLock);}else{EnterCriticalSection(&g_queueLock);if(!g_active.empty())g_active.pop_back();LeaveCriticalSection(&g_queueLock);CloseHandle(process);if(cancelEvent)CloseHandle(cancelEvent);delete active;}}else{RecordFailure(j.id,L"Unable to start the archive worker process.");} ArchiveSecurity::SecureClear(j.password); }return 0;
+                HANDLE monitor=CreateThread(nullptr,0,WorkerMonitor,active,0,nullptr);if(monitor){EnterCriticalSection(&g_queueLock);g_monitors.push_back(monitor);LeaveCriticalSection(&g_queueLock);}else{EnterCriticalSection(&g_queueLock);if(!g_active.empty())g_active.pop_back();LeaveCriticalSection(&g_queueLock);CloseHandle(process);if(cancelEvent)CloseHandle(cancelEvent);delete active;}}else{RecordFailure(j.id,L"Unable to start the archive worker process.");} ArchiveSecurity::SecureClear(j.password); }} return 0;
 }
 
 static DWORD WINAPI PipeThread(void*)

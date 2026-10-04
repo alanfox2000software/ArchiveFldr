@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "ArchiveJobPipe.h"
+#include <sddl.h>
 
 namespace ArchiveJobPipe
 {

@@ -504,8 +504,8 @@ exit /b 0</Command>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
     <!-- Core DLL -->
-    <ClCompile Include="src\ArchiveJobPipe.cpp" />
-    <ClCompile Include="src\ArchiveJobClient.cpp" />
+    
+    
     <ClCompile Include="src\dllmain.cpp" />
     <ClCompile Include="src\ClassFactory.cpp" />
     <ClCompile Include="src\Registry.cpp" />
@@ -587,7 +587,7 @@ exit /b 0</Command>
     <None Include="src\ArchiveFldr.def" />
     <None Include="res\manifest.xml" />
     <None Include="Lang\en.txt" />
-  <ClInclude Include="src\ArchiveJobProtocol.h" /><ClInclude Include="src\ArchiveJobPipe.h" /><ClInclude Include="src\ArchiveSecurity.h" /><ClInclude Include="src\ArchiveSecureString.h" /><ClInclude Include="src\ArchiveJobClient.h" />
+  <ClInclude Include="src\ArchiveSecurity.h" /><ClInclude Include="src\ArchiveSecureString.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 

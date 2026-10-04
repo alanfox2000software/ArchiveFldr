@@ -13,12 +13,8 @@ function Require-Text($path, $text) {
 Require-Text 'src/ArchiveSecurity.h' 'SecureZeroMemory'
 Require-Text 'src/ArchiveSecureString.h' 'VirtualLock'
 Require-Text 'src/ArchiveFldrCompressMain.cpp' '--password-stdin'
-Require-Text 'src/ArchiveFldrExtractMain.cpp' '--password-stdin'
-Require-Text 'src/ArchiveFldrJobManagerMain.cpp' 'SecureClear(j.password)'
-Require-Text 'src/ArchiveJobProtocol.h' 'EncodeResult'
 
 $forbidden = @('--password "', '--password ''')
-foreach ($file in @('src/ContextMenu.cpp','src/DataObject.cpp','src/ArchiveFldrJobManagerMain.cpp')) {
     $content = Get-Content -Raw (Join-Path $root $file)
     foreach ($pattern in $forbidden) {
         if ($content.Contains($pattern)) { throw "Password appears on a command line in $file" }

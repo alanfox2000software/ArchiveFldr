@@ -6,6 +6,7 @@ namespace ArchiveJobProtocol
 {
 constexpr DWORD kProtocolVersion = 1;
 constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\ArchiveFldrJobManager";
+constexpr wchar_t kEventsPipeName[] = L"\\\\.\\pipe\\ArchiveFldrJobEvents";
 constexpr DWORD kMaxPayloadBytes = 1024 * 1024;
 
 enum class MessageType : uint32_t

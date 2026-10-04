@@ -47,4 +47,12 @@ bool Query(const GUID& id, ArchiveJobProtocol::MessageType& type, std::wstring& 
     if(!ArchiveJobPipe::Send(client.Handle(),ArchiveJobProtocol::MessageType::List,request)) return false;
     return ArchiveJobPipe::Receive(client.Handle(),type,payload);
 }
+bool SubscribeEvents(HANDLE* eventsPipe)
+{
+    if(!eventsPipe) return false; *eventsPipe=nullptr;
+    ArchiveJobPipe::Client client(ArchiveJobProtocol::kEventsPipeName);
+    if(!client.Connect(5000)) return false;
+    if(!ArchiveJobPipe::Send(client.Handle(),ArchiveJobProtocol::MessageType::Hello,L"version=1\n")) return false;
+    *eventsPipe=client.Detach(); return true;
+}
 }

@@ -21,7 +21,7 @@ bool Server::Listen(){
         L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)",
         SDDL_REVISION_1, &descriptor, nullptr)) return false;
     SECURITY_ATTRIBUTES security{sizeof(security),descriptor,FALSE};
-    m_pipe=CreateNamedPipeW(ArchiveJobProtocol::kPipeName,PIPE_ACCESS_DUPLEX,
+    m_pipe=CreateNamedPipeW(m_name,PIPE_ACCESS_DUPLEX,
         PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT,PIPE_UNLIMITED_INSTANCES,
         ArchiveJobProtocol::kMaxPayloadBytes,ArchiveJobProtocol::kMaxPayloadBytes,
         0,&security);
@@ -30,5 +30,5 @@ bool Server::Listen(){
 }
 bool Server::Accept(){return m_pipe!=INVALID_HANDLE_VALUE&&ConnectNamedPipe(m_pipe,nullptr)?true:GetLastError()==ERROR_PIPE_CONNECTED;}
 Client::~Client(){Close();} void Client::Close(){if(m_pipe!=INVALID_HANDLE_VALUE){CloseHandle(m_pipe);m_pipe=INVALID_HANDLE_VALUE;}}
-bool Client::Connect(DWORD timeoutMs){Close();if(!WaitNamedPipeW(ArchiveJobProtocol::kPipeName,timeoutMs))return false;m_pipe=CreateFileW(ArchiveJobProtocol::kPipeName,GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_EXISTING,0,nullptr);return m_pipe!=INVALID_HANDLE_VALUE;}
+bool Client::Connect(DWORD timeoutMs){Close();if(!WaitNamedPipeW(m_name,timeoutMs))return false;m_pipe=CreateFileW(m_name,GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_EXISTING,0,nullptr);return m_pipe!=INVALID_HANDLE_VALUE;}
 }

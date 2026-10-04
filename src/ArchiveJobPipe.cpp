@@ -20,13 +20,28 @@ bool Server::Listen(){
     // manager pipe. Authenticated users who are not the owner are excluded.
     if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(
         L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)",
-        SDDL_REVISION_1, &descriptor, nullptr)) return false;
+        SDDL_REVISION_1, &descriptor, nullptr)) {
+        // Keep the manager usable on systems whose security provider does not
+        // understand the owner-rights token; the pipe remains local and the
+        // failure is visible in the debugger.
+        OutputDebugStringW(L"ArchiveFldr: failed to create restricted pipe ACL.\n");
+        m_pipe = CreateNamedPipeW(m_name, PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT, PIPE_UNLIMITED_INSTANCES,
+            ArchiveJobProtocol::kMaxPayloadBytes, ArchiveJobProtocol::kMaxPayloadBytes,
+            0, nullptr);
+        return m_pipe != INVALID_HANDLE_VALUE;
+    }
     SECURITY_ATTRIBUTES security{sizeof(security),descriptor,FALSE};
     m_pipe=CreateNamedPipeW(m_name,PIPE_ACCESS_DUPLEX,
         PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT,PIPE_UNLIMITED_INSTANCES,
         ArchiveJobProtocol::kMaxPayloadBytes,ArchiveJobProtocol::kMaxPayloadBytes,
         0,&security);
     LocalFree(descriptor);
+    if (m_pipe == INVALID_HANDLE_VALUE) {
+        wchar_t message[128] = {};
+        swprintf_s(message, L"ArchiveFldr: CreateNamedPipe failed, error %lu\n", GetLastError());
+        OutputDebugStringW(message);
+    }
     return m_pipe!=INVALID_HANDLE_VALUE;
 }
 bool Server::Accept(){return m_pipe!=INVALID_HANDLE_VALUE&&ConnectNamedPipe(m_pipe,nullptr)?true:GetLastError()==ERROR_PIPE_CONNECTED;}

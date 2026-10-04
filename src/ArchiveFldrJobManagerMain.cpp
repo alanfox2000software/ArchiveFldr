@@ -239,6 +239,7 @@ static DWORD WINAPI PipeThread(void*)
             type == ArchiveJobProtocol::MessageType::Submit) {
             ArchiveJobProtocol::JobRequest request;
             if (ArchiveJobProtocol::Decode(payload, request)) {
+                OutputDebugStringW((L"ArchiveFldrJobManager: received job " + ArchiveJobProtocol::GuidText(request.id) + L"\n").c_str());
                 if (request.hasPassword) {
                     ArchiveJobProtocol::MessageType secretType{}; std::wstring secret;
                     if (!ArchiveJobPipe::Receive(server.Handle(), secretType, secret) || secretType != ArchiveJobProtocol::MessageType::Password || ArchiveJobProtocol::Get(secret,L"id") != ArchiveJobProtocol::GuidText(request.id)) {

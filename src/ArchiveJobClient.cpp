@@ -23,8 +23,9 @@ bool EnsureManager()
 bool Submit(const ArchiveJobProtocol::JobRequest& request)
 {
     ArchiveJobPipe::Client client;if(!EnsureManager()||!client.Connect(5000))return false;
+    OutputDebugStringW((L"ArchiveFldr: submitting extraction/compression job " + ArchiveJobProtocol::GuidText(request.id) + L"\n").c_str());
     if (!ArchiveJobPipe::Send(client.Handle(), ArchiveJobProtocol::MessageType::Submit,
-                              ArchiveJobProtocol::Encode(request))) return false;
+                              ArchiveJobProtocol::Encode(request))) { OutputDebugStringW(L"ArchiveFldr: Submit Write failed.\n"); return false; }
     if (request.hasPassword) {
         std::wstring secret;
         const std::wstring idText = ArchiveJobProtocol::GuidText(request.id);

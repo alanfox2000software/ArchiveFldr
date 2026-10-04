@@ -31,7 +31,14 @@ static DWORD WINAPI SubscriberWriter(void* context)
 {
     auto* s=static_cast<Subscriber*>(context);
     for(;;){
-        WaitForSingleObject(s->wakeEvent,INFINITE);
+        DWORD wake=WaitForSingleObject(s->wakeEvent,30000);
+        if(wake==WAIT_TIMEOUT){
+            if(!ArchiveJobPipe::Send(s->pipe,ArchiveJobProtocol::MessageType::State,L"state=heartbeat\n")){
+                EnterCriticalSection(&s->lock); s->connected=false; s->stopping=true; LeaveCriticalSection(&s->lock);
+                DisconnectNamedPipe(s->pipe); CloseHandle(s->pipe); s->pipe=INVALID_HANDLE_VALUE; return 1;
+            }
+            continue;
+        }
         for(;;){
             Subscriber::PendingMessage message;
             EnterCriticalSection(&s->lock);

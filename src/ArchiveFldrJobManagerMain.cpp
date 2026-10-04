@@ -232,9 +232,19 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     if (msg == WM_DESTROY) { Shell_NotifyIconW(NIM_DELETE, &g_tray); if (g_stop) { SetEvent(g_stop); HANDLE wake = CreateFileW(ArchiveJobProtocol::kPipeName, GENERIC_READ|GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr); if (wake != INVALID_HANDLE_VALUE) CloseHandle(wake); } if (g_serverThread) { WaitForSingleObject(g_serverThread, 3000); CloseHandle(g_serverThread); g_serverThread = nullptr; } if (g_queueThread) { WaitForSingleObject(g_queueThread, 3000); CloseHandle(g_queueThread); g_queueThread = nullptr; }
         // Stop and reap every worker before destroying the queue lock.
         EnterCriticalSection(&g_queueLock);
-        std::vector<HANDLE> workers; for (auto& job : g_active) workers.push_back(job.process);
+        std::vector<HANDLE> workers;
+        for (auto& job : g_active) {
+            HANDLE duplicate = nullptr;
+            if (DuplicateHandle(GetCurrentProcess(), job.process, GetCurrentProcess(),
+                                &duplicate, SYNCHRONIZE | PROCESS_TERMINATE, FALSE, 0))
+                workers.push_back(duplicate);
+        }
         LeaveCriticalSection(&g_queueLock);
-        for (HANDLE process : workers) TerminateProcess(process, ERROR_CANCELLED);
+        for (HANDLE process : workers) {
+            TerminateProcess(process, ERROR_CANCELLED);
+            WaitForSingleObject(process, 2000);
+            CloseHandle(process);
+        }
         EnterCriticalSection(&g_queueLock);
         std::vector<HANDLE> monitors = g_monitors;
         LeaveCriticalSection(&g_queueLock);

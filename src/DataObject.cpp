@@ -243,7 +243,7 @@ static std::wstring QuoteProcessArg(const std::wstring& value)
     return out;
 }
 
-static bool ExtractInWorker(const EnginePtr& engine, const ArchiveEntry& entry,
+static bool ExtractInWorker(const ArchiveOps::EnginePtr& engine, const ArchiveEntry& entry,
                             const std::wstring& dest, HWND owner, std::wstring* error)
 {
     if (!engine || !ArchiveOps::EnsureCanRead(owner, engine)) return false;
@@ -255,7 +255,7 @@ static bool ExtractInWorker(const EnginePtr& engine, const ArchiveEntry& entry,
     return entry.isDirectory || GetFileAttributesW(produced.c_str()) != INVALID_FILE_ATTRIBUTES;
 }
 
-bool CArchiveDataObject::EnsureStaged(Item& it, HWND /*promptOwner*/)
+bool CArchiveDataObject::EnsureStaged(Item& it, HWND promptOwner)
 {
     if (!it.staged.empty())
         return GetFileAttributesW(it.staged.c_str()) != INVALID_FILE_ATTRIBUTES;

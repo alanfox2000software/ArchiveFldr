@@ -279,6 +279,7 @@ static bool ExtractInWorker(const std::wstring& archive, const std::wstring& ent
             if (error) {
                 *error = ArchiveJobProtocol::Get(status, L"error");
                 if (error->empty()) *error = L"Extraction failed.";
+                MessageBoxW(GetActiveWindow(), error->c_str(), L"ArchiveFldr extraction", MB_ICONERROR | MB_OK);
             }
             return false;
         }

@@ -127,7 +127,7 @@ static std::wstring QuoteArg(const std::wstring& v)
     for(wchar_t c:v){if(c==L'\\'){++bs;continue;}if(c==L'\"'){s.append(bs*2+1,L'\\');s+=c;bs=0;}else{s.append(bs,L'\\');bs=0;s+=c;}}
     s.append(bs*2,L'\\'); return s+L"\"";
 }
-struct ActiveJob { GUID id{}; HANDLE process = nullptr; HANDLE output = nullptr; HANDLE cancelEvent = nullptr; ArchiveJobProtocol::JobKind kind{}; int percent = 0; uint64_t completed = 0, total = 0; std::wstring current; ArchiveJobProtocol::JobState state = ArchiveJobProtocol::JobState::Running; std::wstring outputPath; bool outputExisted = false; };
+struct ActiveJob { GUID id{}; HANDLE process = nullptr; HANDLE output = nullptr; HANDLE cancelEvent = nullptr; ArchiveJobProtocol::JobKind kind{}; int percent = 0; uint64_t completed = 0, total = 0; std::wstring current; std::wstring error; ArchiveJobProtocol::JobState state = ArchiveJobProtocol::JobState::Running; std::wstring outputPath; bool outputExisted = false; };
 static std::vector<ActiveJob> g_active;
 static void RecordFailure(const GUID& id, const std::wstring& error)
 {
@@ -187,14 +187,14 @@ static DWORD WINAPI WorkerMonitor(void* raw)
                 EnterCriticalSection(&g_queueLock); for(auto& a:g_active) if(IsEqualGUID(a.id,job->id)){a.percent=pct;a.current=current;a.completed=completed;a.total=total;a.state=ArchiveJobProtocol::JobState::Running;} LeaveCriticalSection(&g_queueLock);
                 ArchiveJobProtocol::Progress progress{}; progress.id=job->id; progress.state=ArchiveJobProtocol::JobState::Running; progress.percent=pct; progress.completed=completed; progress.total=total; progress.current=current;
                 BroadcastEvent(ArchiveJobProtocol::MessageType::Progress, ArchiveJobProtocol::Encode(progress));
-            }
+            } else { EnterCriticalSection(&g_queueLock); job->error = std::wstring(one.begin(), one.end()); LeaveCriticalSection(&g_queueLock); }
         }
     }
     CloseHandle(job->output); WaitForSingleObject(job->process, INFINITE);
     DWORD exitCode = 1; GetExitCodeProcess(job->process, &exitCode);
     const std::wstring id = ArchiveJobProtocol::GuidText(job->id);
     EnterCriticalSection(&g_queueLock);
-    FinishedResult result{}; result.exitCode = exitCode; result.state = exitCode == 0 ? ArchiveJobProtocol::JobState::Completed : (exitCode == ERROR_CANCELLED ? ArchiveJobProtocol::JobState::Cancelled : ArchiveJobProtocol::JobState::Failed); g_finishedResults[id] = result;
+    FinishedResult result{}; result.exitCode = exitCode; result.state = exitCode == 0 ? ArchiveJobProtocol::JobState::Completed : (exitCode == ERROR_CANCELLED ? ArchiveJobProtocol::JobState::Cancelled : ArchiveJobProtocol::JobState::Failed); result.error = job->error; if (result.error.empty() && exitCode != 0) result.error = L"Archive worker failed."; g_finishedResults[id] = result;
     LeaveCriticalSection(&g_queueLock);
     EnterCriticalSection(&g_queueLock);
     if (exitCode != 0 && exitCode != ERROR_CANCELLED) {

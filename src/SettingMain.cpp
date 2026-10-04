@@ -63,13 +63,9 @@ BOOL CALLBACK FindOurWindow(HWND h, LPARAM lp)
 
 // Already running? Show that window instead of stacking up duplicates.
 //
-// timeoutMs covers the race the mutex cannot: the other instance owns the
-// mutex from its first instruction but has no window until the dialog is
-// up, so a second launch during those few hundred milliseconds used to
-// find nothing and open a window of its own — two elevated dialogs, both
-// writing HKLM, last save wins. Waiting a moment for the window to appear
-// closes that. Giving up afterwards is deliberate: an instance wedged
-// before it could show anything must not make the settings unreachable.
+// timeoutMs covers the race where the other instance has created the mutex
+// but has not created its window yet. Failure to find the window does not
+// authorize another settings process; the named mutex remains authoritative.
 bool FocusExistingInstance(DWORD timeoutMs = 0)
 {
     // The dialog has no fixed class name, so match on a named mutex plus a
@@ -101,10 +97,15 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE,
     // One instance at a time. The mutex is the authority; the window search
     // above is only how the existing one gets raised.
     HANDLE once = CreateMutexW(nullptr, FALSE, L"Local\\ArchiveFldrSettings");
-    const bool alreadyRunning =
-        once && GetLastError() == ERROR_ALREADY_EXISTS;
-    if (alreadyRunning && FocusExistingInstance(3000))
+    if (!once)
+        return static_cast<int>(GetLastError()); // cannot enforce exclusivity
+
+    const bool alreadyRunning = GetLastError() == ERROR_ALREADY_EXISTS;
+    if (alreadyRunning)
     {
+        // Best effort: the first instance may still be creating its dialog,
+        // or it may be unresponsive. Either way, never start a second process.
+        FocusExistingInstance(3000);
         CloseHandle(once);
         return 0;
     }

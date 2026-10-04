@@ -36,9 +36,6 @@ more engines are added.
    ├─ lz5\
    │  ├─ liblz5.64.dll
    │  └─ liblz5.32.dll
-   ├─ brunsli\                    ← accepted shared fallback for LZ4/LZ5
-   │  ├─ liblz4.64.dll / liblz4.32.dll
-   │  └─ liblz5.64.dll / liblz5.32.dll
    ├─ zstd\
    │  ├─ libzstd.64.dll
    │  ├─ libzstd.32.dll
@@ -115,8 +112,8 @@ drop the DLL at any one of them and retry.
 | `Unrar` | `thirdparty\Unrar\` | `unrar64.dll`, `unrar.dll` | `.rar` `.r00` `.cbr` | extract + test |
 | `zstd` | `thirdparty\zstd\` | `libzstd.<bits>.dll` | `.zst` `.zstd` `.tzst`; ZSTD in 7z/ZIP | compress + extract + test |
 | `brotli` | `thirdparty\brotli\<bits>\` | common + dec + enc DLLs | `.br`; Brotli in 7z | compress + extract + test |
-| `lz4` | `thirdparty\lz4\` or `thirdparty\brunsli\` | `liblz4.<bits>.dll` | `.lz4` `.tlz4`; LZ4 in 7z | compress + extract + test |
-| `lz5` | `thirdparty\lz5\` or `thirdparty\brunsli\` | `liblz5.<bits>.dll` | `.lz5`; LZ5 in 7z | compress + extract + test |
+| `lz4` | `thirdparty\lz4\` | `liblz4.<bits>.dll` | `.lz4` `.tlz4`; LZ4 in 7z | compress + extract + test |
+| `lz5` | `thirdparty\lz5\` | `liblz5.<bits>.dll` | `.lz5`; LZ5 in 7z | compress + extract + test |
 | `lizard` | `thirdparty\lizard\` | `liblizard.<bits>.dll` | `.liz`; Lizard in 7z | compress + extract + test |
 | `WimLib` | `thirdparty\WimLib\` | `libwim-15.<bits>.dll` | `.wim` `.swm` `.esd` | extract + verify |
 

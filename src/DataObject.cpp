@@ -246,7 +246,8 @@ static std::wstring QuoteProcessArg(const std::wstring& value)
 static bool ExtractInWorker(const ArchiveOps::EnginePtr& engine, const ArchiveEntry& entry,
                             const std::wstring& dest, HWND owner, std::wstring* error)
 {
-    if (!engine || !ArchiveOps::EnsureCanRead(owner, engine)) return false;
+    if (!engine || !ArchiveOps::EnsureOpenPassword(owner, engine) ||
+        !ArchiveOps::EnsureCanRead(owner, engine)) return false;
     std::wstring produced;
     if (!ArchiveOps::ExtractEntryPrompting(owner, engine, entry, dest, &produced)) {
         if (error) *error = engine->GetLastErrorText();

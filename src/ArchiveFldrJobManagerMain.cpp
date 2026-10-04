@@ -15,13 +15,23 @@ static HWND g_mainWindow = nullptr;
 static CRITICAL_SECTION g_queueLock;
 static CRITICAL_SECTION g_eventLock;
 static std::vector<ArchiveJobProtocol::JobRequest> g_queue;
-static std::vector<HANDLE> g_eventClients;
+struct Subscriber
+{
+    HANDLE pipe = INVALID_HANDLE_VALUE;
+    bool connected = true;
+};
+static std::vector<Subscriber*> g_eventClients;
 
 static void BroadcastEvent(ArchiveJobProtocol::MessageType type, const std::wstring& payload)
 {
     EnterCriticalSection(&g_eventLock);
     for(auto it=g_eventClients.begin(); it!=g_eventClients.end();) {
-        if(!ArchiveJobPipe::Send(*it,type,payload)){DisconnectNamedPipe(*it);CloseHandle(*it);it=g_eventClients.erase(it);} else ++it;
+        Subscriber* subscriber=*it;
+        if(!subscriber->connected || !ArchiveJobPipe::Send(subscriber->pipe,type,payload)){
+            subscriber->connected=false;
+            DisconnectNamedPipe(subscriber->pipe); CloseHandle(subscriber->pipe);
+            delete subscriber; it=g_eventClients.erase(it);
+        } else ++it;
     }
     LeaveCriticalSection(&g_eventLock);
 }
@@ -33,7 +43,9 @@ static DWORD WINAPI EventThread(void*)
             HANDLE client=server.Detach();
             DWORD pipeMode=PIPE_READMODE_BYTE|PIPE_NOWAIT;
             SetNamedPipeHandleState(client,&pipeMode,nullptr,nullptr);
-            EnterCriticalSection(&g_eventLock); g_eventClients.push_back(client); LeaveCriticalSection(&g_eventLock);
+            Subscriber* subscriber=new Subscriber;
+            subscriber->pipe=client;
+            EnterCriticalSection(&g_eventLock); g_eventClients.push_back(subscriber); LeaveCriticalSection(&g_eventLock);
         }}
     return 0;
 }
@@ -320,7 +332,10 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             } else if (GetFileAttributesW(job.outputPath.c_str()) != INVALID_FILE_ATTRIBUTES) DeleteFileW(job.outputPath.c_str()); }
         LeaveCriticalSection(&g_queueLock);
         BroadcastEvent(ArchiveJobProtocol::MessageType::State, L"state=shutdown\n");
-        EnterCriticalSection(&g_eventLock); for(HANDLE client:g_eventClients){DisconnectNamedPipe(client);CloseHandle(client);} g_eventClients.clear(); LeaveCriticalSection(&g_eventLock);
+        EnterCriticalSection(&g_eventLock);
+        for(Subscriber* subscriber:g_eventClients){ subscriber->connected=false; DisconnectNamedPipe(subscriber->pipe); CloseHandle(subscriber->pipe); delete subscriber; }
+        g_eventClients.clear();
+        LeaveCriticalSection(&g_eventLock);
         DeleteCriticalSection(&g_eventLock); DeleteCriticalSection(&g_queueLock); CloseHandle(g_stop); CloseHandle(g_queueEvent); PostQuitMessage(0); return 0; }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }

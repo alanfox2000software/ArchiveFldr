@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include <shellapi.h>
+#include "../res/resource.h"
 
 static const wchar_t* kClass = L"ArchiveFldrJobManagerWindow";
 static const UINT WM_TRAY = WM_APP + 1;
@@ -35,7 +36,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     // of the Explorer shell extension process.
     g_tray.cbSize = sizeof(g_tray); g_tray.hWnd = hwnd; g_tray.uID = ID_TRAY;
     g_tray.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP; g_tray.uCallbackMessage = WM_TRAY;
-    g_tray.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    g_tray.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_ARCHIVEFLDR));
+    if (!g_tray.hIcon) g_tray.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     wcscpy_s(g_tray.szTip, L"ArchiveFldr jobs");
     Shell_NotifyIconW(NIM_ADD, &g_tray);
     ShowWindow(hwnd, show == SW_SHOW ? SW_HIDE : SW_HIDE);

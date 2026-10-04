@@ -6,6 +6,7 @@
 static HANDLE g_stop = nullptr;
 static HANDLE g_serverThread = nullptr;
 static HANDLE g_queueThread = nullptr;
+static std::vector<HANDLE> g_monitors;
 static HANDLE g_queueEvent = nullptr;
 static CRITICAL_SECTION g_queueLock;
 static std::vector<ArchiveJobProtocol::JobRequest> g_queue;
@@ -94,7 +95,7 @@ static DWORD WINAPI WorkerMonitor(void* raw)
 
 static DWORD WINAPI QueueThread(void*)
 {
-    while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){WaitForSingleObject(g_queueEvent,500);ArchiveJobProtocol::JobRequest j;bool have=false;EnterCriticalSection(&g_queueLock);for(auto it=g_queue.begin();it!=g_queue.end();++it){if(HasCapacity(it->kind)){j=*it;g_queue.erase(it);have=true;break;}}if(g_queue.empty())ResetEvent(g_queueEvent);LeaveCriticalSection(&g_queueLock);if(have){HANDLE output=nullptr;HANDLE process=StartJob(j,&output);if(process){auto* active=new ActiveJob;active->id=j.id;active->process=process;active->output=output;active->kind=j.kind;active->outputPath=j.output;active->outputExisted=GetFileAttributesW(j.output.c_str())!=INVALID_FILE_ATTRIBUTES;EnterCriticalSection(&g_queueLock);g_active.push_back(*active);LeaveCriticalSection(&g_queueLock);HANDLE monitor=CreateThread(nullptr,0,WorkerMonitor,active,0,nullptr);if(monitor)CloseHandle(monitor);else{EnterCriticalSection(&g_queueLock);if(!g_active.empty())g_active.pop_back();LeaveCriticalSection(&g_queueLock);CloseHandle(process);delete active;}}} }return 0;
+    while(WaitForSingleObject(g_stop,0)!=WAIT_OBJECT_0){WaitForSingleObject(g_queueEvent,500);ArchiveJobProtocol::JobRequest j;bool have=false;EnterCriticalSection(&g_queueLock);for(auto it=g_queue.begin();it!=g_queue.end();++it){if(HasCapacity(it->kind)){j=*it;g_queue.erase(it);have=true;break;}}if(g_queue.empty())ResetEvent(g_queueEvent);LeaveCriticalSection(&g_queueLock);if(have){HANDLE output=nullptr;HANDLE process=StartJob(j,&output);if(process){auto* active=new ActiveJob;active->id=j.id;active->process=process;active->output=output;active->kind=j.kind;active->outputPath=j.output;active->outputExisted=GetFileAttributesW(j.output.c_str())!=INVALID_FILE_ATTRIBUTES;EnterCriticalSection(&g_queueLock);g_active.push_back(*active);LeaveCriticalSection(&g_queueLock);HANDLE monitor=CreateThread(nullptr,0,WorkerMonitor,active,0,nullptr);if(monitor){EnterCriticalSection(&g_queueLock);g_monitors.push_back(monitor);LeaveCriticalSection(&g_queueLock);}else{EnterCriticalSection(&g_queueLock);if(!g_active.empty())g_active.pop_back();LeaveCriticalSection(&g_queueLock);CloseHandle(process);delete active;}}} }return 0;
 }
 
 static DWORD WINAPI PipeThread(void*)
@@ -205,7 +206,12 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         EnterCriticalSection(&g_queueLock);
         std::vector<HANDLE> workers; for (auto& job : g_active) workers.push_back(job.process);
         LeaveCriticalSection(&g_queueLock);
-        for (HANDLE process : workers) { if (WaitForSingleObject(process, 2000) == WAIT_TIMEOUT) TerminateProcess(process, ERROR_CANCELLED); WaitForSingleObject(process, 2000); }
+        for (HANDLE process : workers) TerminateProcess(process, ERROR_CANCELLED);
+        EnterCriticalSection(&g_queueLock);
+        std::vector<HANDLE> monitors = g_monitors;
+        LeaveCriticalSection(&g_queueLock);
+        for (HANDLE monitor : monitors) WaitForSingleObject(monitor, 3000);
+        for (HANDLE monitor : monitors) CloseHandle(monitor);
         EnterCriticalSection(&g_queueLock);
         for (auto& job : g_active) { if (job.outputPath.empty() || job.outputExisted) continue;
             if (job.kind == ArchiveJobProtocol::JobKind::Extract) {

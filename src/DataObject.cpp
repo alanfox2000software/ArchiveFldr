@@ -262,7 +262,22 @@ static bool ExtractInWorker(const std::wstring& archive, const std::wstring& ent
     // The extraction itself is owned by the manager/worker process.
     const std::wstring expected = dest + L"\\" + ArchiveOps::ToWin32(entry);
     for (int i = 0; i < 3600; ++i) {
-        if (GetFileAttributesW(expected.c_str()) != INVALID_FILE_ATTRIBUTES) return true;
+        ArchiveJobProtocol::MessageType type{}; std::wstring status;
+        if (!ArchiveJobClient::Query(request.id, type, status)) {
+            if (error) *error = L"Unable to query extraction job status.";
+            return false;
+        }
+        if (type == ArchiveJobProtocol::MessageType::Result) {
+            const auto state = (ArchiveJobProtocol::JobState)_wtoi(
+                ArchiveJobProtocol::Get(status, L"state").c_str());
+            if (state == ArchiveJobProtocol::JobState::Completed)
+                return GetFileAttributesW(expected.c_str()) != INVALID_FILE_ATTRIBUTES;
+            if (error) {
+                *error = ArchiveJobProtocol::Get(status, L"error");
+                if (error->empty()) *error = L"Extraction failed.";
+            }
+            return false;
+        }
         Sleep(100);
     }
     if (error) *error = L"Extraction timed out.";

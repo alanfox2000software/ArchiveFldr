@@ -125,6 +125,8 @@ static void RecordFailure(const GUID& id, const std::wstring& error)
     FinishedResult result{}; result.state=ArchiveJobProtocol::JobState::Failed; result.exitCode=ERROR_PROCESS_ABORTED; result.error=error;
     g_finishedResults[ArchiveJobProtocol::GuidText(id)] = result;
     LeaveCriticalSection(&g_queueLock);
+    BroadcastEvent(ArchiveJobProtocol::MessageType::Result,
+                   ArchiveJobProtocol::EncodeResult(id, result.state, result.exitCode, result.error));
 }
 static constexpr size_t kMaxCompressJobs = 1;
 static constexpr size_t kMaxExtractJobs = 2;

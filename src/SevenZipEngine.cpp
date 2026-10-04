@@ -16,6 +16,7 @@
 // LastErrorWasWrongPassword and prompt, then retry.
 #include "stdafx.h"
 #include "SevenZipEngine.h"
+#include "ArchiveSecurity.h"
 #include "Formats.h"
 #include "Sdk7z.h"
 #include "ThirdParty.h"
@@ -75,7 +76,10 @@ void RememberPassword(const std::wstring& path, const std::wstring& password)
 {
     if (password.empty()) return;
     std::lock_guard<std::mutex> lock(g_passwordMutex);
-    g_passwords[PasswordCacheKey(path)] = password;
+    const std::wstring key = PasswordCacheKey(path);
+    auto it = g_passwords.find(key);
+    if (it != g_passwords.end()) ArchiveSecurity::SecureClear(it->second);
+    g_passwords[key] = password;
 }
 
 void ForgetPassword(const std::wstring& path, const std::wstring& password)
@@ -83,8 +87,10 @@ void ForgetPassword(const std::wstring& path, const std::wstring& password)
     if (password.empty()) return;
     std::lock_guard<std::mutex> lock(g_passwordMutex);
     const auto it = g_passwords.find(PasswordCacheKey(path));
-    if (it != g_passwords.end() && it->second == password)
+    if (it != g_passwords.end() && it->second == password) {
+        ArchiveSecurity::SecureClear(it->second);
         g_passwords.erase(it);
+    }
 }
 
 // ── External 7-Zip codec catalogue ──────────────────────────────────────
@@ -2333,6 +2339,11 @@ std::wstring Get7zEnginePath()
 C7zArchiveEngine::C7zArchiveEngine()  = default;
 C7zArchiveEngine::~C7zArchiveEngine() { Close(); }
 
+void C7zArchiveEngine::ClearPassword()
+{
+    ArchiveSecurity::SecureClear(m_password);
+}
+
 bool C7zArchiveEngine::Open(const std::wstring& path)
 {
     Close();
@@ -2579,6 +2590,7 @@ void C7zArchiveEngine::Close()
     m_allEntries.clear();
     m_innerName.clear();
     m_handlerName.clear();
+    ClearPassword();
     m_open = false;
 }
 

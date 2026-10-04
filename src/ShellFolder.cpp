@@ -437,6 +437,12 @@ CShellFolder::CShellFolder(CShellFolder* pParent,
 
 CShellFolder::~CShellFolder()
 {
+    // Child folders, data objects, and preview handlers may share this
+    // engine. Do not clear a password while another owner still needs it;
+    // otherwise encrypted file-name archives fail on the next enumeration.
+    if (m_engine && m_engine.use_count() == 1)
+        m_engine->ClearPassword();
+    m_engine.reset();
     CPidlMgr::Free(m_pidlAbs);
     CPidlMgr::Free(m_pidlRel);
     InterlockedDecrement(&g_cDllRefCount);

@@ -62,6 +62,7 @@ public:
 
     // ── Password ─────────────────────────────────────────
     void SetPassword(const std::wstring& pw) override { m_password = pw; }
+    void ClearPassword() override;
     std::wstring GetPassword() const override { return m_password; }
     bool PasswordNeededToOpen() const override { return m_needPasswordToOpen; }
     bool LastErrorWasWrongPassword() const override { return m_wrongPassword; }

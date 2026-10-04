@@ -8,6 +8,7 @@
 #include "ArchiveOps.h"
 #include "SevenZipEngine.h"   // Is7zEngineAvailable() / Get7zEnginePath()
 #include "ArchiveWriter.h"
+#include "ArchiveSecurity.h"
 #include "AddToArchiveDialog.h"
 #include "ThirdParty.h"
 #include "Settings.h"
@@ -993,6 +994,36 @@ ArchiveWriter::Options OptionsFromSettings(const std::wstring& format)
     return opt;
 }
 
+static std::wstring Q(const std::wstring& v)
+{
+    std::wstring s = L"\""; size_t bs = 0;
+    for (wchar_t c : v) { if (c == L'\\') { ++bs; continue; } if (c == L'\"') { s.append(bs * 2 + 1, L'\\'); s += c; bs = 0; } else { s.append(bs, L'\\'); bs = 0; s += c; } }
+    s.append(bs * 2, L'\\'); return s + L"\"";
+}
+
+static bool StartCompressionWorker(const std::wstring& out, const std::vector<std::wstring>& paths,
+                                   const ArchiveWriter::Options& o)
+{
+    uint64_t total = 0;
+    const auto items = ArchiveWriter::CollectItems(paths, &total);
+    if (items.empty()) return false;
+    std::wstring error;
+    const bool ok = ArchiveWriter::Compress(out, items, o, nullptr, &error);
+    if (!ok) {
+        MessageBoxW(nullptr, error.empty() ? L"The archive could not be created." : error.c_str(),
+                    L"ArchiveFldr", MB_ICONERROR | MB_OK);
+        return false;
+    }
+    const std::wstring createdPath = o.volumeBytes ? out + L".001" : out;
+    SHChangeNotify(SHCNE_CREATE, SHCNF_PATH, createdPath.c_str(), nullptr);
+    std::wstring dir = out;
+    if (PathRemoveFileSpecW(&dir[0])) {
+        dir.resize(wcslen(dir.c_str()));
+        SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATH, dir.c_str(), nullptr);
+    }
+    return true;
+}
+
 } // namespace
 
 void CContextMenu::DoCompress(bool here)
@@ -1069,36 +1100,14 @@ void CContextMenu::DoCompress(bool here)
             return;
         }
 
-    std::wstring message;
-    bool ok;
+    if (!StartCompressionWorker(outPath, m_paths, options))
     {
-        WaitCursor wait;
-        ok = ArchiveWriter::Compress(outPath, items, options, nullptr, &message);
+        MessageBoxW(m_hwnd, L"ArchiveFldrCompress.exe could not be started.",
+                    L"ArchiveFldr", MB_ICONERROR | MB_OK);
     }
-
-    if (!ok)
-    {
-        MessageBoxW(m_hwnd,
-            message.empty() ? L"The archive could not be created." : message.c_str(),
-            L"ArchiveFldr", MB_ICONERROR | MB_OK);
-        return;
-    }
-
-    const std::wstring createdPath = options.volumeBytes
-        ? outPath + L".001" : outPath;
-    SHChangeNotify(SHCNE_CREATE, SHCNF_PATH, createdPath.c_str(), nullptr);
-    std::wstring dir = outPath;
-    if (PathRemoveFileSpecW(&dir[0]))
-    {
-        dir.resize(wcslen(dir.c_str()));
-        SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATH, dir.c_str(), nullptr);
-    }
-
-    // Files that could not be read are reported, but the archive that
-    // did get built is still there and still valid.
-    if (!message.empty())
-        MessageBoxW(m_hwnd, message.c_str(), L"ArchiveFldr",
-                    MB_ICONWARNING | MB_OK);
+    // Compression continues in a separate process. Explorer is released
+    // immediately; the worker writes atomically and notifies the shell when
+    // the archive is complete.
 }
 
 void CContextMenu::DoCompressEmail()
@@ -1185,7 +1194,7 @@ void CContextMenu::DoCompressEmail()
     sei.nShow  = SW_SHOWNORMAL;
     if (!ShellExecuteExW(&sei))
     {
-        ITEMIDLIST* pidl = ILCreateFromPathW(outPath.c_str());
+        LPITEMIDLIST pidl = ILCreateFromPathW(outPath.c_str());
         if (pidl)
         {
             SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);

@@ -122,6 +122,7 @@ public:
     // ignores it.
     virtual void SetPassword(const std::wstring&) {}
     virtual std::wstring GetPassword() const { return L""; }
+    virtual void ClearPassword() { SetPassword(L""); }
 
     // True after Open() failed because the archive's headers are
     // encrypted and the current password is missing or wrong. The UI

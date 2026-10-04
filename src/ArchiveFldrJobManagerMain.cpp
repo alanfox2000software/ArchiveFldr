@@ -112,6 +112,27 @@ static const UINT WM_TRAY = WM_APP + 1;
 static const UINT ID_TRAY = 1001;
 static HANDLE g_mutex = nullptr;
 static NOTIFYICONDATAW g_tray{};
+static HWND g_list = nullptr;
+
+static void RefreshList()
+{
+    if (!g_list) return;
+    SendMessageW(g_list, LB_RESETCONTENT, 0, 0);
+    EnterCriticalSection(&g_queueLock);
+    for (const auto& j : g_active) {
+        std::wstring row = L"Running  " + ArchiveJobProtocol::GuidText(j.id) + L"  " + std::to_wstring(j.percent) + L"%";
+        SendMessageW(g_list, LB_ADDSTRING, 0, (LPARAM)row.c_str());
+    }
+    for (const auto& j : g_queue) {
+        std::wstring row = L"Queued   " + ArchiveJobProtocol::GuidText(j.id);
+        SendMessageW(g_list, LB_ADDSTRING, 0, (LPARAM)row.c_str());
+    }
+    for (const auto& r : g_finishedResults) {
+        std::wstring row = L"Finished " + r.first + L"  exit=" + std::to_wstring(r.second);
+        SendMessageW(g_list, LB_ADDSTRING, 0, (LPARAM)row.c_str());
+    }
+    LeaveCriticalSection(&g_queueLock);
+}
 
 static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -120,6 +141,8 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
     if (msg == WM_COMMAND && LOWORD(wp) == ID_TRAY) { ShowWindow(hwnd, SW_SHOW); return 0; }
+    if (msg == WM_TIMER) { RefreshList(); return 0; }
+    if (msg == WM_SIZE && g_list) { MoveWindow(g_list, 8, 8, LOWORD(lp) - 16, HIWORD(lp) - 16, TRUE); return 0; }
     if (msg == WM_CLOSE) { ShowWindow(hwnd, SW_HIDE); return 0; }
     if (msg == WM_DESTROY) { Shell_NotifyIconW(NIM_DELETE, &g_tray); if (g_stop) { SetEvent(g_stop); HANDLE wake = CreateFileW(ArchiveJobProtocol::kPipeName, GENERIC_READ|GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr); if (wake != INVALID_HANDLE_VALUE) CloseHandle(wake); } if (g_serverThread) { WaitForSingleObject(g_serverThread, 3000); CloseHandle(g_serverThread); g_serverThread = nullptr; } if (g_queueThread) { WaitForSingleObject(g_queueThread, 3000); CloseHandle(g_queueThread); g_queueThread = nullptr; } DeleteCriticalSection(&g_queueLock); CloseHandle(g_stop); CloseHandle(g_queueEvent); PostQuitMessage(0); return 0; }
     return DefWindowProcW(hwnd, msg, wp, lp);
@@ -136,6 +159,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     HWND hwnd = CreateWindowExW(0, kClass, L"ArchiveFldr Jobs", WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 640, 420, nullptr, nullptr, instance, nullptr);
     if (!hwnd) return 1;
+    g_list = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
+        WS_CHILD | WS_VISIBLE | LBS_NOINTEGRALHEIGHT | WS_VSCROLL,
+        8, 8, 608, 380, hwnd, nullptr, instance, nullptr);
+    SetTimer(hwnd, 1, 500, nullptr);
     // The manager is intentionally hidden after startup; double-click the tray
     // icon to show this window. A real job list/protocol is added independently
     // of the Explorer shell extension process.

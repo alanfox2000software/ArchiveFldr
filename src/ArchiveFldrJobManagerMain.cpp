@@ -379,7 +379,12 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     if (msg == WM_COMMAND && LOWORD(wp) == ID_TRAY) { ShowWindow(hwnd, SW_SHOW); return 0; }
     if (msg == WM_COMMAND && LOWORD(wp) == ID_CANCEL_JOB) { int sel=(int)SendMessageW(g_list,LB_GETCURSEL,0,0); if(sel>=0 && sel<(int)g_visibleIds.size()) CancelJob(g_visibleIds[sel]); return 0; }
     if (msg == WM_TIMER || msg == WM_EVENT_UPDATE) { RefreshList(); return 0; }
-    if (msg == WM_SIZE && g_list) { MoveWindow(g_list, 8, 8, LOWORD(lp) - 16, HIWORD(lp) - 16, TRUE); return 0; }
+    if (msg == WM_SIZE && g_list) {
+        const int width = LOWORD(lp), height = HIWORD(lp);
+        MoveWindow(g_list, 8, 8, max(0, width - 16), max(0, height - 52), TRUE);
+        if (g_cancel) MoveWindow(g_cancel, 8, max(8, height - 36), 150, 28, TRUE);
+        return 0;
+    }
     if (msg == WM_CLOSE) { ShowWindow(hwnd, SW_HIDE); return 0; }
     if (msg == WM_DESTROY) { Shell_NotifyIconW(NIM_DELETE, &g_tray); if (g_stop) { SetEvent(g_stop); HANDLE wake = CreateFileW(ArchiveJobProtocol::kPipeName, GENERIC_READ|GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr); if (wake != INVALID_HANDLE_VALUE) CloseHandle(wake); } if (g_serverThread) { WaitForSingleObject(g_serverThread, 3000); CloseHandle(g_serverThread); g_serverThread = nullptr; } HANDLE eventWake = CreateFileW(ArchiveJobProtocol::kEventsPipeName, GENERIC_READ|GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr); if(eventWake != INVALID_HANDLE_VALUE) CloseHandle(eventWake); if (g_eventThread) { WaitForSingleObject(g_eventThread, 3000); CloseHandle(g_eventThread); g_eventThread = nullptr; } if (g_uiEventThread) { CancelSynchronousIo(g_uiEventThread); WaitForSingleObject(g_uiEventThread, 3000); CloseHandle(g_uiEventThread); g_uiEventThread = nullptr; } if (g_queueThread) { WaitForSingleObject(g_queueThread, 3000); CloseHandle(g_queueThread); g_queueThread = nullptr; }
         // Stop and reap every worker before destroying the queue lock.
@@ -435,7 +440,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
         WS_CHILD | WS_VISIBLE | LBS_NOINTEGRALHEIGHT | WS_VSCROLL,
         8, 8, 608, 380, hwnd, nullptr, instance, nullptr);
     g_cancel = CreateWindowW(L"BUTTON", L"Cancel selected job", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        8, 390, 150, 28, hwnd, (HMENU)(INT_PTR)ID_CANCEL_JOB, instance, nullptr);
+        8, 0, 150, 28, hwnd, (HMENU)(INT_PTR)ID_CANCEL_JOB, instance, nullptr);
     SetTimer(hwnd, 1, 500, nullptr);
     // The manager is intentionally hidden after startup; double-click the tray
     // icon to show this window. A real job list/protocol is added independently
